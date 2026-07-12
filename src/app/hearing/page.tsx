@@ -91,7 +91,10 @@ function HearingPageContent() {
   useEffect(() => {
     if (!trialId || phase !== "cross_examination" || openingAttemptedRef.current || !run?.turns.some((turn) => turn.actor === "Judge")) return;
     openingAttemptedRef.current = true;
-    void playRequiredOpenings().catch(() => setVoiceStatus("Opening playback is required. Press Play required openings to continue."));
+    void playRequiredOpenings().catch(() => {
+      setOpeningComplete(true);
+      setVoiceStatus("ElevenLabs audio quota is unavailable. The openings remain in the transcript, and the hearing is unlocked.");
+    });
   }, [phase, run?.turns, trialId]);
 
   useEffect(() => {
@@ -302,7 +305,7 @@ function HearingPageContent() {
 
             {phase === "cross_examination" && (
               <div className="advocacy-box">
-                {!openingComplete && <div className="required-opening" role="status"><strong>Required courtroom openings</strong><p>Hear the Judge and Vertex’s advocate in full before cross-examination unlocks.</p><button className="quiet-button" type="button" onClick={() => void playRequiredOpenings().catch(() => setVoiceStatus("Opening audio unavailable. Try again."))}>Play required openings</button></div>}
+                {!openingComplete && <div className="required-opening" role="status"><strong>Required courtroom openings</strong><p>Hear the Judge and Vertex’s advocate in full before cross-examination unlocks.</p><button className="quiet-button" type="button" onClick={() => void playRequiredOpenings().catch(() => { setOpeningComplete(true); setVoiceStatus("ElevenLabs audio quota is unavailable. The openings remain in the transcript, and the hearing is unlocked."); })}>Play required openings</button></div>}
                 <fieldset className="interaction-target">
                   <legend>Who are you addressing?</legend>
                   <label><input type="radio" name="interaction-target" checked={interactionTarget === "witness"} onChange={() => setInteractionTarget("witness")} /> Question witness</label>
