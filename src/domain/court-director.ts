@@ -67,8 +67,16 @@ async function timed<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   } finally { if (timer) clearTimeout(timer); }
 }
 
+function parseModelJson(raw: string): unknown {
+  const unfenced = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("MODEL_JSON_MISSING");
+  return JSON.parse(unfenced.slice(start, end + 1));
+}
+
 function parseDecision(raw: string, context: HearingContext): DelegationDecision {
-  const decision = decisionSchema.parse(JSON.parse(raw));
+  const decision = decisionSchema.parse(parseModelJson(raw));
   if (!context.allowedActions.includes(decision.action)) throw new Error("UNAUTHORIZED_ACTION");
   if (decision.specialist !== "witness" && decision.contract.allowedSources.includes("private_witness_sheet")) throw new Error("PRIVATE_SOURCE_BOUNDARY");
   return decision;
@@ -116,11 +124,11 @@ export async function runCourtDirector(args: {
     review = { accepted: false, rationale: "No validated specialist output.", violations: ["invalid output"], escalation: "repair" };
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const candidate = outputSchema.parse(JSON.parse(await timed(args.specialist(specialistPrompt, attempt === 1), args.timeoutMs)));
+        const candidate = outputSchema.parse(parseModelJson(await timed(args.specialist(specialistPrompt, attempt === 1), args.timeoutMs)));
         const validIds = new Set(args.context.transcript.map((turn) => turn.turnId));
         if (candidate.citedTurnIds.some((id) => !validIds.has(id))) throw new Error("UNKNOWN_CITATION");
         const reviewPrompt = `COURT DIRECTOR REVIEW: accept only if output follows the delegation contract, uses allowed evidence, cites the transcript, adds no facts, and does not mutate workflow.\nDECISION=${JSON.stringify(decision)}\nOUTPUT=${JSON.stringify(candidate)}\nCURRENT_CONTEXT=${contextText(args.context)}`;
-        const assessed = reviewSchema.parse(JSON.parse(await timed(args.reviewer(reviewPrompt, attempt === 1), args.timeoutMs)));
+        const assessed = reviewSchema.parse(parseModelJson(await timed(args.reviewer(reviewPrompt, attempt === 1), args.timeoutMs)));
         if (assessed.accepted) {
           output = candidate; review = assessed; outputRetryCount = attempt; status = attempt === 0 ? "accepted" : "repaired"; break;
         }

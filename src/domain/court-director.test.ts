@@ -48,6 +48,20 @@ describe("bounded Court Director", () => {
     expect(manager.mock.calls[0][0]).toContain("turn-q");
   });
 
+  it("accepts strict JSON wrapped in model markdown fences", async () => {
+    const fenced = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
+    const result = await runCourtDirector({
+      context,
+      privateWitnessSheet: ["The witness may rely on Gate B records."],
+      manager: vi.fn().mockResolvedValue(fenced(decision)),
+      specialist: vi.fn().mockResolvedValue(fenced({ text: "The record does not state the truck color.", citedTurnIds: ["turn-q"], evidenceIds: [] })),
+      reviewer: vi.fn().mockResolvedValue(fenced(acceptedReview)),
+      timeoutMs: 100,
+    });
+    expect(result.status).toBe("accepted");
+    expect(result.trace.fallbackUsed).toBe(false);
+  });
+
   it("never sends private witness evidence to non-witness specialists", async () => {
     const juryDecision = { ...decision, specialist: "jury_review_board" as const, action: "end_cross", persona: "Transcript-only review board", contract: { ...decision.contract, allowedSources: ["public_case", "transcript"], outputKind: "jury_review" as const } };
     const specialist = vi.fn().mockResolvedValue(JSON.stringify({ text: "Review complete.", citedTurnIds: ["turn-q"], evidenceIds: [] }));
