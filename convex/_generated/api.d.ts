@@ -11,10 +11,12 @@
 import type * as artifacts from "../artifacts.js";
 import type * as autonomous from "../autonomous.js";
 import type * as cases from "../cases.js";
+import type * as evals from "../evals.js";
 import type * as events from "../events.js";
 import type * as participatory from "../participatory.js";
 import type * as traces from "../traces.js";
 import type * as trials from "../trials.js";
+
 
 import type {
   ApiFromModules,
@@ -26,10 +28,12 @@ declare const fullApi: ApiFromModules<{
   artifacts: typeof artifacts;
   autonomous: typeof autonomous;
   cases: typeof cases;
+  evals: typeof evals;
   events: typeof events;
   participatory: typeof participatory;
   traces: typeof traces;
   trials: typeof trials;
+
 }>;
 
 /**

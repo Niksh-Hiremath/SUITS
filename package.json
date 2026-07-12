@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "eval": "vitest run src/evals"
+    "eval": "vitest run src/evals",
+    "eval:gate3": "npx convex run autonomous:runGate3 '{\"runs\":5,\"promptVersion\":\"jury-review.v1\"}'"
   },
   "dependencies": {
     "convex": "^1.42.1",

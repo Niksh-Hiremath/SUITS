@@ -9,6 +9,8 @@ import { api } from "../../../convex/_generated/api";
 export default function RecordsPage() {
   const trials = useQuery(api.trials.list);
   const productAnalytics = useQuery(api.events.summary);
+  const evalRuns = useQuery(api.evals.list);
+  const promptComparison = useQuery(api.evals.comparison);
   const [selected, setSelected] = useState<string | undefined>(() =>
     typeof window === "undefined"
       ? undefined
@@ -26,6 +28,7 @@ export default function RecordsPage() {
       retries: traces.reduce((sum, trace) => sum + trace.retryCount, 0),
     };
   }, [run]);
+  const selectedEval = evalRuns?.find((evaluation) => evaluation.trialId === effectiveSelected);
 
   return (
     <main className="records-shell">
@@ -88,16 +91,16 @@ export default function RecordsPage() {
               </section>
 
               <section className="assertion-section">
-                <div className="panel-heading"><div><span>Evaluation</span><h1>Grounding assertions</h1></div></div>
+                <div className="panel-heading"><div><span>Persisted evaluation</span><h1>Golden-run assertions</h1></div><span>{selectedEval ? `${selectedEval.passedCount}/${selectedEval.totalCount}` : "not evaluated"}</span></div>
                 <div className="assertion-grid">
-                  {[
-                    ["Legal phase order", run.trial.phaseSequence === 6],
-                    ["Terminal completion", run.trial.phase === "complete"],
-                    ["Trace completion", run.traces.length > 0 && run.traces.every((trace) => trace.status === "succeeded")],
-                    ["Transcript citations", Boolean(run.debrief?.strengths.every((item) => item.turnCitations.length > 0))],
-                    ["Decisive contradiction", run.debrief?.contradictions[0]?.status === "found"],
-                    ["Useful debrief", Boolean(run.debrief?.strengths.length && run.debrief?.missedOpportunities.length && run.debrief?.revisedClosing.text)],
-                  ].map(([name, passed]) => <div className="assertion" key={String(name)}><span>{passed ? "✓" : "×"}</span><strong>{name}</strong><small>{passed ? "passed" : "pending"}</small></div>)}
+                  {selectedEval?.assertions.map((item) => <div className="assertion" key={item.name} title={item.evidenceJson}><span>{item.passed ? "✓" : "×"}</span><strong>{item.name.replaceAll("_", " ")}</strong><small>{item.passed ? "passed" : "failed"}</small></div>) ?? <p>Run the formal evaluator to persist reliability evidence.</p>}
+                </div>
+              </section>
+
+              <section className="assertion-section">
+                <div className="panel-heading"><div><span>Same case · same inputs</span><h1>Prompt version comparison</h1></div></div>
+                <div className="metric-row">
+                  {promptComparison?.map((version) => <div key={version.promptVersion}><span>{version.promptVersion}</span><strong>{version.passed}/{version.total}</strong><small>{Math.round(version.passRate * 100)}% pass</small></div>)}
                 </div>
               </section>
 

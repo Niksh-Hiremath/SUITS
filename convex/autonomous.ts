@@ -73,9 +73,13 @@ type Review = {
 };
 
 export const runGolden = action({
-  args: { mode: v.optional(v.union(v.literal("autonomous"), v.literal("participatory"))) },
-  handler: async (ctx): Promise<{ trialId: string; debriefId: string }> => {
+  args: {
+    mode: v.optional(v.union(v.literal("autonomous"), v.literal("participatory"))),
+    promptVersion: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ trialId: string; debriefId: string; evalId: string; passed: boolean }> => {
     const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+    const promptVersion = args.promptVersion ?? "jury-review.v1";
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
 
@@ -132,7 +136,7 @@ export const runGolden = action({
 
     const reviewTrace = await ctx.runMutation(api.traces.start, {
       trialId, parentId: directorTrace, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation",
-      provider: "openai", model, inputTurnIds: [briefingId, openingId, questionId, answerId, closingId], promptVersion: "jury-review.v1",
+      provider: "openai", model, inputTurnIds: [briefingId, openingId, questionId, answerId, closingId], promptVersion,
     });
 
     const transcript = [
@@ -184,6 +188,27 @@ export const runGolden = action({
       outputTurnIds: [briefingId, openingId, questionId, answerId, closingId],
       artifactIds: [debriefId],
     });
-    return { trialId, debriefId };
+    const evaluated = await ctx.runMutation(api.evals.evaluateAndPersist, {
+      trialId,
+      promptVersion,
+      model,
+    });
+    return { trialId, debriefId, evalId: evaluated.evalId, passed: evaluated.status === "passed" };
+  },
+});
+
+export const runGate3 = action({
+  args: { runs: v.optional(v.number()), promptVersion: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ passed: number; total: number; gatePassed: boolean; results: Array<{ trialId: string; evalId: string; passed: boolean }> }> => {
+    const total = Math.max(1, Math.min(20, Math.floor(args.runs ?? 5)));
+    const results = [];
+    for (let index = 0; index < total; index += 1) {
+      results.push(await ctx.runAction(api.autonomous.runGolden, {
+        mode: "autonomous",
+        promptVersion: args.promptVersion ?? "jury-review.v1",
+      }));
+    }
+    const passed = results.filter((result) => result.passed).length;
+    return { passed, total, gatePassed: total === 5 && passed >= 4, results };
   },
 });
