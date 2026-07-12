@@ -48,7 +48,6 @@ function HearingPageContent() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const spokenTurnRef = useRef<string | undefined>(undefined);
   const openingAttemptedRef = useRef(false);
-  const juryAttemptedRef = useRef(false);
   const trialId = createdTrialId ?? trialIdFromSearch(searchParams.toString());
   const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
 
@@ -100,7 +99,7 @@ function HearingPageContent() {
 
   useEffect(() => {
     const witness = run?.turns.filter((turn) => turn.actor === "Witness").at(-1);
-    if (!trialId || !witness || witness.turnId === spokenTurnRef.current) return;
+    if (!trialId || phase !== "cross_examination" || !witness || witness.turnId === spokenTurnRef.current) return;
     spokenTurnRef.current = witness.turnId;
     void (async () => {
       try {
@@ -120,19 +119,7 @@ function HearingPageContent() {
         setVoiceStatus(voiceFallbackMessage("tts_failed"));
       }
     })();
-  }, [run?.turns, synthesizeSpeech, trialId]);
-
-  useEffect(() => {
-    if (!trialId || phase !== "complete" || juryAttemptedRef.current || !run?.votes.length) return;
-    juryAttemptedRef.current = true;
-    void (async () => {
-      for (let index = 0; index < Math.min(run.votes.length, 3); index += 1) {
-        setVoiceStatus(`Juror ${index + 1} speaking`);
-        await playRoleSpeech(run.votes[index].reasoning, `juror_${index + 1}` as "juror_1" | "juror_2" | "juror_3");
-      }
-      setVoiceStatus("Jury deliberation complete.");
-    })().catch(() => setVoiceStatus("Jury audio unavailable; the full deliberation remains visible."));
-  }, [phase, run?.votes, trialId]);
+  }, [phase, run?.turns, synthesizeSpeech, trialId]);
 
   async function toggleRecording(target: VoiceInputTarget) {
     if (recordingTarget === target) {
