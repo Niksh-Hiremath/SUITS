@@ -5,6 +5,7 @@ import { v } from "convex/values";
 
 import { api } from "./_generated/api";
 import { action } from "./_generated/server";
+import { runReview } from "../src/domain/review";
 
 const reviewSchema = {
   type: "object",
@@ -83,6 +84,9 @@ export const askWitness = action({
 export const finish = action({
   args: { trialId: v.string(), closing: v.string() },
   handler: async (ctx, args): Promise<string> => {
+    const existing = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
+    if (!existing) throw new Error("Trial not found");
+    if (existing.trial.phase === "complete" && existing.debrief) return existing.debrief.debriefId;
     await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "closing", actionId: `${args.trialId}:cross` });
     const closingId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "closing", text: args.closing, source: "typed", promptVersion: "user.v1" });
     await ctx.runMutation(api.events.track, {
@@ -105,22 +109,33 @@ export const finish = action({
           .filter((turnId): turnId is string => Boolean(turnId)),
       ),
     );
-    const trace = await ctx.runMutation(api.traces.start, { trialId: args.trialId, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation", provider: "openai", model, inputTurnIds: turnIds, promptVersion: "jury-review.v1" });
+    const rootTrace = run.traces.find((item) => !item.parentId);
+    const trace = await ctx.runMutation(api.traces.start, { trialId: args.trialId, parentId: rootTrace?.traceId, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation", provider: "openai", model, inputTurnIds: turnIds, promptVersion: "jury-review.v1" });
     const transcript = run.turns.map((turn) => `${turn.turnId} | ${turn.actor} | ${turn.phase} | ${turn.text}`).join("\n");
     const openai = new OpenAI({ apiKey });
-    const response = await openai.responses.create({
-      model,
-      input: `You are the Jury/Review Board for a fictional advocacy exercise. Harbor Lantern is claimant and Northstar is respondent. Use only the transcript and cite only exact turn IDs. Return three jurors and a practical coaching debrief. If the transcript proves Northstar was at Gate B before the 7:42 PM outage, distinguish that from missing the 6:00 PM schedule. Verdict respondent means Northstar wins this narrow causation hearing.\n\n${transcript}`,
-      text: { format: { type: "json_schema", name: "jury_review", strict: true, schema: reviewSchema } },
-      max_output_tokens: 1600,
+    let inputTokens = 0;
+    let outputTokens = 0;
+    const result = await runReview({
+      turns: run.turns.map(({ turnId, actor, phase, text }) => ({ turnId, actor, phase, text })),
+      timeoutMs: 15_000,
+      call: async (repair) => {
+        const response = await openai.responses.create({
+          model,
+          input: `${repair ? "REPAIR: Return a complete valid object and cite only IDs below.\n" : ""}You are the Jury/Review Board for a fictional advocacy exercise. Harbor Lantern is claimant and Northstar is respondent. Use only the transcript and cite only exact turn IDs. Return three jurors and a practical coaching debrief. If the transcript proves Northstar was at Gate B before the 7:42 PM outage, distinguish that from missing the 6:00 PM schedule. Verdict respondent means Northstar wins this narrow causation hearing.\n\n${transcript}`,
+          text: { format: { type: "json_schema", name: "jury_review", strict: true, schema: reviewSchema } },
+          max_output_tokens: 1600,
+        }, { timeout: 15_000 });
+        inputTokens += response.usage?.input_tokens ?? 0;
+        outputTokens += response.usage?.output_tokens ?? 0;
+        return response.output_text;
+      },
     });
-    const review = JSON.parse(response.output_text) as Review;
-    const valid = new Set(turnIds);
-    const cited = [...review.jurorParts.flatMap((part) => part.turnCitations), ...review.strength.turnCitations, ...review.missedOpportunity.turnCitations, ...review.revisedClosing.basedOnTurnIds];
-    if (cited.some((id) => !valid.has(id))) throw new Error("Review contains an unknown transcript citation");
+    const review: Review = result.review;
     await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "debrief", actionId: `${args.trialId}:deliberation` });
     const debriefId: string = await ctx.runMutation(api.artifacts.saveReview, { trialId: args.trialId, ...review, contradictionFound: contradictionTurns.length >= 2, contradictionTurnIds: contradictionTurns, model });
-    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens, outputTurnIds: [closingId], artifactIds: [debriefId] });
+    const inputRate = Number(process.env.OPENAI_INPUT_USD_PER_MILLION ?? 0);
+    const outputRate = Number(process.env.OPENAI_OUTPUT_USD_PER_MILLION ?? 0);
+    await ctx.runMutation(api.traces.finish, { traceId: trace, status: result.status, inputTokens, outputTokens, estimatedCostUsd: (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000, retryCount: result.retryCount, fallbackUsed: result.fallbackUsed, errorCode: result.errorCode, errorSummary: result.fallbackUsed ? "Model review unavailable after one repair attempt; deterministic transcript-only debrief used." : undefined, outputTurnIds: [closingId], artifactIds: [debriefId] });
     await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "complete", actionId: `${args.trialId}:debrief` });
     await ctx.runMutation(api.events.track, {
       trialId: args.trialId,
