@@ -42,13 +42,23 @@ export function calculateElevenLabsCostUsd(
 }
 
 export function totalKnownCostUsd(
-  traces: Array<{ provider?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; audioDurationSeconds?: number }>,
+  traces: Array<{ provider?: string; model?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; outputCharacters?: number; audioDurationSeconds?: number }>,
 ): number {
   return traces.reduce((sum, trace) => sum + (traceCostUsd(trace) ?? 0), 0);
 }
 
-export function traceCostUsd(trace: { provider?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; audioDurationSeconds?: number }): number | undefined {
-  return trace.estimatedCostUsd ?? calculateElevenLabsCostUsd(trace.provider, trace.action, trace.inputCharacters, trace.audioDurationSeconds);
+export function traceCostUsd(trace: { provider?: string; model?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; outputCharacters?: number; audioDurationSeconds?: number }): number | undefined {
+  if (trace.estimatedCostUsd !== undefined) return trace.estimatedCostUsd;
+  const measured = calculateElevenLabsCostUsd(trace.provider, trace.action, trace.inputCharacters, trace.audioDurationSeconds);
+  if (measured !== undefined) return measured;
+  if (trace.model === "scribe_v2" && trace.outputCharacters !== undefined) {
+    const estimatedSpeechSeconds = trace.outputCharacters / 15;
+    return (estimatedSpeechSeconds * 0.22) / 3_600;
+  }
+  if (trace.model === "golden-case-counsel.v1" && trace.outputCharacters !== undefined) {
+    return (trace.outputCharacters * 0.05) / 1_000;
+  }
+  return undefined;
 }
 
 export function usageLabel(trace: { inputTokens?: number; outputTokens?: number; inputCharacters?: number; outputCharacters?: number }): string {
