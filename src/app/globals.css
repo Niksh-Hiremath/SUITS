@@ -468,6 +468,36 @@ footer {
   background: var(--wine);
 }
 
+.interaction-target {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+}
+
+.interaction-target legend {
+  width: 100%;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.advocacy-box .interaction-target label {
+  margin: 0;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+
+.interaction-target input {
+  margin-right: 7px;
+}
+
 .advocacy-box label {
   display: block;
   margin-bottom: 10px;

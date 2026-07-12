@@ -7,6 +7,7 @@ import { api, internal } from "./_generated/api";
 import { action } from "./_generated/server";
 import { runReview } from "../src/domain/review";
 import { runCourtDirector } from "../src/domain/court-director";
+import { answerGoldenWitness, replyAsOpposingCounsel } from "../src/domain/courtroom-roleplay";
 
 const reviewSchema = {
   type: "object",
@@ -55,9 +56,9 @@ export const start = action({
 export const askWitness = action({
   args: { trialId: v.string(), question: v.string() },
   handler: async (ctx, args): Promise<string> => {
-    const q = args.question.toLowerCase();
-    const decisive = /(gate|security).*(log|record)/.test(q) && /(7[:.]?31|eleven minutes)/.test(q) && /(7[:.]?42|lights|outage)/.test(q);
-    const questionId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination", text: args.question, source: "typed", evidenceIds: decisive ? ["E-003"] : [], promptVersion: "user.v1" });
+    const groundedAnswer = answerGoldenWitness(args.question);
+    const decisive = groundedAnswer.evidenceIds.includes("E-003");
+    const questionId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination", text: args.question, source: "typed", promptVersion: "user.v1" });
     await ctx.runMutation(api.events.track, {
       trialId: args.trialId,
       name: "question_submitted",
@@ -118,11 +119,8 @@ export const askWitness = action({
         metadataJson: JSON.stringify({ evidenceId: "E-003", matcherVersion: "contradiction-matcher.v1" }),
       });
     }
-    // Preserve the authored contradiction exactly; all other answers use the reviewed specialist output.
-    const answer = decisive
-      ? "Yes. The Gate B log shows Northstar's truck at 7:31 PM, before the 7:42 PM lighting failure. My earlier statement reflected when I learned it was there."
-      : directed.output.text;
-    const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: answer, source: decisive ? "deterministic_grounded" : "dynamic_specialist", factIds: decisive ? ["F-WIT-005", "F-WIT-006"] : [], evidenceIds: decisive ? ["E-003"] : [], replyToTurnId: questionId, promptVersion: "witness.v2" });
+    // Resolve authored facts reliably so natural discovery questions do not require a hidden timestamp.
+    const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: groundedAnswer.text, source: "deterministic_grounded", factIds: groundedAnswer.factIds, evidenceIds: groundedAnswer.evidenceIds, replyToTurnId: questionId, promptVersion: "witness.v3" });
     await ctx.runMutation(api.traces.finish, {
       traceId: trace, status: directed.status === "accepted" ? "succeeded" : directed.status,
       inputTokens: directorInputTokens, outputTokens: directorOutputTokens,
@@ -131,6 +129,30 @@ export const askWitness = action({
       errorSummary: directed.trace.fallbackUsed ? "Court Director used deterministic transcript-only fallback after bounded repair." : undefined,
     });
     return answerId;
+  },
+});
+
+export const addressCounsel = action({
+  args: { trialId: v.string(), statement: v.string() },
+  handler: async (ctx, args): Promise<string> => {
+    const run = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
+    if (!run || run.trial.phase !== "cross_examination") throw new Error("Opposing counsel may only be addressed during cross-examination");
+    const statementId: string = await ctx.runMutation(api.trials.appendTurn, {
+      trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination",
+      text: args.statement, source: "typed", promptVersion: "user.v1",
+    });
+    const reply = replyAsOpposingCounsel(args.statement);
+    const trace = await ctx.runMutation(api.traces.start, {
+      trialId: args.trialId, actor: "Opposing Advocate", action: "respond_to_argument", phase: "cross_examination",
+      provider: "deterministic", model: "golden-case-counsel.v1", inputTurnIds: [statementId], promptVersion: "opposing-advocate.v2",
+    });
+    const replyId: string = await ctx.runMutation(api.trials.appendTurn, {
+      trialId: args.trialId, speaker: "opposing_advocate", actor: "Opposing Advocate", phase: "cross_examination",
+      text: reply.text, source: "deterministic_grounded", factIds: reply.factIds, evidenceIds: reply.evidenceIds,
+      replyToTurnId: statementId, promptVersion: "opposing-advocate.v2",
+    });
+    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", outputTurnIds: [replyId] });
+    return replyId;
   },
 });
 

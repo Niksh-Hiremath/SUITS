@@ -24,6 +24,7 @@ export default function HearingPage() {
 function HearingPageContent() {
   const startHearing = useAction(api.participatory.start);
   const askWitness = useAction(api.participatory.askWitness);
+  const addressCounsel = useAction(api.participatory.addressCounsel);
   const finishHearing = useAction(api.participatory.finish);
   const transcribeAudio = useAction(api.voice.transcribe);
   const synthesizeSpeech = useAction(api.voice.synthesize);
@@ -31,6 +32,7 @@ function HearingPageContent() {
   const searchParams = useSearchParams();
   const [createdTrialId, setCreatedTrialId] = useState<string>();
   const [question, setQuestion] = useState("");
+  const [interactionTarget, setInteractionTarget] = useState<"witness" | "counsel">("witness");
   const [closing, setClosing] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -254,13 +256,18 @@ function HearingPageContent() {
 
             {phase === "cross_examination" && (
               <div className="advocacy-box">
-                <label htmlFor="question">Question the witness</label>
-                <p className="action-coach">{witnessAnswerCount === 0 ? "Start with one fact and seek a yes-or-no answer. Use the response to choose your follow-up." : "Ask another question to clarify or tighten the timeline, or close once the record proves your point."}</p>
+                <fieldset className="interaction-target">
+                  <legend>Who are you addressing?</legend>
+                  <label><input type="radio" name="interaction-target" checked={interactionTarget === "witness"} onChange={() => setInteractionTarget("witness")} /> Question witness</label>
+                  <label><input type="radio" name="interaction-target" checked={interactionTarget === "counsel"} onChange={() => setInteractionTarget("counsel")} /> Address opposing counsel</label>
+                </fieldset>
+                <label htmlFor="question">{interactionTarget === "witness" ? "Question Mira Sen" : "Respond to Harbor Lantern's counsel"}</label>
+                <p className="action-coach">{interactionTarget === "witness" ? (witnessAnswerCount === 0 ? "Ask naturally about the truck's arrival, the Gate B log, what the witness observed, or the lighting failure." : "Ask a follow-up to clarify the timeline, or address opposing counsel once the record supports your point.") : "State your argument or ask counsel to respond. Counsel will answer from facts available in this case."}</p>
                 <textarea
                   id="question"
                   value={question}
                   onChange={(event) => setQuestion(event.target.value)}
-                  placeholder="Ask one focused, leading question…"
+                  placeholder={interactionTarget === "witness" ? "For example: What time did the truck arrive at Gate B?" : "For example: The truck arrived before the outage, so the late delivery did not cause it."}
                   rows={3}
                 />
                 <div className="input-actions">
@@ -271,18 +278,19 @@ function HearingPageContent() {
                     className="primary-button"
                     disabled={busy || question.trim().length < 8}
                     onClick={() => execute(async () => {
-                      await askWitness({ trialId, question: question.trim() });
+                      if (interactionTarget === "witness") await askWitness({ trialId, question: question.trim() });
+                      else await addressCounsel({ trialId, statement: question.trim() });
                       setQuestion("");
                     })}
                   >
-                    Ask witness
+                    {interactionTarget === "witness" ? "Ask witness" : "Address counsel"}
                   </button>
                 </div>
-                <details className="demo-fallback">
+                {interactionTarget === "witness" && <details className="demo-fallback">
                   <summary>Need a recovery prompt?</summary>
                   <p>If you are stuck, load a focused timeline question and edit it in your own voice.</p>
                   <button className="quiet-button" type="button" onClick={() => setQuestion(sampleQuestion)}>Use recovery question</button>
-                </details>
+                </details>}
                 {voiceStatus && <div className="voice-status" role="status">{voiceStatus}</div>}
                 {audioReady && (
                   <div className="input-actions voice-controls">
