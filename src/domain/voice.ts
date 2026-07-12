@@ -19,6 +19,11 @@ export function conciseSpeech(text: string, maximumWords = 35): string {
   return `${words.slice(0, maximumWords).join(" ").replace(/[.,;:!?]$/, "")}…`;
 }
 
-export function voiceFallbackMessage(reason: VoiceFallbackReason): string {
+export function voiceFallbackMessage(reason: VoiceFallbackReason, inputName: "question" | "closing" = "question"): string {
+  if (inputName === "closing") {
+    if (reason === "permission_denied") return "Microphone access was denied. Type your closing instead.";
+    if (reason === "empty_audio") return "No speech was captured. Try again or type your closing.";
+    if (reason === "stt_failed") return "Transcription failed. Your typed closing still works.";
+  }
   return fallbackMessages[reason];
 }

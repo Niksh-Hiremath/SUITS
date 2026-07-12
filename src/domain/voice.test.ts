@@ -20,4 +20,13 @@ describe("voice presentation", () => {
   ] as const)("provides a text-first fallback for %s", (reason, expected) => {
     expect(voiceFallbackMessage(reason)).toBe(expected);
   });
+
+  it("names the closing when voice input falls back to typing", () => {
+    expect(voiceFallbackMessage("permission_denied", "closing")).toBe(
+      "Microphone access was denied. Type your closing instead.",
+    );
+    expect(voiceFallbackMessage("stt_failed", "closing")).toBe(
+      "Transcription failed. Your typed closing still works.",
+    );
+  });
 });

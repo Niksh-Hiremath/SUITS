@@ -12,6 +12,7 @@ import { voiceFallbackMessage } from "../../domain/voice";
 
 const sampleQuestion =
   "Ms. Sen, the Gate B log records Northstar at 7:31 PM before the lights failed at 7:42, correct?";
+type VoiceInputTarget = "question" | "closing";
 
 export default function HearingPage() {
   return (
@@ -37,7 +38,8 @@ function HearingPageContent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [voiceStatus, setVoiceStatus] = useState<string>();
-  const [recording, setRecording] = useState(false);
+  const [voiceInputTarget, setVoiceInputTarget] = useState<VoiceInputTarget>("question");
+  const [recordingTarget, setRecordingTarget] = useState<VoiceInputTarget>();
   const [audioReady, setAudioReady] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -86,13 +88,14 @@ function HearingPageContent() {
     })();
   }, [run?.turns, synthesizeSpeech, trialId]);
 
-  async function toggleRecording() {
-    if (recording) {
+  async function toggleRecording(target: VoiceInputTarget) {
+    if (recordingTarget === target) {
       recorderRef.current?.stop();
       return;
     }
+    setVoiceInputTarget(target);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setVoiceStatus(voiceFallbackMessage("permission_denied"));
+      setVoiceStatus(voiceFallbackMessage("permission_denied", target));
       return;
     }
     try {
@@ -102,27 +105,28 @@ function HearingPageContent() {
       chunksRef.current = [];
       recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
       recorder.onstop = () => void (async () => {
-        setRecording(false);
+        setRecordingTarget(undefined);
         stream.getTracks().forEach((track) => track.stop());
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         if (!blob.size) {
-          setVoiceStatus(voiceFallbackMessage("empty_audio"));
+          setVoiceStatus(voiceFallbackMessage("empty_audio", target));
           return;
         }
         setVoiceStatus("Transcribing with Scribe v2…");
         try {
           const transcript = await transcribeAudio({ trialId: trialId!, audio: await blob.arrayBuffer(), mimeType: blob.type });
-          setQuestion(transcript);
-          setVoiceStatus("Transcript ready. Review it, edit if needed, then Ask witness.");
+          if (target === "closing") setClosing(transcript);
+          else setQuestion(transcript);
+          setVoiceStatus(`Transcript ready. Review or edit it, then ${target === "closing" ? "request the verdict" : interactionTarget === "witness" ? "ask the witness" : "address counsel"}.`);
         } catch {
-          setVoiceStatus(voiceFallbackMessage("stt_failed"));
+          setVoiceStatus(voiceFallbackMessage("stt_failed", target));
         }
       })();
       recorder.start();
-      setRecording(true);
+      setRecordingTarget(target);
       setVoiceStatus("Listening… press Stop recording when finished.");
     } catch {
-      setVoiceStatus(voiceFallbackMessage("permission_denied"));
+      setVoiceStatus(voiceFallbackMessage("permission_denied", target));
     }
   }
 
@@ -263,17 +267,21 @@ function HearingPageContent() {
                 </fieldset>
                 <label htmlFor="question">{interactionTarget === "witness" ? "Question Mira Sen" : "Respond to Harbor Lantern's counsel"}</label>
                 <p className="action-coach">{interactionTarget === "witness" ? (witnessAnswerCount === 0 ? "Ask naturally about the truck's arrival, the Gate B log, what the witness observed, or the lighting failure." : "Ask a follow-up to clarify the timeline, or address opposing counsel once the record supports your point.") : "State your argument or ask counsel to respond. Counsel will answer from facts available in this case."}</p>
-                <textarea
-                  id="question"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  placeholder={interactionTarget === "witness" ? "For example: What time did the truck arrive at Gate B?" : "For example: The truck arrived before the outage, so the late delivery did not cause it."}
-                  rows={3}
-                />
-                <div className="input-actions">
-                  <button className="quiet-button voice-button" type="button" onClick={() => void toggleRecording()}>
-                    {recording ? "Stop recording" : "Push to talk"}
+                <div className="voice-primary">
+                  <span>Primary input · voice</span>
+                  <button className="voice-primary-button" type="button" disabled={Boolean(recordingTarget && recordingTarget !== "question")} onClick={() => void toggleRecording("question")}>
+                    {recordingTarget === "question" ? "■ Stop & transcribe" : "● Record your statement"}
                   </button>
+                  <small>Your words appear below for review before anything is sent.</small>
+                </div>
+                {question ? <div className="transcript-preview">
+                  <label htmlFor="question">Transcript preview · edit before sending</label>
+                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
+                </div> : <details className="text-fallback">
+                  <summary>Can’t use voice? Type instead</summary>
+                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={interactionTarget === "witness" ? "For example: What time did the truck arrive at Gate B?" : "For example: The truck arrived before the outage, so the late delivery did not cause it."} rows={3} />
+                </details>}
+                <div className="input-actions submit-preview">
                   <button
                     className="primary-button"
                     disabled={busy || question.trim().length < 8}
@@ -291,7 +299,7 @@ function HearingPageContent() {
                   <p>If you are stuck, load a focused timeline question and edit it in your own voice.</p>
                   <button className="quiet-button" type="button" onClick={() => setQuestion(sampleQuestion)}>Use recovery question</button>
                 </details>}
-                {voiceStatus && <div className="voice-status" role="status">{voiceStatus}</div>}
+                {voiceStatus && voiceInputTarget === "question" && <div className="voice-status" role="status">{voiceStatus}</div>}
                 {audioReady && (
                   <div className="input-actions voice-controls">
                     <button className="quiet-button" type="button" onClick={() => void audioRef.current?.play().catch(() => setVoiceStatus(voiceFallbackMessage("autoplay_blocked")))}>Play response</button>
@@ -305,15 +313,23 @@ function HearingPageContent() {
               <div className="advocacy-box closing-box">
                 <label htmlFor="closing">Deliver your closing</label>
                 <p className="action-coach">Next step: cite the timing established in the transcript, explain the inference, and ask for a verdict for Northstar.</p>
-                <textarea
-                  id="closing"
-                  value={closing}
-                  onChange={(event) => setClosing(event.target.value)}
-                  placeholder="Explain why the transcript supports Northstar…"
-                  rows={4}
-                />
+                <div className="voice-primary">
+                  <span>Primary input · voice</span>
+                  <button className="voice-primary-button" type="button" disabled={Boolean(recordingTarget && recordingTarget !== "closing")} onClick={() => void toggleRecording("closing")}>
+                    {recordingTarget === "closing" ? "■ Stop & transcribe" : "● Record your closing"}
+                  </button>
+                  <small>Your closing is transcribed for review before it reaches the jury.</small>
+                </div>
+                {closing ? <div className="transcript-preview">
+                  <label htmlFor="closing">Transcript preview · edit before sending</label>
+                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} rows={4} />
+                </div> : <details className="text-fallback">
+                  <summary>Can’t use voice? Type your closing instead</summary>
+                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} placeholder="Explain why the transcript supports Northstar…" rows={4} />
+                </details>}
+                {voiceStatus && voiceInputTarget === "closing" && <div className="voice-status" role="status">{voiceStatus}</div>}
                 <button
-                  className="primary-button"
+                  className="primary-button submit-preview"
                   disabled={busy || closing.trim().length < 20}
                   onClick={() => execute(async () => {
                     await finishHearing({ trialId, closing: closing.trim() });
