@@ -29,7 +29,7 @@ export default function Home() {
         </p>
         <div className="hero-actions">
           <Link className="primary-button" href="/hearing/">
-            Enter the hearing room
+            Review your case & start
           </Link>
           <Link className="text-link" href="/records/">
             View Court Records →

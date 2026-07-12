@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./journey.css";
 
 :root {
   --ink: #171815;

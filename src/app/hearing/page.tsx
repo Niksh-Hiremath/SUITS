@@ -2,9 +2,11 @@
 
 import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
+import { hearingProgress, hearingUrl, trialIdFromSearch } from "../../domain/hearing-journey";
 import { outcomeLabel } from "../../domain/student-debrief";
 import { voiceFallbackMessage } from "../../domain/voice";
 
@@ -12,13 +14,22 @@ const sampleQuestion =
   "Ms. Sen, the Gate B log records Northstar at 7:31 PM before the lights failed at 7:42, correct?";
 
 export default function HearingPage() {
+  return (
+    <Suspense fallback={<main className="hearing-shell"><section className="briefing-panel loading-panel" role="status"><div className="eyebrow">Restoring your session</div><h1>Checking the court record…</h1><p>If you were already in a hearing, you will return to the last completed step.</p></section></main>}>
+      <HearingPageContent />
+    </Suspense>
+  );
+}
+
+function HearingPageContent() {
   const startHearing = useAction(api.participatory.start);
   const askWitness = useAction(api.participatory.askWitness);
   const finishHearing = useAction(api.participatory.finish);
   const transcribeAudio = useAction(api.voice.transcribe);
   const synthesizeSpeech = useAction(api.voice.synthesize);
   const trackEvent = useMutation(api.events.track);
-  const [trialId, setTrialId] = useState<string>();
+  const searchParams = useSearchParams();
+  const [createdTrialId, setCreatedTrialId] = useState<string>();
   const [question, setQuestion] = useState("");
   const [closing, setClosing] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,18 +37,23 @@ export default function HearingPage() {
   const [voiceStatus, setVoiceStatus] = useState<string>();
   const [recording, setRecording] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
+
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const spokenTurnRef = useRef<string | undefined>(undefined);
+  const trialId = createdTrialId ?? trialIdFromSearch(searchParams.toString());
   const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
 
   const phase = run?.trial.phase;
   const outcome = outcomeLabel(run?.votes[0]?.vote);
+  const witnessAnswerCount = run?.turns.filter((turn) => turn.actor === "Witness").length ?? 0;
+  const progress = hearingProgress(phase, witnessAnswerCount);
   const canClose = useMemo(
-    () => (run?.turns.filter((turn) => turn.actor === "Witness").length ?? 0) > 0,
-    [run],
+    () => witnessAnswerCount > 0,
+    [witnessAnswerCount],
   );
+
 
   useEffect(() => () => {
     recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
@@ -127,6 +143,14 @@ export default function HearingPage() {
     }
   }
 
+  async function beginHearing() {
+    await execute(async () => {
+      const id = await startHearing({});
+      setCreatedTrialId(id);
+      window.history.replaceState(null, "", hearingUrl(id));
+    });
+  }
+
   function downloadDebrief() {
     if (!run?.debrief) return;
     void trackEvent({
@@ -167,34 +191,47 @@ export default function HearingPage() {
         <Link className="brand" href="/">
           <span className="brand-mark">S</span><span>SUITS</span>
         </Link>
-        <div className="phase-chip">{phase?.replaceAll("_", " ") ?? "ready"}</div>
+        <div className="phase-chip">Step {progress.step} of {progress.totalSteps} · {progress.label}</div>
         <Link className="text-link" href="/records/">Court Records</Link>
       </header>
 
-      {!trialId ? (
+      {!trialId || run === null ? (
         <section className="briefing-panel">
-          <div className="eyebrow">Harbor Lantern Events v. Northstar Rentals</div>
-          <h1>Your cross-examination begins now.</h1>
+          <div className="eyebrow">Your two-minute practice hearing</div>
+          <h1>Prepare the record before you question the witness.</h1>
           <p>
-            You represent Northstar. Challenge the claim that its generator arrived only after
-            the 7:42 PM lighting failure. Ask focused, leading questions and then deliver a closing.
+            You represent Northstar Rentals in one focused fictional dispute. Your task is not to
+            prove every issue—it is to show that a late contractual delivery can still have arrived
+            before the lights failed.
           </p>
-          <div className="evidence-strip">
-            <span>E-001 · Delivery due 6:00 PM</span>
-            <span>E-002 · Lights failed 7:42 PM</span>
-            <span>E-003 · Gate B log available on cross</span>
+          <div className="onboarding-grid">
+            <article><span>1 · Read</span><strong>Know your objective</strong><p>Separate the missed 6:00 PM delivery term from the cause of the 7:42 PM outage.</p></article>
+            <article><span>2 · Ask</span><strong>Build the timeline</strong><p>Use short, leading questions. Follow the witness’s answer with another question when needed.</p></article>
+            <article><span>3 · Close</span><strong>Make the inference</strong><p>Explain why the admitted timeline matters, then receive a cited coaching debrief.</p></article>
           </div>
-          <button
-            className="primary-button"
-            disabled={busy}
-            onClick={() => execute(async () => setTrialId(await startHearing({})))}
-          >
-            {busy ? "Calling court to order…" : "Begin hearing"}
+          <div className="evidence-docket" aria-label="Available evidence">
+            <div><b>E-001</b><span>Contract</span><p>Generator delivery was due by 6:00 PM.</p></div>
+            <div><b>E-002</b><span>Incident report</span><p>Venue lights failed at 7:42 PM.</p></div>
+            <div><b>E-003</b><span>Gate B log</span><p>A timestamped arrival record is available on cross.</p></div>
+          </div>
+          {(error || run === null) && <div className="error-banner" role="alert">{error ?? "We could not find that saved hearing. Start a new session below."}</div>}
+          <button className="primary-button" disabled={busy} onClick={() => void beginHearing()}>
+            {busy ? "Creating and saving your court record…" : "I’m ready — begin hearing"}
           </button>
+          <p className="resume-note">Your trial ID is saved in this page’s URL, so refresh returns you to the same record.</p>
         </section>
-      ) : (
+      ) : run === undefined ? (
+        <section className="briefing-panel loading-panel" role="status">
+          <div className="eyebrow">Saved hearing found</div><h1>Reopening the record…</h1>
+          <p>Loading your transcript and returning you to the last committed phase.</p>
+        </section>
+      ) : phase !== "complete" ? (
         <div className="hearing-grid">
           <section className="transcript-panel">
+            <div className="progress-card" aria-live="polite">
+              <div className="progress-track"><i style={{ width: `${(progress.step / progress.totalSteps) * 100}%` }} /></div>
+              <div><span>Now · {progress.label}</span><strong>{progress.next}</strong></div>
+            </div>
             <div className="panel-heading">
               <div><span>Live record</span><h1>Hearing transcript</h1></div>
               <span>{run?.turns.length ?? 0} turns</span>
@@ -212,12 +249,13 @@ export default function HearingPage() {
                   )}
                 </article>
               ))}
-              {busy && <div className="thinking-line">The court is processing the record…</div>}
+              {busy && <div className="thinking-line" role="status"><b>The court is working…</b><span>Your transcript is saved. You can safely refresh and resume from this URL.</span></div>}
             </div>
 
             {phase === "cross_examination" && (
               <div className="advocacy-box">
                 <label htmlFor="question">Question the witness</label>
+                <p className="action-coach">{witnessAnswerCount === 0 ? "Start with one fact and seek a yes-or-no answer. Use the response to choose your follow-up." : "Ask another question to clarify or tighten the timeline, or close once the record proves your point."}</p>
                 <textarea
                   id="question"
                   value={question}
@@ -228,9 +266,6 @@ export default function HearingPage() {
                 <div className="input-actions">
                   <button className="quiet-button voice-button" type="button" onClick={() => void toggleRecording()}>
                     {recording ? "Stop recording" : "Push to talk"}
-                  </button>
-                  <button className="quiet-button" onClick={() => setQuestion(sampleQuestion)}>
-                    Load decisive question
                   </button>
                   <button
                     className="primary-button"
@@ -243,6 +278,11 @@ export default function HearingPage() {
                     Ask witness
                   </button>
                 </div>
+                <details className="demo-fallback">
+                  <summary>Need a recovery prompt?</summary>
+                  <p>If you are stuck, load a focused timeline question and edit it in your own voice.</p>
+                  <button className="quiet-button" type="button" onClick={() => setQuestion(sampleQuestion)}>Use recovery question</button>
+                </details>
                 {voiceStatus && <div className="voice-status" role="status">{voiceStatus}</div>}
                 {audioReady && (
                   <div className="input-actions voice-controls">
@@ -256,6 +296,7 @@ export default function HearingPage() {
             {phase === "cross_examination" && canClose && (
               <div className="advocacy-box closing-box">
                 <label htmlFor="closing">Deliver your closing</label>
+                <p className="action-coach">Next step: cite the timing established in the transcript, explain the inference, and ask for a verdict for Northstar.</p>
                 <textarea
                   id="closing"
                   value={closing}
@@ -280,15 +321,17 @@ export default function HearingPage() {
           <aside className="case-rail">
             <div className="rail-card"><span>Case posture</span><strong>You represent Northstar</strong><p>Respondent · fictional commercial hearing</p></div>
             <div className="rail-card"><span>Your objective</span><p>Separate missing the contractual schedule from arriving before the lighting failure.</p></div>
+            <div className="rail-card evidence-rail"><span>Evidence in play</span><p><b>E-001</b> · 6:00 PM due time</p><p><b>E-002</b> · 7:42 PM outage</p><p><b>E-003</b> · Gate B arrival log</p></div>
             <div className="rail-card"><span>System proof</span><p>{run?.traces.length ?? 0} observable agent operations recorded.</p></div>
           </aside>
         </div>
-      )}
+      ) : null}
 
       {phase === "complete" && run?.debrief && (
         <section className="debrief-panel">
+          <div className="verdict-reveal"><span>Hearing complete · the record is closed</span><strong>{outcome.verdict}</strong><p>The verdict reflects this transcript—not the hidden “right answer.” Now turn the result into your next practice goal.</p></div>
           <div className="panel-heading">
-            <div><span>Case Debrief</span><h1>{outcome.verdict}</h1></div>
+            <div><span>Your coaching debrief</span><h1>What moved the jury—and what to try next</h1></div>
             <button className="quiet-button" onClick={downloadDebrief}>Download .txt</button>
           </div>
           <article className="outcome-analysis">
@@ -300,7 +343,10 @@ export default function HearingPage() {
             <article><span>Mistakes and missed opportunities</span><h2>{run.debrief.missedOpportunities[0]?.finding}</h2><p>Try instead: {run.debrief.missedOpportunities[0]?.recommendedQuestion}</p></article>
             <article><span>How to improve your closing</span><h2>{run.debrief.revisedClosing.text}</h2></article>
           </div>
-          <Link className="primary-button" href={`/records/?trial=${trialId}`}>Inspect the agent trace</Link>
+          <div className="debrief-actions">
+            <button className="quiet-button" onClick={downloadDebrief}>Save my debrief</button>
+            <Link className="primary-button" href={`/records/?trial=${trialId}`}>Inspect cited transcript & trace</Link>
+          </div>
         </section>
       )}
     </main>

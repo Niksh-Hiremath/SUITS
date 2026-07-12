@@ -1,0 +1,29 @@
+.loading-panel { min-height: 360px; display: grid; align-content: center; }
+.onboarding-grid, .evidence-docket { display: grid; grid-template-columns: repeat(3, 1fr); margin: 28px 0; border: 1px solid var(--line); }
+.onboarding-grid article, .evidence-docket > div { padding: 20px; border-right: 1px solid var(--line); }
+.onboarding-grid article:last-child, .evidence-docket > div:last-child { border-right: 0; }
+.onboarding-grid span, .evidence-docket span { display: block; color: var(--wine); font-size: .68rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.onboarding-grid strong { display: block; margin: 9px 0; font-family: Georgia, "Times New Roman", serif; font-size: 1.05rem; }
+.onboarding-grid p, .evidence-docket p { margin: 0; color: rgba(23,24,21,.62); font-size: .82rem; line-height: 1.5; }
+.evidence-docket { margin-top: 0; background: rgba(185,138,61,.07); }
+.evidence-docket b { float: right; color: var(--gold); font-size: .72rem; }
+.resume-note { margin: 12px 0 0 !important; font-size: .76rem !important; }
+.progress-card { margin-bottom: 24px; padding: 18px 20px; background: var(--paper-strong); border: 1px solid var(--line); }
+.progress-card > div:last-child { display: flex; justify-content: space-between; gap: 20px; margin-top: 12px; }
+.progress-card span { color: var(--wine); font-size: .68rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.progress-card strong { font: .95rem Georgia, "Times New Roman", serif; }
+.progress-track { height: 5px; overflow: hidden; background: rgba(23,24,21,.1); border-radius: 999px; }
+.progress-track i { display: block; height: 100%; background: var(--wine); transition: width .35s ease; }
+.action-coach { margin: -2px 0 12px; color: rgba(255,255,255,.72); font-size: .84rem; line-height: 1.5; }
+.thinking-line { display: grid; gap: 4px; background: rgba(185,138,61,.08); }
+.thinking-line span { color: rgba(23,24,21,.62); }
+.demo-fallback { margin-top: 12px; color: rgba(255,255,255,.62); font-size: .76rem; }
+.demo-fallback summary { cursor: pointer; }
+.demo-fallback p { margin: 10px 0; }
+.evidence-rail b { color: var(--wine); }
+.verdict-reveal { margin: -34px -34px 34px; padding: 42px 34px; color: white; background: var(--wine); text-align: center; }
+.verdict-reveal span { font-size: .7rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; opacity: .7; }
+.verdict-reveal strong { display: block; margin: 13px 0 8px; font: clamp(2.3rem, 5vw, 4.8rem) Georgia, "Times New Roman", serif; }
+.verdict-reveal p { max-width: 620px; margin: 0 auto; line-height: 1.55; opacity: .78; }
+.debrief-actions { display: flex; align-items: center; gap: 12px; }
+@media (max-width: 700px) { .onboarding-grid, .evidence-docket { grid-template-columns: 1fr; } .onboarding-grid article, .evidence-docket > div { border-right: 0; border-bottom: 1px solid var(--line); } .progress-card > div:last-child, .debrief-actions { align-items: flex-start; flex-direction: column; } }
