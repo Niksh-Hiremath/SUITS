@@ -128,7 +128,7 @@ export async function runCourtDirector(args: {
         const candidate = outputSchema.parse(parseModelJson(await timed(args.specialist(specialistPrompt, attempt === 1), args.timeoutMs)));
         const validIds = new Set(args.context.transcript.map((turn) => turn.turnId));
         if (candidate.citedTurnIds.some((id) => !validIds.has(id))) throw new Error("UNKNOWN_CITATION");
-        const reviewPrompt = `COURT DIRECTOR REVIEW: accept only if output follows the delegation contract, uses allowed evidence, cites the transcript, adds no facts, and does not mutate workflow.\nDECISION=${JSON.stringify(decision)}\nOUTPUT=${JSON.stringify(candidate)}\nCURRENT_CONTEXT=${contextText(args.context)}`;
+        const reviewPrompt = `COURT DIRECTOR REVIEW: accept only if output follows the delegation contract, uses allowed evidence, cites the transcript, adds no facts, and does not mutate workflow. Return ONLY strict JSON with this exact shape: {"accepted":true,"rationale":"grounding decision","violations":[],"escalation":"none|repair|deterministic_fallback"}.\nDECISION=${JSON.stringify(decision)}\nOUTPUT=${JSON.stringify(candidate)}\nCURRENT_CONTEXT=${contextText(args.context)}`;
         const assessed = reviewSchema.parse(parseModelJson(await timed(args.reviewer(reviewPrompt, attempt === 1), args.timeoutMs)));
         if (assessed.accepted) {
           output = candidate; review = assessed; outputRetryCount = attempt; status = attempt === 0 ? "accepted" : "repaired"; break;
