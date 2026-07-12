@@ -73,13 +73,16 @@ export const askWitness = action({
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
     const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
     const openai = new OpenAI({ apiKey });
+    let directorInputTokens = 0;
+    let directorOutputTokens = 0;
     const modelCall = async (prompt: string, repair: boolean) => {
       const response = await openai.responses.create({
         model,
         input: `${repair ? "REPAIR: return complete strict JSON only.\n" : ""}${prompt}`,
-        text: { format: { type: "json_object" } },
         max_output_tokens: 900,
       }, { timeout: 12_000 });
+      directorInputTokens += response.usage?.input_tokens ?? 0;
+      directorOutputTokens += response.usage?.output_tokens ?? 0;
       return response.output_text;
     };
     const directed = await runCourtDirector({
@@ -119,9 +122,10 @@ export const askWitness = action({
     const answer = decisive
       ? "Yes. The Gate B log shows Northstar's truck at 7:31 PM, before the 7:42 PM lighting failure. My earlier statement reflected when I learned it was there."
       : directed.output.text;
-    const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: answer, source: "deterministic_grounded", factIds: decisive ? ["F-WIT-005", "F-WIT-006"] : [], evidenceIds: decisive ? ["E-003"] : [], replyToTurnId: questionId, promptVersion: "witness.v1" });
+    const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: answer, source: decisive ? "deterministic_grounded" : "dynamic_specialist", factIds: decisive ? ["F-WIT-005", "F-WIT-006"] : [], evidenceIds: decisive ? ["E-003"] : [], replyToTurnId: questionId, promptVersion: "witness.v2" });
     await ctx.runMutation(api.traces.finish, {
       traceId: trace, status: directed.status === "accepted" ? "succeeded" : directed.status,
+      inputTokens: directorInputTokens, outputTokens: directorOutputTokens,
       outputTurnIds: [answerId], retryCount: directed.trace.decisionRetryCount + directed.trace.outputRetryCount,
       fallbackUsed: directed.trace.fallbackUsed, reviewJson: JSON.stringify(directed.trace.review), escalation: directed.trace.escalation,
       errorSummary: directed.trace.fallbackUsed ? "Court Director used deterministic transcript-only fallback after bounded repair." : undefined,
