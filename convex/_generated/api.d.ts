@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as artifacts from "../artifacts.js";
+import type * as autonomous from "../autonomous.js";
 import type * as cases from "../cases.js";
 import type * as traces from "../traces.js";
 import type * as trials from "../trials.js";
@@ -19,6 +21,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  artifacts: typeof artifacts;
+  autonomous: typeof autonomous;
   cases: typeof cases;
   traces: typeof traces;
   trials: typeof trials;
