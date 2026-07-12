@@ -133,6 +133,7 @@ export default defineSchema({
     schemaVersion: v.string(),
     promptVersion: v.string(),
   })
+    .index("by_trace_id", ["traceId"])
     .index("by_trial", ["trialId"])
     .index("by_trial_started", ["trialId", "startedAt"]),
 

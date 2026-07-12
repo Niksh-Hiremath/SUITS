@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 
 const CASE_ID = "case_harbor_lantern_v1";
 
@@ -74,6 +74,16 @@ export const getGoldenCase = query({
   handler: async (ctx) => {
     return await ctx.db
       .query("cases")
+      .withIndex("by_case_id", (q) => q.eq("caseId", CASE_ID))
+      .unique();
+  },
+});
+
+export const getPrivateGoldenCase = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("privateCases")
       .withIndex("by_case_id", (q) => q.eq("caseId", CASE_ID))
       .unique();
   },

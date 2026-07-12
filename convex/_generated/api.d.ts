@@ -9,6 +9,8 @@
  */
 
 import type * as cases from "../cases.js";
+import type * as traces from "../traces.js";
+import type * as trials from "../trials.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +20,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   cases: typeof cases;
+  traces: typeof traces;
+  trials: typeof trials;
 }>;
 
 /**
