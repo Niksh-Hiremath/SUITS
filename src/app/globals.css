@@ -812,6 +812,18 @@ footer {
   font-size: 0.7rem;
 }
 
+.voice-status {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-left: 3px solid var(--gold);
+  background: rgba(112, 21, 44, 0.05);
+  color: rgba(23, 24, 21, 0.68);
+  font-size: 0.9rem;
+}
+
+.voice-controls { justify-content: flex-start; }
+.voice-button { border-color: var(--gold); }
+
 @media (max-width: 900px) {
   .hearing-grid,
   .records-grid {

@@ -2,9 +2,10 @@
 
 import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
+import { voiceFallbackMessage } from "@/domain/voice";
 
 const sampleQuestion =
   "Ms. Sen, the Gate B log records Northstar at 7:31 PM before the lights failed at 7:42, correct?";
@@ -13,12 +14,21 @@ export default function HearingPage() {
   const startHearing = useAction(api.participatory.start);
   const askWitness = useAction(api.participatory.askWitness);
   const finishHearing = useAction(api.participatory.finish);
+  const transcribeAudio = useAction(api.voice.transcribe);
+  const synthesizeSpeech = useAction(api.voice.synthesize);
   const trackEvent = useMutation(api.events.track);
   const [trialId, setTrialId] = useState<string>();
   const [question, setQuestion] = useState("");
   const [closing, setClosing] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [voiceStatus, setVoiceStatus] = useState<string>();
+  const [recording, setRecording] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const spokenTurnRef = useRef<string | undefined>(undefined);
   const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
 
   const phase = run?.trial.phase;
@@ -26,6 +36,82 @@ export default function HearingPage() {
     () => (run?.turns.filter((turn) => turn.actor === "Witness").length ?? 0) > 0,
     [run],
   );
+
+  useEffect(() => () => {
+    recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    audioRef.current?.pause();
+  }, []);
+
+  useEffect(() => {
+    const witness = run?.turns.filter((turn) => turn.actor === "Witness").at(-1);
+    if (!trialId || !witness || witness.turnId === spokenTurnRef.current) return;
+    spokenTurnRef.current = witness.turnId;
+    void (async () => {
+      try {
+        const bytes = await synthesizeSpeech({ trialId, text: witness.text });
+        const audio = new Audio(URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })));
+        audioRef.current?.pause();
+        audioRef.current = audio;
+        setAudioReady(true);
+        setVoiceStatus("Witness audio ready.");
+        try {
+          await audio.play();
+          setVoiceStatus("Witness speaking · Stop anytime");
+        } catch {
+          setVoiceStatus(voiceFallbackMessage("autoplay_blocked"));
+        }
+      } catch {
+        setVoiceStatus(voiceFallbackMessage("tts_failed"));
+      }
+    })();
+  }, [run?.turns, synthesizeSpeech, trialId]);
+
+  async function toggleRecording() {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceStatus(voiceFallbackMessage("permission_denied"));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
+      recorder.onstop = () => void (async () => {
+        setRecording(false);
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        if (!blob.size) {
+          setVoiceStatus(voiceFallbackMessage("empty_audio"));
+          return;
+        }
+        setVoiceStatus("Transcribing with Scribe v2…");
+        try {
+          const transcript = await transcribeAudio({ trialId: trialId!, audio: await blob.arrayBuffer(), mimeType: blob.type });
+          setQuestion(transcript);
+          setVoiceStatus("Transcript ready. Review it, edit if needed, then Ask witness.");
+        } catch {
+          setVoiceStatus(voiceFallbackMessage("stt_failed"));
+        }
+      })();
+      recorder.start();
+      setRecording(true);
+      setVoiceStatus("Listening… press Stop recording when finished.");
+    } catch {
+      setVoiceStatus(voiceFallbackMessage("permission_denied"));
+    }
+  }
+
+  function stopPlayback() {
+    audioRef.current?.pause();
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    setVoiceStatus("Playback stopped. Text remains available.");
+  }
+
 
   async function execute(work: () => Promise<void>) {
     setBusy(true);
@@ -134,6 +220,9 @@ export default function HearingPage() {
                   rows={3}
                 />
                 <div className="input-actions">
+                  <button className="quiet-button voice-button" type="button" onClick={() => void toggleRecording()}>
+                    {recording ? "Stop recording" : "Push to talk"}
+                  </button>
                   <button className="quiet-button" onClick={() => setQuestion(sampleQuestion)}>
                     Load decisive question
                   </button>
@@ -148,6 +237,13 @@ export default function HearingPage() {
                     Ask witness
                   </button>
                 </div>
+                {voiceStatus && <div className="voice-status" role="status">{voiceStatus}</div>}
+                {audioReady && (
+                  <div className="input-actions voice-controls">
+                    <button className="quiet-button" type="button" onClick={() => void audioRef.current?.play().catch(() => setVoiceStatus(voiceFallbackMessage("autoplay_blocked")))}>Play response</button>
+                    <button className="quiet-button" type="button" onClick={stopPlayback}>Stop playback</button>
+                  </div>
+                )}
               </div>
             )}
 

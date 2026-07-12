@@ -16,7 +16,7 @@ import type * as events from "../events.js";
 import type * as participatory from "../participatory.js";
 import type * as traces from "../traces.js";
 import type * as trials from "../trials.js";
-
+import type * as voice from "../voice.js";
 
 import type {
   ApiFromModules,
@@ -33,7 +33,7 @@ declare const fullApi: ApiFromModules<{
   participatory: typeof participatory;
   traces: typeof traces;
   trials: typeof trials;
-
+  voice: typeof voice;
 }>;
 
 /**
