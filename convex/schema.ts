@@ -122,6 +122,8 @@ export default defineSchema({
     model: v.optional(v.string()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
+    inputCharacters: v.optional(v.number()),
+    outputCharacters: v.optional(v.number()),
     estimatedCostUsd: v.optional(v.number()),
     retryCount: v.number(),
     fallbackUsed: v.boolean(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateOpenAiCostUsd, formatCostUsd, totalKnownCostUsd } from "./cost-observability";
+import { calculateOpenAiCostUsd, formatCostUsd, totalKnownCostUsd, usageLabel } from "./cost-observability";
 
 describe("OpenAI cost observability", () => {
   const pricing = {
@@ -25,10 +25,15 @@ describe("OpenAI cost observability", () => {
       { provider: "openai", estimatedCostUsd: 0.002 },
       { provider: "openai", estimatedCostUsd: 0.003 },
     ])).toBe(0.005);
-    expect(totalKnownCostUsd([{ provider: "openai" }])).toBeUndefined();
+    expect(totalKnownCostUsd([{ provider: "openai" }])).toBe(0);
   });
 
   it("formats small known costs without rounding them to zero", () => {
     expect(formatCostUsd(0.0000123)).toBe("$0.000012");
+  });
+
+  it("uses characters when a step has no tokens", () => {
+    expect(usageLabel({ outputCharacters: 83 })).toBe("83 chars");
+    expect(usageLabel({ inputTokens: 10, outputTokens: 5 })).toBe("15 tokens");
   });
 });

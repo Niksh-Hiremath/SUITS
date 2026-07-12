@@ -83,7 +83,7 @@ function parseDecision(raw: string, context: HearingContext): DelegationDecision
     decision = {
       ...decision,
       specialist: "witness",
-      persona: "Mira Sen, bounded fact witness for Harbor Lantern",
+      persona: "Elena Kapoor, bounded HR witness for Vertex Logistics",
       rationale: `${decision.rationale} Code routing guardrail assigns the pending factual question to the witness.`,
       contract: { ...decision.contract, allowedSources: ["public_case", "private_witness_sheet", "transcript"], outputKind: "witness_answer" },
     };

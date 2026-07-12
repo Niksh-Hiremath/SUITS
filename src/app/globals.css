@@ -514,6 +514,27 @@ footer {
   margin-right: 7px;
 }
 
+.case-timeline,
+.required-opening {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+  padding: 16px;
+  background: rgba(185, 138, 61, 0.09);
+  border-left: 3px solid var(--gold);
+}
+
+.case-timeline span,
+.required-opening p {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.required-opening {
+  color: white;
+  background: rgba(185, 138, 61, 0.16);
+}
+
 .advocacy-box label {
   display: block;
   margin-bottom: 10px;

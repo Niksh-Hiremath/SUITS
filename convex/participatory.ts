@@ -7,7 +7,7 @@ import { api, internal } from "./_generated/api";
 import { action } from "./_generated/server";
 import { runReview } from "../src/domain/review";
 import { runCourtDirector } from "../src/domain/court-director";
-import { answerGoldenWitness, replyAsOpposingCounsel } from "../src/domain/courtroom-roleplay";
+import { answerGoldenWitness, assessGoldenVerdict, replyAsOpposingCounsel } from "../src/domain/courtroom-roleplay";
 
 const reviewSchema = {
   type: "object",
@@ -37,17 +37,19 @@ type Review = {
 export const start = action({
   args: {},
   handler: async (ctx): Promise<string> => {
-    const trialId: string = await ctx.runMutation(api.trials.create, { mode: "participatory", side: "respondent" });
+    const judgeOpening = "Court is in session. You represent Asha Mehta. The issue is whether Vertex terminated her because she reported a warehouse safety problem, or whether documented performance concerns had already set that decision in motion. The verdict will rest only on this transcript.";
+    const advocateOpening = "Vertex denies retaliation. HR drafted the termination memorandum on May 7, a week before Asha's complaint, and two late inventory reports were already documented. The evidence will show a performance decision—not punishment for reporting safety.";
+    const trialId: string = await ctx.runMutation(api.trials.create, { mode: "participatory", side: "claimant" });
     await ctx.runMutation(api.events.track, {
       trialId,
       name: "hearing_started",
-      metadataJson: JSON.stringify({ mode: "participatory", caseId: "case_harbor_lantern_v1" }),
+      metadataJson: JSON.stringify({ mode: "participatory", caseId: "case_asha_vertex_v1" }),
     });
     const root = await ctx.runMutation(api.traces.start, { trialId, actor: "Court Director", action: "manage_participatory_hearing", phase: "briefing", provider: "code", model: "deterministic-state-machine.v1", promptVersion: "director.v1" });
-    await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "director", actor: "Court Director", phase: "briefing", text: "You represent Northstar. Test whether Harbor Lantern can prove the generator arrived after the 7:42 PM lighting failure.", source: "authored_fixture", promptVersion: "director.v1" });
+    await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "director", actor: "Judge", phase: "briefing", text: judgeOpening, source: "authored_fixture", promptVersion: "judge.v1" });
     await ctx.runMutation(api.trials.transition, { trialId, requested: "opening", actionId: `${trialId}:briefing` });
-    const opening = await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "opposing_advocate", actor: "Opposing Advocate", phase: "opening", text: "Northstar's generator was due at 6:00 PM. It had not entered when the venue lights failed at 7:42 PM. Harbor Lantern says Northstar failed its delivery obligation.", source: "authored_fixture", factIds: ["F-PUB-002", "F-PUB-003"], evidenceIds: ["E-001", "E-002"], promptVersion: "opposing-advocate.v1" });
-    await ctx.runMutation(api.traces.finish, { traceId: root, status: "succeeded", outputTurnIds: [opening] });
+    const opening = await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "opposing_advocate", actor: "Vertex Advocate", phase: "opening", text: advocateOpening, source: "authored_fixture", factIds: ["F-PUB-003", "F-PUB-004"], evidenceIds: ["E-003", "E-004"], promptVersion: "opposing-advocate.v2" });
+    await ctx.runMutation(api.traces.finish, { traceId: root, status: "succeeded", outputCharacters: judgeOpening.length + advocateOpening.length, outputTurnIds: [opening] });
     await ctx.runMutation(api.trials.transition, { trialId, requested: "cross_examination", actionId: `${trialId}:opening` });
     return trialId;
   },
@@ -57,7 +59,7 @@ export const askWitness = action({
   args: { trialId: v.string(), question: v.string() },
   handler: async (ctx, args): Promise<string> => {
     const groundedAnswer = answerGoldenWitness(args.question);
-    const decisive = groundedAnswer.evidenceIds.includes("E-003");
+    const decisive = groundedAnswer.evidenceIds.includes("E-005");
     const questionId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination", text: args.question, source: "typed", promptVersion: "user.v1" });
     await ctx.runMutation(api.events.track, {
       trialId: args.trialId,
@@ -116,7 +118,7 @@ export const askWitness = action({
       await ctx.runMutation(api.events.track, {
         trialId: args.trialId,
         name: "contradiction_exposed",
-        metadataJson: JSON.stringify({ evidenceId: "E-003", matcherVersion: "contradiction-matcher.v1" }),
+        metadataJson: JSON.stringify({ evidenceId: "E-005", matcherVersion: "retaliation-causation.v1" }),
       });
     }
     // Resolve authored facts reliably so natural discovery questions do not require a hidden timestamp.
@@ -124,6 +126,7 @@ export const askWitness = action({
     await ctx.runMutation(api.traces.finish, {
       traceId: trace, status: directed.status === "accepted" ? "succeeded" : directed.status,
       inputTokens: directorInputTokens, outputTokens: directorOutputTokens,
+      outputCharacters: groundedAnswer.text.length,
       outputTurnIds: [answerId], retryCount: directed.trace.decisionRetryCount + directed.trace.outputRetryCount,
       fallbackUsed: directed.trace.fallbackUsed, reviewJson: JSON.stringify(directed.trace.review), escalation: directed.trace.escalation,
       errorSummary: directed.trace.fallbackUsed ? "Court Director used deterministic transcript-only fallback after bounded repair." : undefined,
@@ -151,7 +154,7 @@ export const addressCounsel = action({
       text: reply.text, source: "deterministic_grounded", factIds: reply.factIds, evidenceIds: reply.evidenceIds,
       replyToTurnId: statementId, promptVersion: "opposing-advocate.v2",
     });
-    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", outputTurnIds: [replyId] });
+    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: args.statement.length, outputCharacters: reply.text.length, outputTurnIds: [replyId] });
     return replyId;
   },
 });
@@ -179,7 +182,7 @@ export const finish = action({
     const contradictionTurns = Array.from(
       new Set(
         run.turns
-          .filter((turn) => turn.evidenceIds.includes("E-003"))
+          .filter((turn) => turn.evidenceIds.includes("E-005"))
           .flatMap((turn) => [turn.replyToTurnId, turn.turnId])
           .filter((turnId): turnId is string => Boolean(turnId)),
       ),
@@ -196,7 +199,7 @@ export const finish = action({
       call: async (repair) => {
         const response = await openai.responses.create({
           model,
-          input: `${repair ? "REPAIR: Return a complete valid object and cite only IDs below.\n" : ""}You are the Jury/Review Board for a fictional advocacy exercise. Harbor Lantern is claimant and Northstar is respondent. Use only the transcript and cite only exact turn IDs. Return three jurors and a practical coaching debrief. If the transcript proves Northstar was at Gate B before the 7:42 PM outage, distinguish that from missing the 6:00 PM schedule. Verdict respondent means Northstar wins this narrow causation hearing.\n\n${transcript}`,
+          input: `${repair ? "REPAIR: Return a complete valid object and cite only IDs below.\n" : ""}You are the Jury/Review Board for a fictional advocacy exercise. Asha Mehta is claimant and Vertex Logistics is respondent. Use only the transcript and cite exact turn IDs. Weigh Vertex's May 7 pre-complaint draft against any proof that the final decision changed after Asha's May 14 safety complaint. Return three distinct jurors and a practical coaching debrief. Do not presume either side wins.\n\n${transcript}`,
           text: { format: { type: "json_schema", name: "jury_review", strict: true, schema: reviewSchema } },
           max_output_tokens: 1600,
         }, { timeout: 15_000 });
@@ -205,7 +208,7 @@ export const finish = action({
         return response.output_text;
       },
     });
-    const review: Review = result.review;
+    const review: Review = { ...result.review, verdict: assessGoldenVerdict(run.turns) };
     await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "debrief", actionId: `${args.trialId}:deliberation` });
     const debriefId: string = await ctx.runMutation(api.artifacts.saveReview, { trialId: args.trialId, ...review, contradictionFound: contradictionTurns.length >= 2, contradictionTurnIds: contradictionTurns, model });
     const inputRate = Number(process.env.OPENAI_INPUT_USD_PER_MILLION ?? 0);

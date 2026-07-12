@@ -1,52 +1,61 @@
 import { describe, expect, it } from "vitest";
 
-import { answerGoldenWitness, replyAsOpposingCounsel } from "./courtroom-roleplay";
+import { answerGoldenWitness, assessGoldenVerdict, replyAsOpposingCounsel } from "./courtroom-roleplay";
 
-describe("golden-case witness role-play", () => {
-  it.each([
-    "What time did Northstar's generator truck arrive at Gate B?",
-    "When did the generator reach the gate?",
-    "What does the Gate B log say?",
-  ])("answers natural arrival discovery questions without requiring the hidden timestamp", (question) => {
-    expect(answerGoldenWitness(question)).toMatchObject({
-      kind: "grounded",
-      text: expect.stringContaining("7:31 PM"),
-      factIds: expect.arrayContaining(["F-WIT-005"]),
-      evidenceIds: ["E-003"],
+describe("Asha v Vertex witness role-play", () => {
+  it("reveals when HR learned of the safety complaint", () => {
+    expect(answerGoldenWitness("When did you learn about Asha's safety complaint?")).toMatchObject({
+      text: expect.stringContaining("10:14 AM"), evidenceIds: ["E-001"],
     });
   });
 
-  it("distinguishes arrival at the gate from completed delivery", () => {
-    const answer = answerGoldenWitness("What time was the generator actually delivered?");
-    expect(answer.text).toMatch(/cannot confirm.*exact.*deliver/i);
-    expect(answer.text).toContain("7:31 PM");
-  });
-
-  it("answers questions about what the witness personally observed", () => {
-    expect(answerGoldenWitness("Did you personally see the truck arrive?")).toMatchObject({
-      kind: "grounded",
-      factIds: expect.arrayContaining(["F-WIT-002", "F-WIT-003"]),
+  it("explains the pre-complaint termination draft", () => {
+    expect(answerGoldenWitness("When was the termination memo first drafted?")).toMatchObject({
+      text: expect.stringContaining("May 7"), evidenceIds: ["E-004"],
     });
   });
 
-  it("refuses facts outside the authored record specifically", () => {
-    const answer = answerGoldenWitness("Was the generator painted blue?");
-    expect(answer).toMatchObject({ kind: "unsupported", factIds: [], evidenceIds: [] });
-    expect(answer.text).toMatch(/not in the records|did not observe/i);
+  it("reveals the post-complaint revision", () => {
+    const answer = answerGoldenWitness("What language was added after the complaint?");
+    expect(answer.text).toContain("disruptive escalation");
+    expect(answer.text).toContain("4:38 PM");
+    expect(answer.evidenceIds).toEqual(["E-005"]);
+  });
+
+  it("answers performance and warning questions", () => {
+    expect(answerGoldenWitness("Was Asha ever given a formal written warning?").text).toMatch(/no formal written warning/i);
+    expect(answerGoldenWitness("Were her inventory reports late?").text).toMatch(/two.*late/i);
+  });
+
+  it("refuses facts outside the authored record", () => {
+    expect(answerGoldenWitness("What did the CEO privately think?")).toMatchObject({ kind: "unsupported", factIds: [], evidenceIds: [] });
   });
 });
 
 describe("opposing counsel role-play", () => {
-  it("rebuts a causation assertion while conceding the supported gate timestamp", () => {
-    const reply = replyAsOpposingCounsel("The truck was at Gate B before the lights failed, so Northstar did not cause the outage.");
-    expect(reply.text).toContain("7:31 PM");
-    expect(reply.text).toContain("6:00 PM");
-    expect(reply.factIds).toEqual(expect.arrayContaining(["F-PUB-002", "F-WIT-005"]));
+  it("answers a retaliation argument with the May 7 draft", () => {
+    const reply = replyAsOpposingCounsel("The complaint caused the termination.");
+    expect(reply.text).toContain("May 7");
+    expect(reply.evidenceIds).toContain("E-004");
+  });
+});
+
+describe("dynamic verdict", () => {
+  it("finds for Asha when the revision is exposed and connected in closing", () => {
+    expect(assessGoldenVerdict([
+      { actor: "Witness", text: "Disruptive escalation was added at 4:38 PM after the complaint." },
+      { actor: "Advocate", text: "The post-complaint revision shows retaliation caused the final termination." },
+    ])).toBe("claimant");
   });
 
-  it("answers a request for opposing counsel's position from the admitted record", () => {
-    const reply = replyAsOpposingCounsel("What is Harbor Lantern's response?");
-    expect(reply.text).toMatch(/6:00 PM/);
-    expect(reply.evidenceIds).toContain("E-001");
+  it("finds for Vertex when only the pre-existing performance case is established", () => {
+    expect(assessGoldenVerdict([
+      { actor: "Witness", text: "The termination memorandum was drafted on May 7 and two reports were late." },
+      { actor: "Advocate", text: "Timing alone proves our case." },
+    ])).toBe("respondent");
+  });
+
+  it("returns insufficient record when neither causal theory is developed", () => {
+    expect(assessGoldenVerdict([{ actor: "Advocate", text: "Please find for my client." }])).toBe("insufficient_record");
   });
 });

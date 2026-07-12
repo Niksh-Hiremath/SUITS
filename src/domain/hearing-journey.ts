@@ -29,7 +29,7 @@ export function hearingProgress(
     return { step: 4, totalSteps: 4, label: "Jury review", next: "The jury is weighing only what entered the transcript." };
   }
   if (phase === "closing") {
-    return { step: 3, totalSteps: 4, label: "Make your closing", next: "Connect the timeline evidence to Northstar's position." };
+    return { step: 3, totalSteps: 4, label: "Make your closing", next: "Connect the complaint, revision history, and final decision to Asha's position." };
   }
   if (phase === "cross_examination") {
     return witnessAnswerCount > 0

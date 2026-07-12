@@ -1,6 +1,6 @@
 import { internalQuery, mutation, query } from "./_generated/server";
 
-const CASE_ID = "case_harbor_lantern_v1";
+const CASE_ID = "case_asha_vertex_v1";
 
 export const seedGoldenCase = mutation({
   args: {},
@@ -14,24 +14,28 @@ export const seedGoldenCase = mutation({
     const now = Date.now();
     await ctx.db.insert("cases", {
       caseId: CASE_ID,
-      slug: "harbor-lantern-v-northstar",
-      title: "Harbor Lantern Events v. Northstar Rentals",
+      slug: "asha-mehta-v-vertex-logistics",
+      title: "Asha Mehta v. Vertex Logistics Ltd.",
       version: 1,
       status: "active",
       disclaimer: "Fictional educational exercise; not legal advice.",
       neutralSummary:
-        "Harbor Lantern says Northstar's backup generator arrived after a 7:42 PM lighting failure. Northstar says its truck reached Gate B earlier but could not enter because the lane was blocked.",
+        "Asha Mehta says Vertex fired her for reporting a warehouse safety problem. Vertex says documented performance issues and a pre-complaint termination draft show the decision was already underway.",
       publicFacts: [
-        { factId: "F-PUB-001", text: "Harbor Lantern contracted with Northstar for one backup generator." },
-        { factId: "F-PUB-002", text: "The written schedule stated delivery by 6:00 PM at Service Gate B." },
-        { factId: "F-PUB-003", text: "The gala's lighting interruption began at 7:42 PM." },
-        { factId: "F-PUB-004", text: "Harbor Lantern alleges delivery occurred at 8:05 PM." },
-        { factId: "F-PUB-005", text: "Northstar disputes that allegation and says Gate B was blocked." },
-        { factId: "F-PUB-006", text: "Mira Sen coordinated Harbor Lantern's vendors." },
+        { factId: "F-PUB-001", text: "Asha sent a warehouse safety complaint at 10:14 AM on May 14." },
+        { factId: "F-PUB-002", text: "Vertex approved her termination at 9:20 AM on May 15." },
+        { factId: "F-PUB-003", text: "Two inventory reports were submitted late during the preceding month." },
+        { factId: "F-PUB-004", text: "HR created an initial termination memorandum on May 7." },
+        { factId: "F-PUB-005", text: "The final letter cited performance failures and disruptive escalation." },
+        { factId: "F-PUB-006", text: "Elena Kapoor was Vertex's HR Director." },
       ],
       publicEvidence: [
-        { evidenceId: "E-001", name: "Delivery schedule", summary: "Generator due at Gate B by 6:00 PM." },
-        { evidenceId: "E-002", name: "Lighting incident log", summary: "Lighting interruption began at 7:42 PM." },
+        { evidenceId: "E-001", name: "Safety complaint email", summary: "Asha reported a disabled loading-bay safety interlock at 10:14 AM on May 14." },
+        { evidenceId: "E-002", name: "Termination letter", summary: "Approved at 9:20 AM on May 15; cites performance failures and disruptive escalation." },
+        { evidenceId: "E-003", name: "Inventory report history", summary: "Two reports were submitted late during the preceding month." },
+        { evidenceId: "E-004", name: "Draft termination memorandum", summary: "Document metadata shows an initial HR draft on May 7." },
+        { evidenceId: "E-005", name: "Revision history", summary: "Disruptive escalation was added at 4:38 PM on May 14, after the complaint." },
+        { evidenceId: "E-006", name: "Personnel file", summary: "No formal written warning or active performance-improvement plan appears before termination." },
       ],
       createdAt: now,
       updatedAt: now,
@@ -40,26 +44,26 @@ export const seedGoldenCase = mutation({
     await ctx.db.insert("privateCases", {
       caseId: CASE_ID,
       witnessFacts: [
-        { factId: "F-WIT-001", text: "Mira was responsible for ensuring Gate B was clear." },
-        { factId: "F-WIT-002", text: "Mira did not personally see the truck arrive." },
-        { factId: "F-WIT-003", text: "Mira learned of the truck from a later radio call." },
-        { factId: "F-WIT-004", text: "Mira reviewed the gate log the following morning." },
-        { factId: "F-WIT-005", text: "The log records Northstar at 7:31 PM and entry held because the lane was obstructed." },
-        { factId: "F-WIT-006", text: "Mira's broad statement reflected when she learned of the truck, not personal observation." },
-        { factId: "F-WIT-007", text: "A Harbor Lantern décor van obstructed the lane." },
+        { factId: "F-WIT-001", text: "Elena received Asha's complaint at 10:14 AM on May 14." },
+        { factId: "F-WIT-002", text: "HR created a draft termination memorandum on May 7, but it was not finally approved." },
+        { factId: "F-WIT-003", text: "Disruptive escalation was added at 4:38 PM on May 14." },
+        { factId: "F-WIT-004", text: "That phrase referred to Asha's safety escalation." },
+        { factId: "F-WIT-005", text: "Asha's file contained no formal warning or active performance plan." },
+        { factId: "F-WIT-006", text: "Two late inventory reports were documented." },
+        { factId: "F-WIT-007", text: "Final termination approval occurred at 9:20 AM on May 15." },
       ],
       hiddenEvidence: [
-        { evidenceId: "E-003", name: "Gate B security log", content: "7:31 PM — Northstar generator truck at Gate B; entry held—lane obstructed." },
-        { evidenceId: "E-004", name: "Vendor radio note", content: "At 7:46 PM Mira received notice that Northstar was waiting at Gate B." },
-        { evidenceId: "E-005", name: "Décor vehicle movement note", content: "Harbor Lantern's décor van cleared Gate B at 7:58 PM." },
+        { evidenceId: "E-004", name: "Draft metadata", content: "Initial termination memorandum created May 7; not finally approved." },
+        { evidenceId: "E-005", name: "Revision history", content: "4:38 PM May 14 — added 'disruptive escalation' after complaint receipt." },
+        { evidenceId: "E-006", name: "Personnel file", content: "No formal warning or active performance-improvement plan before termination." },
       ],
       canonicalAssessment: [
-        "Northstar missed the contractual 6:00 PM delivery time.",
-        "The record does not support first arrival after the 7:42 PM interruption.",
-        "Harbor Lantern's obstruction contributed to delayed entry.",
+        "The May 7 draft supports Vertex's pre-existing performance explanation.",
+        "The post-complaint revision supports Asha's retaliation theory.",
+        "The verdict should depend on which causal theory the transcript establishes.",
       ],
       decisiveAnswer:
-        "Yes. The Gate B log shows Northstar's truck at 7:31 PM, before the 7:42 PM lighting failure. My earlier statement reflected when I learned it was there.",
+        "Yes. 'Disruptive escalation' was added at 4:38 PM after HR received Asha's safety complaint, and it referred to that escalation.",
       unsupportedAnswer:
         "I can't confirm that from what I observed or the records in this case.",
       version: 1,

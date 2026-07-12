@@ -49,10 +49,10 @@ export const create = mutation({
     const now = Date.now();
     await ctx.db.insert("trials", {
       trialId,
-      caseId: "case_harbor_lantern_v1",
+      caseId: "case_asha_vertex_v1",
       caseVersion: 1,
       mode: args.mode,
-      side: args.side ?? "respondent",
+      side: args.side ?? "claimant",
       phase: "briefing",
       status: "active",
       allowedActions: actions.briefing,

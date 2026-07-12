@@ -40,10 +40,10 @@ export default function Home() {
       <section className="proof-grid" aria-label="Product capabilities">
         <article className="case-card">
           <div className="card-kicker">Golden case</div>
-          <h2>Harbor Lantern v. Northstar</h2>
+          <h2>Asha Mehta v. Vertex Logistics</h2>
           <p>
-            A two-minute commercial hearing built around one decisive timeline
-            contradiction.
+            A focused retaliation hearing where a pre-complaint draft competes
+            with a revealing post-complaint revision.
           </p>
           <dl>
             <div>

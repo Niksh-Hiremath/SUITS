@@ -10,8 +10,7 @@ import { hearingProgress, hearingUrl, trialIdFromSearch } from "../../domain/hea
 import { outcomeLabel } from "../../domain/student-debrief";
 import { voiceFallbackMessage } from "../../domain/voice";
 
-const sampleQuestion =
-  "Ms. Sen, the Gate B log records Northstar at 7:31 PM before the lights failed at 7:42, correct?";
+const sampleQuestion = "Ms. Kapoor, 'disruptive escalation' was added after HR received Asha's safety complaint, correct?";
 type VoiceInputTarget = "question" | "closing";
 
 export default function HearingPage() {
@@ -41,11 +40,14 @@ function HearingPageContent() {
   const [voiceInputTarget, setVoiceInputTarget] = useState<VoiceInputTarget>("question");
   const [recordingTarget, setRecordingTarget] = useState<VoiceInputTarget>();
   const [audioReady, setAudioReady] = useState(false);
+  const [openingComplete, setOpeningComplete] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const spokenTurnRef = useRef<string | undefined>(undefined);
+  const openingAttemptedRef = useRef(false);
+  const juryAttemptedRef = useRef(false);
   const trialId = createdTrialId ?? trialIdFromSearch(searchParams.toString());
   const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
 
@@ -64,13 +66,41 @@ function HearingPageContent() {
     audioRef.current?.pause();
   }, []);
 
+  async function playRoleSpeech(text: string, role: "judge" | "advocate" | "witness" | "juror_1" | "juror_2" | "juror_3") {
+    const bytes = await synthesizeSpeech({ trialId: trialId!, text, role });
+    const audio = new Audio(URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })));
+    audioRef.current?.pause();
+    audioRef.current = audio;
+    setAudioReady(true);
+    await audio.play();
+    await new Promise<void>((resolve, reject) => { audio.onended = () => resolve(); audio.onerror = () => reject(new Error("AUDIO_PLAYBACK_FAILED")); });
+  }
+
+  async function playRequiredOpenings() {
+    const judge = run?.turns.find((turn) => turn.actor === "Judge");
+    const advocate = run?.turns.find((turn) => turn.actor === "Vertex Advocate");
+    if (!judge || !advocate) return;
+    setVoiceStatus("Required opening 1 of 2 · Judge speaking");
+    await playRoleSpeech(judge.text, "judge");
+    setVoiceStatus("Required opening 2 of 2 · Vertex advocate speaking");
+    await playRoleSpeech(advocate.text, "advocate");
+    setOpeningComplete(true);
+    setVoiceStatus("Openings complete · you may begin cross-examination.");
+  }
+
+  useEffect(() => {
+    if (!trialId || phase !== "cross_examination" || openingAttemptedRef.current || !run?.turns.some((turn) => turn.actor === "Judge")) return;
+    openingAttemptedRef.current = true;
+    void playRequiredOpenings().catch(() => setVoiceStatus("Opening playback is required. Press Play required openings to continue."));
+  }, [phase, run?.turns, trialId]);
+
   useEffect(() => {
     const witness = run?.turns.filter((turn) => turn.actor === "Witness").at(-1);
     if (!trialId || !witness || witness.turnId === spokenTurnRef.current) return;
     spokenTurnRef.current = witness.turnId;
     void (async () => {
       try {
-        const bytes = await synthesizeSpeech({ trialId, text: witness.text });
+        const bytes = await synthesizeSpeech({ trialId, text: witness.text, role: "witness" });
         const audio = new Audio(URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })));
         audioRef.current?.pause();
         audioRef.current = audio;
@@ -87,6 +117,18 @@ function HearingPageContent() {
       }
     })();
   }, [run?.turns, synthesizeSpeech, trialId]);
+
+  useEffect(() => {
+    if (!trialId || phase !== "complete" || juryAttemptedRef.current || !run?.votes.length) return;
+    juryAttemptedRef.current = true;
+    void (async () => {
+      for (let index = 0; index < Math.min(run.votes.length, 3); index += 1) {
+        setVoiceStatus(`Juror ${index + 1} speaking`);
+        await playRoleSpeech(run.votes[index].reasoning, `juror_${index + 1}` as "juror_1" | "juror_2" | "juror_3");
+      }
+      setVoiceStatus("Jury deliberation complete.");
+    })().catch(() => setVoiceStatus("Jury audio unavailable; the full deliberation remains visible."));
+  }, [phase, run?.votes, trialId]);
 
   async function toggleRecording(target: VoiceInputTarget) {
     if (recordingTarget === target) {
@@ -203,22 +245,22 @@ function HearingPageContent() {
 
       {!trialId || run === null ? (
         <section className="briefing-panel">
-          <div className="eyebrow">Your two-minute practice hearing</div>
-          <h1>Prepare the record before you question the witness.</h1>
-          <p>
-            You represent Northstar Rentals in one focused fictional dispute. Your task is not to
-            prove every issue—it is to show that a late contractual delivery can still have arrived
-            before the lights failed.
-          </p>
+          <div className="eyebrow">Employment retaliation · fictional advocacy exercise</div>
+          <h1>Asha Mehta v. Vertex Logistics Ltd.</h1>
+          <p>You represent Asha Mehta. Your task is to prove that her May 14 warehouse-safety complaint materially influenced Vertex’s May 15 termination decision—not merely that the two events happened close together.</p>
           <div className="onboarding-grid">
-            <article><span>1 · Read</span><strong>Know your objective</strong><p>Separate the missed 6:00 PM delivery term from the cause of the 7:42 PM outage.</p></article>
-            <article><span>2 · Ask</span><strong>Build the timeline</strong><p>Use short, leading questions. Follow the witness’s answer with another question when needed.</p></article>
-            <article><span>3 · Close</span><strong>Make the inference</strong><p>Explain why the admitted timeline matters, then receive a cited coaching debrief.</p></article>
+            <article><span>Your burden</span><strong>Prove retaliatory causation</strong><p>Connect HR’s knowledge of the complaint to the final rationale and approval—not timing alone.</p></article>
+            <article><span>Vertex’s defense</span><strong>The decision came first</strong><p>A termination draft existed on May 7 and two inventory reports were late.</p></article>
+            <article><span>Your witness</span><strong>Elena Kapoor · HR Director</strong><p>Question her about the draft, complaint, revision history, warnings, and final approval.</p></article>
           </div>
+          <div className="case-timeline"><strong>Case timeline</strong><span>May 7 · HR creates initial draft</span><span>May 14, 10:14 AM · Asha reports safety issue</span><span>May 14, 4:38 PM · “Disruptive escalation” added</span><span>May 15, 9:20 AM · termination approved</span></div>
           <div className="evidence-docket" aria-label="Available evidence">
-            <div><b>E-001</b><span>Contract</span><p>Generator delivery was due by 6:00 PM.</p></div>
-            <div><b>E-002</b><span>Incident report</span><p>Venue lights failed at 7:42 PM.</p></div>
-            <div><b>E-003</b><span>Gate B log</span><p>A timestamped arrival record is available on cross.</p></div>
+            <div><b>E-001</b><span>Safety complaint</span><p>Sent at 10:14 AM on May 14.</p></div>
+            <div><b>E-002</b><span>Termination letter</span><p>Approved May 15; cites performance and disruptive escalation.</p></div>
+            <div><b>E-003</b><span>Report history</span><p>Two inventory reports were late.</p></div>
+            <div><b>E-004</b><span>Initial draft</span><p>Created May 7, before the complaint.</p></div>
+            <div><b>E-005</b><span>Revision history</span><p>Complaint-related language added after HR received the report.</p></div>
+            <div><b>E-006</b><span>Personnel file</span><p>No formal warning or active performance plan.</p></div>
           </div>
           {(error || run === null) && <div className="error-banner" role="alert">{error ?? "We could not find that saved hearing. Start a new session below."}</div>}
           <button className="primary-button" disabled={busy} onClick={() => void beginHearing()}>
@@ -260,16 +302,17 @@ function HearingPageContent() {
 
             {phase === "cross_examination" && (
               <div className="advocacy-box">
+                {!openingComplete && <div className="required-opening" role="status"><strong>Required courtroom openings</strong><p>Hear the Judge and Vertex’s advocate in full before cross-examination unlocks.</p><button className="quiet-button" type="button" onClick={() => void playRequiredOpenings().catch(() => setVoiceStatus("Opening audio unavailable. Try again."))}>Play required openings</button></div>}
                 <fieldset className="interaction-target">
                   <legend>Who are you addressing?</legend>
                   <label><input type="radio" name="interaction-target" checked={interactionTarget === "witness"} onChange={() => setInteractionTarget("witness")} /> Question witness</label>
                   <label><input type="radio" name="interaction-target" checked={interactionTarget === "counsel"} onChange={() => setInteractionTarget("counsel")} /> Address opposing counsel</label>
                 </fieldset>
-                <label htmlFor="question">{interactionTarget === "witness" ? "Question Mira Sen" : "Respond to Harbor Lantern's counsel"}</label>
-                <p className="action-coach">{interactionTarget === "witness" ? (witnessAnswerCount === 0 ? "Ask naturally about the truck's arrival, the Gate B log, what the witness observed, or the lighting failure." : "Ask a follow-up to clarify the timeline, or address opposing counsel once the record supports your point.") : "State your argument or ask counsel to respond. Counsel will answer from facts available in this case."}</p>
+                <label htmlFor="question">{interactionTarget === "witness" ? "Question Elena Kapoor" : "Respond to Vertex’s counsel"}</label>
+                <p className="action-coach">{interactionTarget === "witness" ? (witnessAnswerCount === 0 ? "Ask naturally about the May 7 draft, safety complaint, revision history, warnings, or final approval." : "Follow the answer: distinguish when termination was considered from what influenced final approval.") : "State your causation argument or ask Vertex to answer it from the admitted record."}</p>
                 <div className="voice-primary">
                   <span>Primary input · voice</span>
-                  <button className="voice-primary-button" type="button" disabled={Boolean(recordingTarget && recordingTarget !== "question")} onClick={() => void toggleRecording("question")}>
+                  <button className="voice-primary-button" type="button" disabled={!openingComplete || Boolean(recordingTarget && recordingTarget !== "question")} onClick={() => void toggleRecording("question")}>
                     {recordingTarget === "question" ? "■ Stop & transcribe" : "● Record your statement"}
                   </button>
                   <small>Your words appear below for review before anything is sent.</small>
@@ -279,12 +322,12 @@ function HearingPageContent() {
                   <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
                 </div> : <details className="text-fallback">
                   <summary>Can’t use voice? Type instead</summary>
-                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={interactionTarget === "witness" ? "For example: What time did the truck arrive at Gate B?" : "For example: The truck arrived before the outage, so the late delivery did not cause it."} rows={3} />
+                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={interactionTarget === "witness" ? "For example: What changed in the termination memo after the complaint?" : "For example: The final rationale changed only after HR received Asha’s complaint."} rows={3} />
                 </details>}
                 <div className="input-actions submit-preview">
                   <button
                     className="primary-button"
-                    disabled={busy || question.trim().length < 8}
+                    disabled={!openingComplete || busy || question.trim().length < 8}
                     onClick={() => execute(async () => {
                       if (interactionTarget === "witness") await askWitness({ trialId, question: question.trim() });
                       else await addressCounsel({ trialId, statement: question.trim() });
@@ -312,10 +355,10 @@ function HearingPageContent() {
             {phase === "cross_examination" && canClose && (
               <div className="advocacy-box closing-box">
                 <label htmlFor="closing">Deliver your closing</label>
-                <p className="action-coach">Next step: cite the timing established in the transcript, explain the inference, and ask for a verdict for Northstar.</p>
+                <p className="action-coach">Connect HR’s knowledge, the post-complaint revision, and final approval—then ask for a verdict for Asha.</p>
                 <div className="voice-primary">
                   <span>Primary input · voice</span>
-                  <button className="voice-primary-button" type="button" disabled={Boolean(recordingTarget && recordingTarget !== "closing")} onClick={() => void toggleRecording("closing")}>
+                  <button className="voice-primary-button" type="button" disabled={!openingComplete || Boolean(recordingTarget && recordingTarget !== "closing")} onClick={() => void toggleRecording("closing")}>
                     {recordingTarget === "closing" ? "■ Stop & transcribe" : "● Record your closing"}
                   </button>
                   <small>Your closing is transcribed for review before it reaches the jury.</small>
@@ -325,12 +368,12 @@ function HearingPageContent() {
                   <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} rows={4} />
                 </div> : <details className="text-fallback">
                   <summary>Can’t use voice? Type your closing instead</summary>
-                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} placeholder="Explain why the transcript supports Northstar…" rows={4} />
+                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} placeholder="Explain why the transcript supports Asha…" rows={4} />
                 </details>}
                 {voiceStatus && voiceInputTarget === "closing" && <div className="voice-status" role="status">{voiceStatus}</div>}
                 <button
                   className="primary-button submit-preview"
-                  disabled={busy || closing.trim().length < 20}
+                  disabled={!openingComplete || busy || closing.trim().length < 20}
                   onClick={() => execute(async () => {
                     await finishHearing({ trialId, closing: closing.trim() });
                   })}
@@ -343,9 +386,9 @@ function HearingPageContent() {
           </section>
 
           <aside className="case-rail">
-            <div className="rail-card"><span>Case posture</span><strong>You represent Northstar</strong><p>Respondent · fictional commercial hearing</p></div>
-            <div className="rail-card"><span>Your objective</span><p>Separate missing the contractual schedule from arriving before the lighting failure.</p></div>
-            <div className="rail-card evidence-rail"><span>Evidence in play</span><p><b>E-001</b> · 6:00 PM due time</p><p><b>E-002</b> · 7:42 PM outage</p><p><b>E-003</b> · Gate B arrival log</p></div>
+            <div className="rail-card"><span>Case posture</span><strong>You represent Asha Mehta</strong><p>Claimant · fictional retaliation hearing</p></div>
+            <div className="rail-card"><span>Your objective</span><p>Show that the safety complaint influenced Vertex’s final termination rationale.</p></div>
+            <div className="rail-card evidence-rail"><span>Key tension</span><p><b>Vertex</b> · May 7 draft</p><p><b>Asha</b> · post-complaint revision</p><p><b>Jury</b> · which fact actually caused the final decision?</p></div>
             <div className="rail-card"><span>System proof</span><p>{run?.traces.length ?? 0} observable agent operations recorded.</p></div>
           </aside>
         </div>
