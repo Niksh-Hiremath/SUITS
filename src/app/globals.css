@@ -562,6 +562,22 @@ footer {
   font: 1.18rem/1.7 Georgia, "Times New Roman", serif;
 }
 
+.outcome-analysis {
+  margin-top: 22px;
+  padding: 20px 24px;
+  background: rgba(183, 141, 49, 0.09);
+  border-left: 4px solid var(--gold);
+}
+
+.outcome-analysis > span,
+.debrief-grid article > span {
+  color: var(--wine);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .debrief-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
-import { voiceFallbackMessage } from "@/domain/voice";
+import { outcomeLabel } from "../../domain/student-debrief";
+import { voiceFallbackMessage } from "../../domain/voice";
 
 const sampleQuestion =
   "Ms. Sen, the Gate B log records Northstar at 7:31 PM before the lights failed at 7:42, correct?";
@@ -32,6 +33,7 @@ export default function HearingPage() {
   const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
 
   const phase = run?.trial.phase;
+  const outcome = outcomeLabel(run?.votes[0]?.vote);
   const canClose = useMemo(
     () => (run?.turns.filter((turn) => turn.actor === "Witness").length ?? 0) > 0,
     [run],
@@ -134,12 +136,16 @@ export default function HearingPage() {
     });
     const text = [
       "SUITS — CASE DEBRIEF",
+      "",
+      `VERDICT: ${outcome.verdict}`,
+      "",
+      outcome.explanation.toUpperCase(),
       run.debrief.overallAssessment,
       "",
-      "STRENGTHS",
+      "WHAT YOU DID WELL — KEY POINTS THAT HELPED YOUR CASE",
       ...run.debrief.strengths.map((item) => `- ${item.finding} [${item.turnCitations.join(", ")}]`),
       "",
-      "MISSED OPPORTUNITIES",
+      "MISTAKES AND MISSED OPPORTUNITIES",
       ...run.debrief.missedOpportunities.map((item) => `- ${item.finding}\n  Try: ${item.recommendedQuestion}`),
       "",
       "REVISED CLOSING",
@@ -282,14 +288,17 @@ export default function HearingPage() {
       {phase === "complete" && run?.debrief && (
         <section className="debrief-panel">
           <div className="panel-heading">
-            <div><span>Case Debrief</span><h1>What moved the jury</h1></div>
+            <div><span>Case Debrief</span><h1>{outcome.verdict}</h1></div>
             <button className="quiet-button" onClick={downloadDebrief}>Download .txt</button>
           </div>
-          <p className="assessment">{run.debrief.overallAssessment}</p>
+          <article className="outcome-analysis">
+            <span>{outcome.explanation}</span>
+            <p className="assessment">{run.debrief.overallAssessment}</p>
+          </article>
           <div className="debrief-grid">
-            <article><span>Strength</span><h2>{run.debrief.strengths[0]?.finding}</h2><code>{run.debrief.strengths[0]?.turnCitations.join(" · ")}</code></article>
-            <article><span>Missed opportunity</span><h2>{run.debrief.missedOpportunities[0]?.finding}</h2><p>{run.debrief.missedOpportunities[0]?.recommendedQuestion}</p></article>
-            <article><span>Revised closing</span><h2>{run.debrief.revisedClosing.text}</h2></article>
+            <article><span>What you did well</span><h2>{run.debrief.strengths[0]?.finding}</h2><code>{run.debrief.strengths[0]?.turnCitations.join(" · ")}</code></article>
+            <article><span>Mistakes and missed opportunities</span><h2>{run.debrief.missedOpportunities[0]?.finding}</h2><p>Try instead: {run.debrief.missedOpportunities[0]?.recommendedQuestion}</p></article>
+            <article><span>How to improve your closing</span><h2>{run.debrief.revisedClosing.text}</h2></article>
           </div>
           <Link className="primary-button" href={`/records/?trial=${trialId}`}>Inspect the agent trace</Link>
         </section>
