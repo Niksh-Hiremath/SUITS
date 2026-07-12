@@ -76,9 +76,18 @@ function parseModelJson(raw: string): unknown {
 }
 
 function parseDecision(raw: string, context: HearingContext): DelegationDecision {
-  const decision = decisionSchema.parse(parseModelJson(raw));
+  let decision = decisionSchema.parse(parseModelJson(raw));
   if (!context.allowedActions.includes(decision.action)) throw new Error("UNAUTHORIZED_ACTION");
   if (decision.specialist !== "witness" && decision.contract.allowedSources.includes("private_witness_sheet")) throw new Error("PRIVATE_SOURCE_BOUNDARY");
+  if (context.phase === "cross_examination" && decision.action === "answer_question" && decision.specialist !== "witness") {
+    decision = {
+      ...decision,
+      specialist: "witness",
+      persona: "Mira Sen, bounded fact witness for Harbor Lantern",
+      rationale: `${decision.rationale} Code routing guardrail assigns the pending factual question to the witness.`,
+      contract: { ...decision.contract, allowedSources: ["public_case", "private_witness_sheet", "transcript"], outputKind: "witness_answer" },
+    };
+  }
   return decision;
 }
 
