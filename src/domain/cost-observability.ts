@@ -25,10 +25,30 @@ export function calculateOpenAiCostUsd(
   return (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000;
 }
 
+export function calculateElevenLabsCostUsd(
+  provider: string | undefined,
+  action: string,
+  inputCharacters: number | undefined,
+  audioDurationSeconds: number | undefined,
+): number | undefined {
+  if (provider !== "elevenlabs") return undefined;
+  if (action === "synthesize_response" && inputCharacters !== undefined) {
+    return (inputCharacters * 0.05) / 1_000;
+  }
+  if (action === "transcribe_push_to_talk" && audioDurationSeconds !== undefined) {
+    return (audioDurationSeconds * 0.22) / 3_600;
+  }
+  return undefined;
+}
+
 export function totalKnownCostUsd(
-  traces: Array<{ provider?: string; estimatedCostUsd?: number }>,
+  traces: Array<{ provider?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; audioDurationSeconds?: number }>,
 ): number {
-  return traces.reduce((sum, trace) => sum + (trace.estimatedCostUsd ?? 0), 0);
+  return traces.reduce((sum, trace) => sum + (traceCostUsd(trace) ?? 0), 0);
+}
+
+export function traceCostUsd(trace: { provider?: string; action: string; estimatedCostUsd?: number; inputCharacters?: number; audioDurationSeconds?: number }): number | undefined {
+  return trace.estimatedCostUsd ?? calculateElevenLabsCostUsd(trace.provider, trace.action, trace.inputCharacters, trace.audioDurationSeconds);
 }
 
 export function usageLabel(trace: { inputTokens?: number; outputTokens?: number; inputCharacters?: number; outputCharacters?: number }): string {

@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 
-import { calculateOpenAiCostUsd } from "../src/domain/cost-observability";
+import { calculateElevenLabsCostUsd, calculateOpenAiCostUsd } from "../src/domain/cost-observability";
 import { mutation } from "./_generated/server";
 
 const phase = v.union(
@@ -77,6 +77,7 @@ export const finish = mutation({
     outputTokens: v.optional(v.number()),
     inputCharacters: v.optional(v.number()),
     outputCharacters: v.optional(v.number()),
+    audioDurationSeconds: v.optional(v.number()),
     estimatedCostUsd: v.optional(v.number()),
     retryCount: v.optional(v.number()),
     fallbackUsed: v.optional(v.boolean()),
@@ -104,7 +105,7 @@ export const finish = mutation({
         inputUsdPerMillionTokens: process.env.OPENAI_INPUT_USD_PER_MILLION_TOKENS,
         outputUsdPerMillionTokens: process.env.OPENAI_OUTPUT_USD_PER_MILLION_TOKENS,
       },
-    );
+    ) ?? calculateElevenLabsCostUsd(trace.provider, trace.action, args.inputCharacters, args.audioDurationSeconds);
     await ctx.db.patch(trace._id, {
       status: args.status,
       endedAt,
@@ -113,6 +114,7 @@ export const finish = mutation({
       outputTokens: args.outputTokens,
       inputCharacters: args.inputCharacters,
       outputCharacters: args.outputCharacters,
+      audioDurationSeconds: args.audioDurationSeconds,
       estimatedCostUsd,
       retryCount: args.retryCount ?? trace.retryCount,
       fallbackUsed: args.fallbackUsed ?? trace.fallbackUsed,

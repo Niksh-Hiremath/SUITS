@@ -18,12 +18,12 @@ function config() {
 }
 
 export const transcribe = action({
-  args: { trialId: v.string(), audio: v.bytes(), mimeType: v.string() },
+  args: { trialId: v.string(), audio: v.bytes(), mimeType: v.string(), durationSeconds: v.number() },
   handler: async (ctx, args): Promise<string> => {
     const trace = await ctx.runMutation(api.traces.start, { trialId: args.trialId, actor: "Advocate", action: "transcribe_push_to_talk", phase: "cross_examination", provider: "elevenlabs", model: process.env.ELEVENLABS_STT_MODEL ?? "scribe_v2", promptVersion: "voice.v1" });
     try {
       const transcript = await transcribeWithElevenLabs(args.audio, args.mimeType, config());
-      await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: args.audio.byteLength, outputCharacters: transcript.length });
+      await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", outputCharacters: transcript.length, audioDurationSeconds: args.durationSeconds });
       return transcript;
     } catch (error) {
       await ctx.runMutation(api.traces.finish, { traceId: trace, status: "fallback", fallbackUsed: true, errorCode: "STT_FAILED", errorSummary: error instanceof Error ? error.message : "Transcription failed" });
@@ -45,7 +45,7 @@ export const synthesize = action({
     try {
       const spokenText = role === "judge" || role === "advocate" || role.startsWith("juror") ? args.text : conciseSpeech(args.text);
       const audio = await synthesizeWithElevenLabs(spokenText, voiceId, config());
-      await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: args.text.length, outputCharacters: args.text.length });
+      await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: spokenText.length, outputCharacters: spokenText.length });
       return audio;
     } catch (error) {
       await ctx.runMutation(api.traces.finish, { traceId: trace, status: "fallback", fallbackUsed: true, errorCode: "TTS_FAILED", errorSummary: error instanceof Error ? error.message : "Speech generation failed" });

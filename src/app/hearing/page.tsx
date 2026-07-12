@@ -44,6 +44,7 @@ function HearingPageContent() {
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const spokenTurnRef = useRef<string | undefined>(undefined);
   const openingAttemptedRef = useRef(false);
@@ -159,7 +160,8 @@ function HearingPageContent() {
         }
         setVoiceStatus("Transcribing with Scribe v2…");
         try {
-          const transcript = await transcribeAudio({ trialId: trialId!, audio: await blob.arrayBuffer(), mimeType: blob.type });
+          const durationSeconds = Math.max(0, (performance.now() - recordingStartedAtRef.current) / 1_000);
+          const transcript = await transcribeAudio({ trialId: trialId!, audio: await blob.arrayBuffer(), mimeType: blob.type, durationSeconds });
           if (target === "closing") setClosing(transcript);
           else setQuestion(transcript);
           setVoiceStatus(`Transcript ready. Review or edit it, then ${target === "closing" ? "request the verdict" : interactionTarget === "witness" ? "ask the witness" : "address counsel"}.`);
@@ -168,6 +170,7 @@ function HearingPageContent() {
         }
       })();
       recorder.start();
+      recordingStartedAtRef.current = performance.now();
       setRecordingTarget(target);
       setVoiceStatus("Listening… press Stop recording when finished.");
     } catch {

@@ -124,6 +124,7 @@ export default defineSchema({
     outputTokens: v.optional(v.number()),
     inputCharacters: v.optional(v.number()),
     outputCharacters: v.optional(v.number()),
+    audioDurationSeconds: v.optional(v.number()),
     estimatedCostUsd: v.optional(v.number()),
     retryCount: v.number(),
     fallbackUsed: v.boolean(),

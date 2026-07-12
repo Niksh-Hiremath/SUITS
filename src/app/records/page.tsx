@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
-import { formatCostUsd, totalKnownCostUsd, usageLabel } from "../../domain/cost-observability";
+import { formatCostUsd, totalKnownCostUsd, traceCostUsd, usageLabel } from "../../domain/cost-observability";
 
 export default function RecordsPage() {
   const trials = useQuery(api.trials.list);
@@ -86,7 +86,7 @@ export default function RecordsPage() {
                     <article className={`trace-node ${trace.parentId ? "child" : "root"}`} key={trace.traceId}>
                       <i className={`run-dot ${trace.status}`} />
                       <div><strong>{trace.actor}</strong><span>{trace.action.replaceAll("_", " ")}</span></div>
-                      <dl><div><dt>model</dt><dd>{trace.model ?? trace.provider ?? "code"}</dd></div><div><dt>latency</dt><dd>{trace.latencyMs === undefined ? "Unavailable" : `${trace.latencyMs}ms`}</dd></div><div><dt>usage</dt><dd>{usageLabel(trace)}</dd></div><div><dt>cost</dt><dd>{formatCostUsd(trace.estimatedCostUsd ?? 0)}</dd></div><div><dt>retries</dt><dd>{trace.retryCount}</dd></div><div><dt>fallback</dt><dd>{trace.fallbackUsed ? "yes" : "no"}</dd></div></dl>
+                      <dl><div><dt>model</dt><dd>{trace.model ?? trace.provider ?? "code"}</dd></div><div><dt>latency</dt><dd>{trace.latencyMs === undefined ? "Unavailable" : `${trace.latencyMs}ms`}</dd></div><div><dt>usage</dt><dd>{usageLabel(trace)}</dd></div><div><dt>cost</dt><dd>{formatCostUsd(traceCostUsd(trace) ?? 0)}</dd></div><div><dt>retries</dt><dd>{trace.retryCount}</dd></div><div><dt>fallback</dt><dd>{trace.fallbackUsed ? "yes" : "no"}</dd></div></dl>
                       {trace.errorSummary ? <small className="trace-error">{trace.errorCode ?? "error"}: {trace.errorSummary}</small> : null}
                       <code>{trace.traceId.slice(-12)}</code>
                     </article>
