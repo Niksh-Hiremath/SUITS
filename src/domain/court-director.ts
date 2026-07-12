@@ -110,6 +110,7 @@ export async function runCourtDirector(args: {
   let output: SpecialistOutput;
   let review: DirectorReview;
   let outputRetryCount = 0;
+  let lastFailure = "invalid output";
   let status: "accepted" | "repaired" | "fallback" = "accepted";
 
   if (decision.specialist === "deterministic_fallback") {
@@ -133,9 +134,11 @@ export async function runCourtDirector(args: {
           output = candidate; review = assessed; outputRetryCount = attempt; status = attempt === 0 ? "accepted" : "repaired"; break;
         }
         review = assessed;
-      } catch { /* one bounded repair, then fallback */ }
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : "invalid output";
+      }
       outputRetryCount = attempt;
-      if (attempt === 1) { output = deterministicOutput(args.context); fallbackUsed = true; status = "fallback"; review = { ...review, accepted: true, rationale: `${review.rationale} Deterministic transcript-only fallback accepted.`, escalation: "deterministic_fallback" }; }
+      if (attempt === 1) { output = deterministicOutput(args.context); fallbackUsed = true; status = "fallback"; review = { accepted: true, rationale: `${lastFailure}. Deterministic transcript-only fallback accepted.`, violations: [lastFailure], escalation: "deterministic_fallback" }; }
     }
   }
 
