@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js / build output
+.next/
+out/
+dist/
+coverage/
+.wrangler/
+.vercel/
+
+# Convex generated/local state
+.convex/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local databases and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# User audio and generated media
+recordings/
+audio/
+*.wav
+*.mp3
+*.m4a
+*.webm
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+.tmp/
+tmp/
+*.tmp
