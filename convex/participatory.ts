@@ -3,9 +3,10 @@
 import OpenAI from "openai";
 import { v } from "convex/values";
 
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { action } from "./_generated/server";
 import { runReview } from "../src/domain/review";
+import { runCourtDirector } from "../src/domain/court-director";
 
 const reviewSchema = {
   type: "object",
@@ -62,7 +63,51 @@ export const askWitness = action({
       name: "question_submitted",
       metadataJson: JSON.stringify({ inputMode: "typed", characterCount: args.question.length }),
     });
-    const trace = await ctx.runMutation(api.traces.start, { trialId: args.trialId, actor: "Witness", action: "answer_question", phase: "cross_examination", provider: "deterministic", model: "grounded-witness.v1", inputTurnIds: [questionId], promptVersion: "witness.v1" });
+    const [run, publicCase, privateCase] = await Promise.all([
+      ctx.runQuery(api.trials.get, { trialId: args.trialId }),
+      ctx.runQuery(api.cases.getGoldenCase, {}),
+      ctx.runQuery(internal.cases.getPrivateGoldenCase, {}),
+    ]);
+    if (!run || !publicCase || !privateCase) throw new Error("Court Director context unavailable");
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
+    const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+    const openai = new OpenAI({ apiKey });
+    const modelCall = async (prompt: string, repair: boolean) => {
+      const response = await openai.responses.create({
+        model,
+        input: `${repair ? "REPAIR: return complete strict JSON only.\n" : ""}${prompt}`,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 900,
+      }, { timeout: 12_000 });
+      return response.output_text;
+    };
+    const directed = await runCourtDirector({
+      context: {
+        caseId: run.trial.caseId,
+        mode: run.trial.mode,
+        side: run.trial.side,
+        phase: run.trial.phase,
+        allowedActions: run.trial.allowedActions,
+        publicCase: {
+          summary: publicCase.neutralSummary,
+          facts: publicCase.publicFacts.map((fact) => `${fact.factId}: ${fact.text}`),
+          evidence: publicCase.publicEvidence.map((item) => `${item.evidenceId}: ${item.summary}`),
+        },
+        transcript: run.turns.map(({ turnId, actor, phase, text }) => ({ turnId, actor, phase, text })),
+      },
+      privateWitnessSheet: privateCase.witnessFacts.map((fact) => `${fact.factId}: ${fact.text}`),
+      manager: modelCall,
+      specialist: modelCall,
+      reviewer: modelCall,
+      timeoutMs: 12_000,
+    });
+    const trace = await ctx.runMutation(api.traces.start, {
+      trialId: args.trialId, actor: "Court Director", action: "plan_delegate_review", phase: "cross_examination",
+      provider: "openai", model, inputTurnIds: [questionId], promptVersion: "director.v2",
+      plan: directed.trace.plan, selectedSpecialist: directed.trace.selectedSpecialist, persona: directed.trace.persona,
+      contractJson: JSON.stringify(directed.trace.contract), delegationRationale: directed.trace.delegationRationale,
+    });
     if (decisive) {
       await ctx.runMutation(api.events.track, {
         trialId: args.trialId,
@@ -70,13 +115,17 @@ export const askWitness = action({
         metadataJson: JSON.stringify({ evidenceId: "E-003", matcherVersion: "contradiction-matcher.v1" }),
       });
     }
+    // Preserve the authored contradiction exactly; all other answers use the reviewed specialist output.
     const answer = decisive
       ? "Yes. The Gate B log shows Northstar's truck at 7:31 PM, before the 7:42 PM lighting failure. My earlier statement reflected when I learned it was there."
-      : q.includes("6:00") || q.includes("six")
-        ? "The schedule stated 6:00 PM, and the truck was not inside the venue by then. I did not personally see when it first reached Gate B."
-        : "I can't confirm that from what I observed or the records in this case.";
+      : directed.output.text;
     const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: answer, source: "deterministic_grounded", factIds: decisive ? ["F-WIT-005", "F-WIT-006"] : [], evidenceIds: decisive ? ["E-003"] : [], replyToTurnId: questionId, promptVersion: "witness.v1" });
-    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", outputTurnIds: [answerId] });
+    await ctx.runMutation(api.traces.finish, {
+      traceId: trace, status: directed.status === "accepted" ? "succeeded" : directed.status,
+      outputTurnIds: [answerId], retryCount: directed.trace.decisionRetryCount + directed.trace.outputRetryCount,
+      fallbackUsed: directed.trace.fallbackUsed, reviewJson: JSON.stringify(directed.trace.review), escalation: directed.trace.escalation,
+      errorSummary: directed.trace.fallbackUsed ? "Court Director used deterministic transcript-only fallback after bounded repair." : undefined,
+    });
     return answerId;
   },
 });

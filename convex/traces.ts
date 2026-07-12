@@ -25,6 +25,11 @@ export const start = mutation({
     model: v.optional(v.string()),
     inputTurnIds: v.optional(v.array(v.string())),
     promptVersion: v.optional(v.string()),
+    plan: v.optional(v.array(v.string())),
+    selectedSpecialist: v.optional(v.string()),
+    persona: v.optional(v.string()),
+    contractJson: v.optional(v.string()),
+    delegationRationale: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const trial = await ctx.db.query("trials").withIndex("by_trial_id", (q) => q.eq("trialId", args.trialId)).unique();
@@ -48,6 +53,11 @@ export const start = mutation({
       artifactIds: [],
       schemaVersion: "trace.v1",
       promptVersion: args.promptVersion ?? "authored.v1",
+      plan: args.plan,
+      selectedSpecialist: args.selectedSpecialist,
+      persona: args.persona,
+      contractJson: args.contractJson,
+      delegationRationale: args.delegationRationale,
     });
     return traceId;
   },
@@ -72,6 +82,8 @@ export const finish = mutation({
     errorSummary: v.optional(v.string()),
     outputTurnIds: v.optional(v.array(v.string())),
     artifactIds: v.optional(v.array(v.string())),
+    reviewJson: v.optional(v.string()),
+    escalation: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const trace = await ctx.db
@@ -104,6 +116,8 @@ export const finish = mutation({
       errorSummary: args.errorSummary,
       outputTurnIds: args.outputTurnIds ?? trace.outputTurnIds,
       artifactIds: args.artifactIds ?? trace.artifactIds,
+      reviewJson: args.reviewJson,
+      escalation: args.escalation,
     });
     return args.traceId;
   },
