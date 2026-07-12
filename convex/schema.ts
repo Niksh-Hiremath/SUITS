@@ -227,4 +227,22 @@ export default defineSchema({
     createdAt: v.number(),
     completedAt: v.number(),
   }).index("by_trial", ["trialId"]),
+
+  productEvents: defineTable({
+    eventId: v.string(),
+    trialId: v.optional(v.string()),
+    name: v.union(
+      v.literal("hearing_started"),
+      v.literal("question_submitted"),
+      v.literal("contradiction_exposed"),
+      v.literal("closing_submitted"),
+      v.literal("hearing_completed"),
+      v.literal("debrief_downloaded"),
+    ),
+    source: v.union(v.literal("product"), v.literal("evaluation")),
+    metadataJson: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_trial", ["trialId"])
+    .index("by_name", ["name"]),
 });

@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const agents = ["Court Director", "Opposing Counsel", "Witness", "Jury"];
 
 export default function Home() {
@@ -26,10 +28,12 @@ export default function Home() {
           transcript.
         </p>
         <div className="hero-actions">
-          <button className="primary-button" type="button" disabled>
-            Hearing room preparing
-          </button>
-          <span>Live build in progress</span>
+          <Link className="primary-button" href="/hearing/">
+            Enter the hearing room
+          </Link>
+          <Link className="text-link" href="/records/">
+            View Court Records →
+          </Link>
         </div>
       </section>
 
