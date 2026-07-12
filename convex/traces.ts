@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 
+import { calculateOpenAiCostUsd } from "../src/domain/cost-observability";
 import { mutation } from "./_generated/server";
 
 const phase = v.union(
@@ -79,13 +80,24 @@ export const finish = mutation({
       .unique();
     if (!trace) throw new Error("Trace not found");
     const endedAt = Date.now();
+    const estimatedCostUsd = calculateOpenAiCostUsd(
+      trace.provider,
+      trace.model,
+      args.inputTokens,
+      args.outputTokens,
+      {
+        pricedModel: process.env.OPENAI_PRICED_MODEL,
+        inputUsdPerMillionTokens: process.env.OPENAI_INPUT_USD_PER_MILLION_TOKENS,
+        outputUsdPerMillionTokens: process.env.OPENAI_OUTPUT_USD_PER_MILLION_TOKENS,
+      },
+    );
     await ctx.db.patch(trace._id, {
       status: args.status,
       endedAt,
       latencyMs: endedAt - trace.startedAt,
       inputTokens: args.inputTokens,
       outputTokens: args.outputTokens,
-      estimatedCostUsd: args.estimatedCostUsd,
+      estimatedCostUsd,
       retryCount: args.retryCount ?? trace.retryCount,
       fallbackUsed: args.fallbackUsed ?? trace.fallbackUsed,
       errorCode: args.errorCode,

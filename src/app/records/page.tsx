@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { api } from "../../../convex/_generated/api";
+import { formatCostUsd, totalKnownCostUsd } from "../../domain/cost-observability";
 
 export default function RecordsPage() {
   const trials = useQuery(api.trials.list);
@@ -24,6 +25,7 @@ export default function RecordsPage() {
       latency: traces.find((trace) => !trace.parentId)?.latencyMs ?? 0,
       inputTokens: traces.reduce((sum, trace) => sum + (trace.inputTokens ?? 0), 0),
       outputTokens: traces.reduce((sum, trace) => sum + (trace.outputTokens ?? 0), 0),
+      costUsd: totalKnownCostUsd(traces),
       fallbacks: traces.filter((trace) => trace.fallbackUsed).length,
       retries: traces.reduce((sum, trace) => sum + trace.retryCount, 0),
     };
@@ -72,6 +74,7 @@ export default function RecordsPage() {
                 <div><span>Duration</span><strong>{(metrics.latency / 1000).toFixed(2)}s</strong></div>
                 <div><span>Input tokens</span><strong>{metrics.inputTokens}</strong></div>
                 <div><span>Output tokens</span><strong>{metrics.outputTokens}</strong></div>
+                <div><span>Total task cost</span><strong>{formatCostUsd(metrics.costUsd)}</strong></div>
                 <div><span>Retries</span><strong>{metrics.retries}</strong></div>
                 <div><span>Fallbacks</span><strong>{metrics.fallbacks}</strong></div>
               </div>
@@ -83,7 +86,8 @@ export default function RecordsPage() {
                     <article className={`trace-node ${trace.parentId ? "child" : "root"}`} key={trace.traceId}>
                       <i className={`run-dot ${trace.status}`} />
                       <div><strong>{trace.actor}</strong><span>{trace.action.replaceAll("_", " ")}</span></div>
-                      <dl><div><dt>model</dt><dd>{trace.model ?? trace.provider ?? "code"}</dd></div><div><dt>latency</dt><dd>{trace.latencyMs ?? 0}ms</dd></div><div><dt>tokens</dt><dd>{(trace.inputTokens ?? 0) + (trace.outputTokens ?? 0)}</dd></div></dl>
+                      <dl><div><dt>model</dt><dd>{trace.model ?? trace.provider ?? "code"}</dd></div><div><dt>latency</dt><dd>{trace.latencyMs === undefined ? "Unavailable" : `${trace.latencyMs}ms`}</dd></div><div><dt>tokens</dt><dd>{(trace.inputTokens ?? 0) + (trace.outputTokens ?? 0)}</dd></div><div><dt>cost</dt><dd>{formatCostUsd(trace.estimatedCostUsd)}</dd></div><div><dt>retries</dt><dd>{trace.retryCount}</dd></div><div><dt>fallback</dt><dd>{trace.fallbackUsed ? "yes" : "no"}</dd></div></dl>
+                      {trace.errorSummary ? <small className="trace-error">{trace.errorCode ?? "error"}: {trace.errorSummary}</small> : null}
                       <code>{trace.traceId.slice(-12)}</code>
                     </article>
                   ))}
