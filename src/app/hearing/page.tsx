@@ -1,413 +1,502 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
-import { api } from "../../../convex/_generated/api";
-import { hearingProgress, hearingUrl, trialIdFromSearch } from "../../domain/hearing-journey";
-import { outcomeLabel } from "../../domain/student-debrief";
-import { voiceFallbackMessage } from "../../domain/voice";
+import {
+  HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
+  HEARING_START_SCHEMA_VERSION,
+  HearingCaseSelectorSchema,
+  HearingRuntimeViewV1Schema,
+  type HearingPlayerIntent,
+  type HearingRuntimeViewV1,
+} from "@/domain/hearing-runtime";
+import { hearingUrl, trialIdFromSearch } from "@/domain/hearing-journey";
 
-const sampleQuestion = "Ms. Kapoor, 'disruptive escalation' was added after HR received Asha's safety complaint, correct?";
-type VoiceInputTarget = "question" | "closing";
+const DEFAULT_CASE_SLUG = "redwood-signal-retaliation";
+
+function readable(value: string): string {
+  return value.replaceAll("_", " ").replaceAll("-", " ");
+}
+
+function phaseLabel(view: HearingRuntimeViewV1 | null): string {
+  if (!view) return "Case briefing";
+  if (view.trial.phase === "complete") return "Record complete";
+  if (view.activeAppearance) {
+    const witness = view.witnesses.find(
+      (candidate) => candidate.witnessId === view.activeAppearance?.witnessId,
+    );
+    return `${readable(view.activeAppearance.stage)} · ${witness?.name ?? "witness"}`;
+  }
+  return readable(view.trial.phase);
+}
+
+function actorLabel(
+  turn: HearingRuntimeViewV1["transcript"][number],
+  view: HearingRuntimeViewV1,
+): string {
+  if (turn.actor.role === "witness" && turn.actor.witnessId) {
+    return (
+      view.witnesses.find(
+        (witness) => witness.witnessId === turn.actor.witnessId,
+      )?.name ?? "Witness"
+    );
+  }
+  switch (turn.actor.role) {
+    case "user_counsel":
+      return "Your counsel";
+    case "opposing_counsel":
+      return "Opposing counsel";
+    case "judge":
+      return "Judge";
+    case "jury":
+      return "Jury";
+    case "clerk":
+      return "Court clerk";
+    case "debrief_coach":
+      return "Advocacy coach";
+    case "system":
+      return "Court system";
+    case "witness":
+      return "Witness";
+  }
+}
+
+function turnClass(role: HearingRuntimeViewV1["transcript"][number]["actor"]["role"]): string {
+  switch (role) {
+    case "user_counsel":
+      return "user_advocate";
+    case "opposing_counsel":
+      return "opposing_advocate";
+    case "witness":
+      return "witness";
+    default:
+      return "director";
+  }
+}
+
+async function responseError(response: Response): Promise<string> {
+  try {
+    const value = (await response.json()) as {
+      error?: { message?: unknown };
+    };
+    if (typeof value.error?.message === "string") return value.error.message;
+  } catch {
+    // The status fallback below is intentionally user-safe.
+  }
+  return `The courtroom service returned ${response.status}.`;
+}
 
 export default function HearingPage() {
   return (
-    <Suspense fallback={<main className="hearing-shell"><section className="briefing-panel loading-panel" role="status"><div className="eyebrow">Restoring your session</div><h1>Checking the court record…</h1><p>If you were already in a hearing, you will return to the last completed step.</p></section></main>}>
+    <Suspense
+      fallback={
+        <main className="hearing-shell">
+          <section className="briefing-panel loading-panel" role="status">
+            <div className="eyebrow">Restoring the record</div>
+            <h1>Checking the event stream…</h1>
+          </section>
+        </main>
+      }
+    >
       <HearingPageContent />
     </Suspense>
   );
 }
 
 function HearingPageContent() {
-  const startHearing = useAction(api.participatory.start);
-  const askWitness = useAction(api.participatory.askWitness);
-  const addressCounsel = useAction(api.participatory.addressCounsel);
-  const finishHearing = useAction(api.participatory.finish);
-  const transcribeAudio = useAction(api.voice.transcribe);
-  const synthesizeSpeech = useAction(api.voice.synthesize);
-  const trackEvent = useMutation(api.events.track);
   const searchParams = useSearchParams();
+  const initialTrialId = trialIdFromSearch(searchParams.toString());
   const [createdTrialId, setCreatedTrialId] = useState<string>();
-  const [question, setQuestion] = useState("");
-  const [interactionTarget, setInteractionTarget] = useState<"witness" | "counsel">("witness");
-  const [closing, setClosing] = useState("");
+  const [view, setView] = useState<HearingRuntimeViewV1 | null>(null);
+  const [loading, setLoading] = useState(Boolean(initialTrialId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [voiceStatus, setVoiceStatus] = useState<string>();
-  const [voiceInputTarget, setVoiceInputTarget] = useState<VoiceInputTarget>("question");
-  const [recordingTarget, setRecordingTarget] = useState<VoiceInputTarget>();
-  const [audioReady, setAudioReady] = useState(false);
-  const [openingComplete, setOpeningComplete] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [closing, setClosing] = useState("");
+  const trialId = createdTrialId ?? initialTrialId;
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const recordingStartedAtRef = useRef(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const spokenTurnRef = useRef<string | undefined>(undefined);
-  const openingAttemptedRef = useRef(false);
-  const trialId = createdTrialId ?? trialIdFromSearch(searchParams.toString());
-  const run = useQuery(api.trials.get, trialId ? { trialId } : "skip");
-
-  const phase = run?.trial.phase;
-  const outcome = outcomeLabel(run?.votes[0]?.vote);
-  const witnessAnswerCount = run?.turns.filter((turn) => turn.actor === "Witness").length ?? 0;
-  const progress = hearingProgress(phase, witnessAnswerCount);
-  const canClose = useMemo(
-    () => witnessAnswerCount > 0,
-    [witnessAnswerCount],
-  );
-
-
-  useEffect(() => () => {
-    recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
-    audioRef.current?.pause();
-  }, []);
-
-  async function playRoleSpeech(text: string, role: "judge" | "advocate" | "witness" | "juror_1" | "juror_2" | "juror_3") {
-    const bytes = await synthesizeSpeech({ trialId: trialId!, text, role });
-    const audio = new Audio(URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })));
-    audioRef.current?.pause();
-    audioRef.current = audio;
-    setAudioReady(true);
-    await audio.play();
-    await new Promise<void>((resolve, reject) => { audio.onended = () => resolve(); audio.onerror = () => reject(new Error("AUDIO_PLAYBACK_FAILED")); });
-  }
-
-  async function playRequiredOpenings() {
-    const judge = run?.turns.find((turn) => turn.actor === "Judge");
-    const advocate = run?.turns.find((turn) => turn.actor === "Vertex Advocate");
-    if (!judge || !advocate) return;
-    setVoiceStatus("Required opening 1 of 2 · Judge speaking");
-    await playRoleSpeech(judge.text, "judge");
-    setVoiceStatus("Required opening 2 of 2 · Vertex advocate speaking");
-    await playRoleSpeech(advocate.text, "advocate");
-    setOpeningComplete(true);
-    setVoiceStatus("Openings complete · you may begin cross-examination.");
-  }
+  const caseSelector = useMemo(() => {
+    const uploadId = searchParams.get("upload")?.trim();
+    const candidate = uploadId
+      ? { kind: "owned", uploadId }
+      : {
+          kind: "seeded",
+          slug: searchParams.get("case")?.trim() || DEFAULT_CASE_SLUG,
+        };
+    return HearingCaseSelectorSchema.safeParse(candidate);
+  }, [searchParams]);
 
   useEffect(() => {
-    if (!trialId || phase !== "cross_examination" || openingAttemptedRef.current || !run?.turns.some((turn) => turn.actor === "Judge")) return;
-    openingAttemptedRef.current = true;
-    void playRequiredOpenings().catch(() => {
-      setOpeningComplete(true);
-      setVoiceStatus("ElevenLabs audio quota is unavailable. The openings remain in the transcript, and the hearing is unlocked.");
-    });
-  }, [phase, run?.turns, trialId]);
-
-  useEffect(() => {
-    const witness = run?.turns.filter((turn) => turn.actor === "Witness").at(-1);
-    if (!trialId || phase !== "cross_examination" || !witness || witness.turnId === spokenTurnRef.current) return;
-    spokenTurnRef.current = witness.turnId;
+    if (!initialTrialId) return;
+    const controller = new AbortController();
     void (async () => {
+      setLoading(true);
+      setError(undefined);
       try {
-        const bytes = await synthesizeSpeech({ trialId, text: witness.text, role: "witness" });
-        const audio = new Audio(URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })));
-        audioRef.current?.pause();
-        audioRef.current = audio;
-        setAudioReady(true);
-        setVoiceStatus("Witness audio ready.");
-        try {
-          await audio.play();
-          setVoiceStatus("Witness speaking · Stop anytime");
-        } catch {
-          setVoiceStatus(voiceFallbackMessage("autoplay_blocked"));
+        const response = await fetch(
+          `/api/hearings/${encodeURIComponent(initialTrialId)}`,
+          { credentials: "same-origin", cache: "no-store", signal: controller.signal },
+        );
+        if (!response.ok) throw new Error(await responseError(response));
+        const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
+        if (!parsed.success) throw new Error("The saved hearing response was invalid.");
+        setView(parsed.data);
+      } catch (caught) {
+        if (!controller.signal.aborted) {
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "The hearing could not be reopened.",
+          );
         }
-      } catch {
-        setVoiceStatus(voiceFallbackMessage("tts_failed"));
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
-  }, [phase, run?.turns, synthesizeSpeech, trialId]);
+    return () => controller.abort();
+  }, [initialTrialId]);
 
-  async function toggleRecording(target: VoiceInputTarget) {
-    if (recordingTarget === target) {
-      recorderRef.current?.stop();
-      return;
-    }
-    setVoiceInputTarget(target);
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setVoiceStatus(voiceFallbackMessage("permission_denied", target));
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
-      recorder.onstop = () => void (async () => {
-        setRecordingTarget(undefined);
-        stream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        if (!blob.size) {
-          setVoiceStatus(voiceFallbackMessage("empty_audio", target));
-          return;
-        }
-        setVoiceStatus("Transcribing with Scribe v2…");
-        try {
-          const durationSeconds = Math.max(0, (performance.now() - recordingStartedAtRef.current) / 1_000);
-          const transcript = await transcribeAudio({ trialId: trialId!, audio: await blob.arrayBuffer(), mimeType: blob.type, durationSeconds });
-          if (target === "closing") setClosing(transcript);
-          else setQuestion(transcript);
-          setVoiceStatus(`Transcript ready. Review or edit it, then ${target === "closing" ? "request the verdict" : interactionTarget === "witness" ? "ask the witness" : "address counsel"}.`);
-        } catch {
-          setVoiceStatus(voiceFallbackMessage("stt_failed", target));
-        }
-      })();
-      recorder.start();
-      recordingStartedAtRef.current = performance.now();
-      setRecordingTarget(target);
-      setVoiceStatus("Listening… press Stop recording when finished.");
-    } catch {
-      setVoiceStatus(voiceFallbackMessage("permission_denied", target));
-    }
-  }
-
-  function stopPlayback() {
-    audioRef.current?.pause();
-    if (audioRef.current) audioRef.current.currentTime = 0;
-    setVoiceStatus("Playback stopped. Text remains available.");
-  }
-
-
-  async function execute(work: () => Promise<void>) {
+  async function execute(work: () => Promise<void>): Promise<boolean> {
     setBusy(true);
     setError(undefined);
     try {
       await work();
+      return true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The court could not complete that action.");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "The courtroom action could not be committed.",
+      );
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  async function beginHearing() {
+  async function beginHearing(): Promise<void> {
     await execute(async () => {
-      const id = await startHearing({});
-      setCreatedTrialId(id);
-      window.history.replaceState(null, "", hearingUrl(id));
+      if (!caseSelector.success) throw new Error("Choose a valid published case.");
+      const request = {
+        schemaVersion: HEARING_START_SCHEMA_VERSION,
+        requestId: crypto.randomUUID(),
+        requestedAt: new Date().toISOString(),
+        case: caseSelector.data,
+        userSide: "user" as const,
+      };
+      const response = await fetch("/api/hearings", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
+      if (!parsed.success) throw new Error("The new hearing response was invalid.");
+      setView(parsed.data);
+      setCreatedTrialId(parsed.data.trial.trialId);
+      window.history.replaceState(
+        null,
+        "",
+        hearingUrl(parsed.data.trial.trialId),
+      );
     });
   }
 
-  function downloadDebrief() {
-    if (!run?.debrief) return;
-    void trackEvent({
-      trialId: run.trial.trialId,
-      name: "debrief_downloaded",
-      metadataJson: JSON.stringify({ format: "txt" }),
+  async function commitIntent(intent: HearingPlayerIntent): Promise<boolean> {
+    return execute(async () => {
+      if (!view) throw new Error("The hearing is not ready.");
+      const command = {
+        schemaVersion: HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
+        requestId: crypto.randomUUID(),
+        requestedAt: new Date().toISOString(),
+        expectedStateVersion: view.trial.version,
+        expectedLastEventId: view.trial.lastEventId,
+        intent,
+      };
+      const response = await fetch(
+        `/api/hearings/${encodeURIComponent(view.trial.trialId)}/commands`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(command),
+        },
+      );
+      if (!response.ok) throw new Error(await responseError(response));
+      const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
+      if (!parsed.success) throw new Error("The updated hearing response was invalid.");
+      setView(parsed.data);
     });
-    const text = [
-      "SUITS — CASE DEBRIEF",
-      "",
-      `VERDICT: ${outcome.verdict}`,
-      "",
-      outcome.explanation.toUpperCase(),
-      run.debrief.overallAssessment,
-      "",
-      "WHAT YOU DID WELL — KEY POINTS THAT HELPED YOUR CASE",
-      ...run.debrief.strengths.map((item) => `- ${item.finding} [${item.turnCitations.join(", ")}]`),
-      "",
-      "MISTAKES AND MISSED OPPORTUNITIES",
-      ...run.debrief.missedOpportunities.map((item) => `- ${item.finding}\n  Try: ${item.recommendedQuestion}`),
-      "",
-      "REVISED CLOSING",
-      run.debrief.revisedClosing.text,
-      "",
-      ...run.debrief.limitations,
-    ].join("\n");
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `suits-debrief-${run.trial.trialId}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
   }
+
+  const activeWitness = view?.activeAppearance
+    ? view.witnesses.find(
+        (witness) => witness.witnessId === view.activeAppearance?.witnessId,
+      )
+    : undefined;
+  const activeLeg = view?.activeAppearance?.examinationLeg;
+  const playerOwnsFloor =
+    Boolean(activeLeg) && activeLeg?.ownerSide === view?.trial.userSide;
+  const witnessAnswerCount =
+    view?.transcript.filter((turn) => turn.actor.role === "witness").length ?? 0;
+  const canFinishTrial =
+    Boolean(view) &&
+    !view?.activeAppearance &&
+    view?.trial.phase === "case_in_chief" &&
+    witnessAnswerCount > 0;
 
   return (
     <main className="hearing-shell">
       <header className="hearing-header">
         <Link className="brand" href="/">
-          <span className="brand-mark">S</span><span>SUITS</span>
+          <span className="brand-mark">S</span>
+          <span>SUITS</span>
         </Link>
-        <div className="phase-chip">Step {progress.step} of {progress.totalSteps} · {progress.label}</div>
+        <div className="phase-chip">{phaseLabel(view)}</div>
         <Link className="text-link" href="/records/">Court Records</Link>
       </header>
 
-      {!trialId || run === null ? (
-        <section className="briefing-panel">
-          <div className="eyebrow">Employment retaliation · fictional advocacy exercise</div>
-          <h1>Asha Mehta v. Vertex Logistics Ltd.</h1>
-          <p>You represent Asha Mehta. Your task is to prove that her May 14 warehouse-safety complaint materially influenced Vertex’s May 15 termination decision—not merely that the two events happened close together.</p>
-          <div className="onboarding-grid">
-            <article><span>Your burden</span><strong>Prove retaliatory causation</strong><p>Connect HR’s knowledge of the complaint to the final rationale and approval—not timing alone.</p></article>
-            <article><span>Vertex’s defense</span><strong>The decision came first</strong><p>A termination draft existed on May 7 and two inventory reports were late.</p></article>
-            <article><span>Your witness</span><strong>Elena Kapoor · HR Director</strong><p>Question her about the draft, complaint, revision history, warnings, and final approval.</p></article>
-          </div>
-          <div className="case-timeline"><strong>Case timeline</strong><span>May 7 · HR creates initial draft</span><span>May 14, 10:14 AM · Asha reports safety issue</span><span>May 14, 4:38 PM · “Disruptive escalation” added</span><span>May 15, 9:20 AM · termination approved</span></div>
-          <div className="evidence-docket" aria-label="Available evidence">
-            <div><b>E-001</b><span>Safety complaint</span><p>Sent at 10:14 AM on May 14.</p></div>
-            <div><b>E-002</b><span>Termination letter</span><p>Approved May 15; cites performance and disruptive escalation.</p></div>
-            <div><b>E-003</b><span>Report history</span><p>Two inventory reports were late.</p></div>
-            <div><b>E-004</b><span>Initial draft</span><p>Created May 7, before the complaint.</p></div>
-            <div><b>E-005</b><span>Revision history</span><p>Complaint-related language added after HR received the report.</p></div>
-            <div><b>E-006</b><span>Personnel file</span><p>No formal warning or active performance plan.</p></div>
-          </div>
-          {(error || run === null) && <div className="error-banner" role="alert">{error ?? "We could not find that saved hearing. Start a new session below."}</div>}
-          <button className="primary-button" disabled={busy} onClick={() => void beginHearing()}>
-            {busy ? "Creating and saving your court record…" : "I’m ready — begin hearing"}
-          </button>
-          <p className="resume-note">Your trial ID is saved in this page’s URL, so refresh returns you to the same record.</p>
-        </section>
-      ) : run === undefined ? (
+      {loading ? (
         <section className="briefing-panel loading-panel" role="status">
-          <div className="eyebrow">Saved hearing found</div><h1>Reopening the record…</h1>
-          <p>Loading your transcript and returning you to the last committed phase.</p>
+          <div className="eyebrow">Saved V3 hearing found</div>
+          <h1>Replaying the record…</h1>
+          <p>The server is validating the projection against its append-only event stream.</p>
         </section>
-      ) : phase !== "complete" ? (
+      ) : !view ? (
+        <section className="briefing-panel">
+          <div className="eyebrow">Fictional educational courtroom</div>
+          <h1>Open the trial record.</h1>
+          <p>
+            This hearing uses a deterministic event engine, isolated witness knowledge,
+            and a durable owner-bound record. It is an educational simulation—not legal advice.
+          </p>
+          <div className="case-timeline">
+            <strong>Selected record</strong>
+            <span>
+              {caseSelector.success
+                ? caseSelector.data.kind === "seeded"
+                  ? readable(caseSelector.data.slug)
+                  : "your published case packet"
+                : "invalid case selector"}
+            </span>
+            <span>Multiple witnesses · evidence lifecycle · exact refresh recovery</span>
+          </div>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          {trialId && (
+            <p>
+              This URL points to an unavailable or differently owned hearing. You can return
+              to the <Link href="/cases/">case library</Link> to start another.
+            </p>
+          )}
+          {!trialId && (
+            <button
+              className="primary-button"
+              disabled={busy || !caseSelector.success}
+              onClick={() => void beginHearing()}
+            >
+              {busy ? "Creating the event stream…" : "Begin V3 hearing"}
+            </button>
+          )}
+        </section>
+      ) : view.trial.phase === "complete" ? (
+        <section className="debrief-panel">
+          <div className="eyebrow">Durable record complete</div>
+          <h1>{view.case.title}</h1>
+          <p className="assessment">
+            The hearing completed at event {view.trial.sequence}. Its transcript was projected
+            from the same validated V3 stream that will ground the coaching debrief.
+          </p>
+          <div className="evidence-strip">
+            <span>{view.witnesses.filter((witness) => witness.callCount > 0).length} witnesses called</span>
+            <span>{witnessAnswerCount} answers</span>
+            <span>state v{view.trial.version}</span>
+          </div>
+          <Link className="primary-button" href="/records/">Inspect Court Records</Link>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+        </section>
+      ) : (
         <div className="hearing-grid">
           <section className="transcript-panel">
-            <div className="progress-card" aria-live="polite">
-              <div className="progress-track"><i style={{ width: `${(progress.step / progress.totalSteps) * 100}%` }} /></div>
-              <div><span>Now · {progress.label}</span><strong>{progress.next}</strong></div>
-            </div>
             <div className="panel-heading">
-              <div><span>Live record</span><h1>Hearing transcript</h1></div>
-              <span>{run?.turns.length ?? 0} turns</span>
+              <div>
+                <span>Append-only live record</span>
+                <h1>{view.case.title}</h1>
+              </div>
+              <span>{view.transcript.length} turns · E-{view.trial.sequence}</span>
             </div>
+
             <div className="transcript-list" aria-live="polite">
-              {run?.turns.map((turn) => (
-                <article className={`turn turn-${turn.speaker}`} key={turn.turnId}>
+              {view.transcript.length === 0 && (
+                <div className="thinking-line">
+                  <b>No testimony yet.</b>
+                  <span> Call any available witness from the roster.</span>
+                </div>
+              )}
+              {view.transcript.map((turn) => (
+                <article
+                  className={`turn turn-${turnClass(turn.actor.role)}`}
+                  key={turn.turnId}
+                >
                   <div className="turn-meta">
-                    <strong>{turn.actor}</strong>
-                    <span>{turn.phase.replaceAll("_", " ")} · T-{String(turn.sequence).padStart(3, "0")}</span>
+                    <strong>{actorLabel(turn, view)}</strong>
+                    <span>T-{String(turn.ordinal).padStart(3, "0")} · {turn.status}</span>
                   </div>
                   <p>{turn.text}</p>
-                  {turn.evidenceIds.length > 0 && (
-                    <div className="turn-evidence">{turn.evidenceIds.join(" · ")}</div>
+                  {turn.citations.evidenceIds.length > 0 && (
+                    <div className="turn-evidence">
+                      {turn.citations.evidenceIds.join(" · ")}
+                    </div>
                   )}
                 </article>
               ))}
-              {busy && <div className="thinking-line" role="status"><b>The court is working…</b><span>Your transcript is saved. You can safely refresh and resume from this URL.</span></div>}
+              {busy && (
+                <div className="thinking-line" role="status">
+                  <b>Committing the next event…</b>
+                  <span> Refresh is safe after the server confirms it.</span>
+                </div>
+              )}
             </div>
 
-            {phase === "cross_examination" && (
+            {activeWitness && activeLeg && playerOwnsFloor && (
               <div className="advocacy-box">
-                {!openingComplete && <div className="required-opening" role="status"><strong>Required courtroom openings</strong><p>Hear the Judge and Vertex’s advocate in full before cross-examination unlocks.</p><button className="quiet-button" type="button" onClick={() => void playRequiredOpenings().catch(() => { setOpeningComplete(true); setVoiceStatus("ElevenLabs audio quota is unavailable. The openings remain in the transcript, and the hearing is unlocked."); })}>Play required openings</button></div>}
-                <fieldset className="interaction-target">
-                  <legend>Who are you addressing?</legend>
-                  <label><input type="radio" name="interaction-target" checked={interactionTarget === "witness"} onChange={() => setInteractionTarget("witness")} /> Question witness</label>
-                  <label><input type="radio" name="interaction-target" checked={interactionTarget === "counsel"} onChange={() => setInteractionTarget("counsel")} /> Address opposing counsel</label>
-                </fieldset>
-                <label htmlFor="question">{interactionTarget === "witness" ? "Question Elena Kapoor" : "Respond to Vertex’s counsel"}</label>
-                <p className="action-coach">{interactionTarget === "witness" ? (witnessAnswerCount === 0 ? "Ask naturally about the May 7 draft, safety complaint, revision history, warnings, or final approval." : "Follow the answer: distinguish when termination was considered from what influenced final approval.") : "State your causation argument or ask Vertex to answer it from the admitted record."}</p>
-                <div className="voice-primary">
-                  <span>Primary input · voice</span>
-                  <button className="voice-primary-button" type="button" disabled={!openingComplete || Boolean(recordingTarget && recordingTarget !== "question")} onClick={() => void toggleRecording("question")}>
-                    {recordingTarget === "question" ? "■ Stop & transcribe" : "● Record your statement"}
-                  </button>
-                  <small>Your words appear below for review before anything is sent.</small>
-                </div>
-                {question ? <div className="transcript-preview">
-                  <label htmlFor="question">Transcript preview · edit before sending</label>
-                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
-                </div> : <details className="text-fallback">
-                  <summary>Can’t use voice? Type instead</summary>
-                  <textarea id="question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={interactionTarget === "witness" ? "For example: What changed in the termination memo after the complaint?" : "For example: The final rationale changed only after HR received Asha’s complaint."} rows={3} />
-                </details>}
-                <div className="input-actions submit-preview">
+                <label htmlFor="question">
+                  {readable(activeLeg.kind)} examination · {activeWitness.name}
+                </label>
+                <p className="required-opening">
+                  Ask only about this witness’s own perceptions, prior statements, or exhibits
+                  they have seen. The server will reject knowledge leakage.
+                </p>
+                <textarea
+                  id="question"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  placeholder="Ask a focused, record-grounded question."
+                  rows={3}
+                />
+                <div className="input-actions">
                   <button
                     className="primary-button"
-                    disabled={!openingComplete || busy || question.trim().length < 8}
-                    onClick={() => execute(async () => {
-                      if (interactionTarget === "witness") await askWitness({ trialId, question: question.trim() });
-                      else await addressCounsel({ trialId, statement: question.trim() });
-                      setQuestion("");
-                    })}
+                    disabled={busy || question.trim().length < 3 || Boolean(view.activeQuestion)}
+                    onClick={() => void (async () => {
+                      const committed = await commitIntent({
+                        type: "ask_question",
+                        witnessId: activeWitness.witnessId,
+                        examinationKind: activeLeg.kind,
+                        text: question.trim(),
+                        presentedEvidenceIds: [],
+                      });
+                      if (committed) setQuestion("");
+                    })()}
                   >
-                    {interactionTarget === "witness" ? "Ask witness" : "Address counsel"}
+                    Ask witness
+                  </button>
+                  <button
+                    className="quiet-button"
+                    disabled={busy || Boolean(view.activeQuestion)}
+                    onClick={() =>
+                      void commitIntent({
+                        type: "finish_witness",
+                        witnessId: activeWitness.witnessId,
+                        examinationKind: activeLeg.kind,
+                      })
+                    }
+                  >
+                    End examination
                   </button>
                 </div>
-                {interactionTarget === "witness" && <details className="demo-fallback">
-                  <summary>Need a recovery prompt?</summary>
-                  <p>If you are stuck, load a focused timeline question and edit it in your own voice.</p>
-                  <button className="quiet-button" type="button" onClick={() => setQuestion(sampleQuestion)}>Use recovery question</button>
-                </details>}
-                {voiceStatus && voiceInputTarget === "question" && <div className="voice-status" role="status">{voiceStatus}</div>}
-                {audioReady && (
-                  <div className="input-actions voice-controls">
-                    <button className="quiet-button" type="button" onClick={() => void audioRef.current?.play().catch(() => setVoiceStatus(voiceFallbackMessage("autoplay_blocked")))}>Play response</button>
-                    <button className="quiet-button" type="button" onClick={stopPlayback}>Stop playback</button>
-                  </div>
-                )}
               </div>
             )}
 
-            {phase === "cross_examination" && canClose && (
+            {canFinishTrial && (
               <div className="advocacy-box closing-box">
-                <label htmlFor="closing">Deliver your closing</label>
-                <p className="action-coach">Connect HR’s knowledge, the post-complaint revision, and final approval—then ask for a verdict for Asha.</p>
-                <div className="voice-primary">
-                  <span>Primary input · voice</span>
-                  <button className="voice-primary-button" type="button" disabled={!openingComplete || Boolean(recordingTarget && recordingTarget !== "closing")} onClick={() => void toggleRecording("closing")}>
-                    {recordingTarget === "closing" ? "■ Stop & transcribe" : "● Record your closing"}
+                <label htmlFor="closing">Closing argument</label>
+                <textarea
+                  id="closing"
+                  value={closing}
+                  onChange={(event) => setClosing(event.target.value)}
+                  placeholder="Connect the testimony to the burden of proof."
+                  rows={5}
+                />
+                <div className="input-actions">
+                  <button
+                    className="primary-button"
+                    disabled={busy || closing.trim().length < 12}
+                    onClick={() =>
+                      void commitIntent({
+                        type: "finish_trial",
+                        closingText: closing.trim(),
+                      })
+                    }
+                  >
+                    Rest and close
                   </button>
-                  <small>Your closing is transcribed for review before it reaches the jury.</small>
                 </div>
-                {closing ? <div className="transcript-preview">
-                  <label htmlFor="closing">Transcript preview · edit before sending</label>
-                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} rows={4} />
-                </div> : <details className="text-fallback">
-                  <summary>Can’t use voice? Type your closing instead</summary>
-                  <textarea id="closing" value={closing} onChange={(event) => setClosing(event.target.value)} placeholder="Explain why the transcript supports Asha…" rows={4} />
-                </details>}
-                {voiceStatus && voiceInputTarget === "closing" && <div className="voice-status" role="status">{voiceStatus}</div>}
-                <button
-                  className="primary-button submit-preview"
-                  disabled={!openingComplete || busy || closing.trim().length < 20}
-                  onClick={() => execute(async () => {
-                    await finishHearing({ trialId, closing: closing.trim() });
-                  })}
-                >
-                  Rest and request verdict
-                </button>
               </div>
             )}
-            {error && <div className="error-banner">{error}</div>}
+            {error && <div className="error-banner" role="alert">{error}</div>}
           </section>
 
-          <aside className="case-rail">
-            <div className="rail-card"><span>Case posture</span><strong>You represent Asha Mehta</strong><p>Claimant · fictional retaliation hearing</p></div>
-            <div className="rail-card"><span>Your objective</span><p>Show that the safety complaint influenced Vertex’s final termination rationale.</p></div>
-            <div className="rail-card evidence-rail"><span>Key tension</span><p><b>Vertex</b> · May 7 draft</p><p><b>Asha</b> · post-complaint revision</p><p><b>Jury</b> · which fact actually caused the final decision?</p></div>
-            <div className="rail-card"><span>System proof</span><p>{run?.traces.length ?? 0} observable agent operations recorded.</p></div>
+          <aside className="case-rail" aria-label="Case and witness controls">
+            <article className="rail-card">
+              <span>Witness roster</span>
+              {view.witnesses.map((witness) => {
+                const canCall =
+                  !view.activeAppearance &&
+                  (witness.status === "available" || witness.status === "released");
+                return (
+                  <div className="case-timeline" key={witness.witnessId}>
+                    <strong>{witness.name}</strong>
+                    <span>{witness.role}</span>
+                    <span>
+                      {witness.status} · called {witness.callCount} {witness.callCount === 1 ? "time" : "times"}
+                    </span>
+                    {canCall && (
+                      <button
+                        className="quiet-button"
+                        disabled={busy}
+                        onClick={() =>
+                          void commitIntent({
+                            type: "call_witness",
+                            witnessId: witness.witnessId,
+                          })
+                        }
+                      >
+                        {witness.status === "released" ? "Recall" : "Call witness"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </article>
+            <article className="rail-card">
+              <span>Visible case material</span>
+              <strong>{view.player.facts.length} facts · {view.player.evidence.length} exhibits</strong>
+              <p>Hidden authoring truth and other roles’ private knowledge are excluded from this view.</p>
+              <div className="evidence-strip">
+                {view.player.evidence.slice(0, 8).map((evidence) => (
+                  <span key={evidence.evidenceId}>{evidence.evidenceId} · {evidence.status}</span>
+                ))}
+              </div>
+            </article>
+            <article className="rail-card">
+              <span>Record integrity</span>
+              <strong>State v{view.trial.version}</strong>
+              <p>Last committed event: {view.trial.lastEventId}</p>
+            </article>
+            <article className="rail-card">
+              <span>Educational use</span>
+              <p>{view.case.educationalDisclaimer}</p>
+            </article>
           </aside>
         </div>
-      ) : null}
-
-      {phase === "complete" && run?.debrief && (
-        <section className="debrief-panel">
-          <div className="verdict-reveal"><span>Hearing complete · the record is closed</span><strong>{outcome.verdict}</strong><p>The verdict reflects this transcript—not the hidden “right answer.” Now turn the result into your next practice goal.</p></div>
-          <div className="panel-heading">
-            <div><span>Your coaching debrief</span><h1>What moved the jury—and what to try next</h1></div>
-            <button className="quiet-button" onClick={downloadDebrief}>Download .txt</button>
-          </div>
-          <article className="outcome-analysis">
-            <span>{outcome.explanation}</span>
-            <p className="assessment">{run.debrief.overallAssessment}</p>
-          </article>
-          <div className="debrief-grid">
-            <article><span>What you did well</span><h2>{run.debrief.strengths[0]?.finding}</h2><code>{run.debrief.strengths[0]?.turnCitations.join(" · ")}</code></article>
-            <article><span>Mistakes and missed opportunities</span><h2>{run.debrief.missedOpportunities[0]?.finding}</h2><p>Try instead: {run.debrief.missedOpportunities[0]?.recommendedQuestion}</p></article>
-            <article><span>How to improve your closing</span><h2>{run.debrief.revisedClosing.text}</h2></article>
-          </div>
-          <div className="debrief-actions">
-            <button className="quiet-button" onClick={downloadDebrief}>Save my debrief</button>
-            <Link className="primary-button" href={`/records/?trial=${trialId}`}>Inspect cited transcript & trace</Link>
-          </div>
-        </section>
       )}
     </main>
   );
