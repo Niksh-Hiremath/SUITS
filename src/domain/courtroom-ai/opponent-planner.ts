@@ -218,13 +218,12 @@ function citationScope(
     ]),
     priorStatementIds: new Set(),
     issueIds: new Set(),
-    instructionIds: new Set(
-      publicRecord.instructions.map((instruction) => instruction.instructionId),
-    ),
+    // The durable call-audit citation schema intentionally does not yet carry
+    // instruction or settlement-offer IDs. Keep those values available as
+    // private planning context, but do not accept unauditable model citations.
+    instructionIds: new Set(),
     ruleIds: new Set(),
-    settlementOfferIds: new Set(
-      counsel.privateSettlement?.offers.map((offer) => offer.offerId) ?? [],
-    ),
+    settlementOfferIds: new Set(),
   };
 }
 
