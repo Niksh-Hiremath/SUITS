@@ -7,9 +7,9 @@ import {
   CaseUploadVersionMetadataSchema,
   PromptInjectionFlagSchema,
   normalizeCaseUploadMimeType,
-  nextUploadVersion,
   type CaseUploadVersionMetadata,
-} from "../src/server/case-ingestion";
+} from "../src/server/case-ingestion/schema";
+import { nextUploadVersion } from "../src/server/case-ingestion/versioning";
 import type { Doc } from "./_generated/dataModel";
 import {
   internalMutation,
