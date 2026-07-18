@@ -40,6 +40,11 @@ a {
   padding-bottom: 32px;
 }
 
+.case-topbar {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
 .topbar {
   min-height: 82px;
   display: flex;

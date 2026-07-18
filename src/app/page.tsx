@@ -28,8 +28,8 @@ export default function Home() {
           transcript.
         </p>
         <div className="hero-actions">
-          <Link className="primary-button" href="/hearing/">
-            Review your case & start
+          <Link className="primary-button" href="/cases/">
+            Choose a case & start
           </Link>
           <Link className="text-link" href="/records/">
             View Court Records →

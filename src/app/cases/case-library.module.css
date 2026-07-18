@@ -1,0 +1,110 @@
+.page {
+  width: min(1180px, calc(100% - 40px));
+  min-height: 100vh;
+  margin: 0 auto;
+  padding-bottom: 64px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 48px;
+  align-items: end;
+  padding: 72px 0 52px;
+  border-bottom: 1px solid var(--line);
+}
+
+.kicker {
+  margin: 0 0 12px;
+  color: var(--wine);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.hero h1,
+.detailHero h1 {
+  max-width: 800px;
+  margin: 0;
+  font: 500 clamp(3rem, 7vw, 6.2rem)/0.95 Georgia, serif;
+  letter-spacing: -0.05em;
+}
+
+.hero p,
+.detailHero > div > p,
+.section p {
+  color: rgba(23, 24, 21, 0.65);
+  line-height: 1.65;
+}
+
+.newCaseCard {
+  display: grid;
+  gap: 12px;
+  padding: 24px;
+  color: #fff;
+  background: var(--wine);
+  text-decoration: none;
+}
+
+.newCaseCard span { color: rgba(255, 255, 255, 0.68); font-size: 0.75rem; }
+.newCaseCard strong { font: 500 1.65rem Georgia, serif; }
+.newCaseCard i { font-style: normal; font-weight: 900; }
+
+.catalogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 34px 0 20px;
+}
+
+.catalogHeader h2,
+.section h2 { margin: 0; font: 500 1.8rem Georgia, serif; }
+.catalogHeader span { color: rgba(23, 24, 21, 0.52); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.card { min-height: 390px; display: flex; flex-direction: column; padding: 28px; color: var(--ink); border-right: 1px solid var(--line); background: rgba(255, 253, 247, 0.55); text-decoration: none; }
+.card:last-child { border-right: 0; }
+.card:hover { background: var(--paper-strong); }
+.cardMeta { display: flex; justify-content: space-between; gap: 12px; color: var(--wine); font-size: 0.66rem; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; }
+.card h3 { margin: 28px 0 14px; font: 500 2rem/1.05 Georgia, serif; }
+.card > p { flex: 1; color: rgba(23, 24, 21, 0.63); line-height: 1.55; }
+.card dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 24px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.card dt { color: rgba(23, 24, 21, 0.48); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.card dd { margin: 5px 0 0; font-weight: 900; }
+
+.detailHero { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 50px; align-items: end; padding: 72px 0 54px; border-bottom: 1px solid var(--line); }
+.caseFacts { display: grid; grid-template-columns: 1fr 1fr; margin: 0; border: 1px solid var(--line); background: rgba(255, 253, 247, 0.55); }
+.caseFacts div { padding: 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.caseFacts dt { color: rgba(23, 24, 21, 0.5); font-size: 0.63rem; text-transform: uppercase; }
+.caseFacts dd { margin: 5px 0 0; font-weight: 900; }
+
+.detailGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 36px 0; }
+.section { padding: 28px; border: 1px solid var(--line); background: rgba(255, 253, 247, 0.55); }
+.section h2 { margin-bottom: 18px; }
+.list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.list li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.list li:last-child { border-bottom: 0; }
+.list strong { display: block; font: 600 1rem Georgia, serif; }
+.list span { display: block; margin-top: 5px; color: rgba(23, 24, 21, 0.58); font-size: 0.82rem; line-height: 1.45; }
+.disclaimer { grid-column: 1 / -1; padding: 18px 22px; color: rgba(23, 24, 21, 0.65); border-left: 3px solid var(--gold); background: rgba(185, 138, 61, 0.09); font-size: 0.84rem; line-height: 1.55; }
+.actions { grid-column: 1 / -1; display: flex; gap: 12px; }
+.primary,
+.secondary { display: inline-flex; min-height: 46px; align-items: center; padding: 0 18px; border-radius: 3px; font-weight: 900; text-decoration: none; }
+.primary { color: #fff; background: var(--wine); }
+.secondary { color: var(--ink); border: 1px solid var(--line); }
+
+@media (max-width: 900px) {
+  .hero,
+  .detailHero { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr; }
+  .card { border-right: 0; border-bottom: 1px solid var(--line); }
+  .card:last-child { border-bottom: 0; }
+}
+
+@media (max-width: 650px) {
+  .page { width: min(100% - 22px, 1180px); }
+  .detailGrid { grid-template-columns: 1fr; }
+  .disclaimer,
+  .actions { grid-column: auto; }
+}
