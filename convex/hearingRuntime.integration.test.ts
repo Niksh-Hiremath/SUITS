@@ -2,6 +2,7 @@ import { makeFunctionReference } from "convex/server";
 import { convexTest, type TestConvex } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { createThreeWitnessCaseGraphV1Fixture } from "../src/domain/case-graph";
 import {
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_START_SCHEMA_VERSION,
@@ -13,6 +14,7 @@ import {
   TRIAL_ACTION_SCHEMA_VERSION,
   TrialActionV3Schema,
 } from "../src/domain/trial-engine";
+import { derivePublishedGraphId } from "./caseServiceBoundary";
 import schema from "./schema";
 
 const modules = {
@@ -149,6 +151,58 @@ describe("V3 hearing runtime facade", () => {
     ]);
     expect(stored.legacyTrials).toEqual([]);
     expect(stored.legacyTurns).toEqual([]);
+  });
+
+  it("starts only the caller's immutable published private case", async () => {
+    const backend = convexTest({ schema, modules });
+    const graph = createThreeWitnessCaseGraphV1Fixture();
+    const uploadId = `upload:${"a".repeat(48)}`;
+    const graphId = await derivePublishedGraphId(OWNER_ID, uploadId);
+    await backend.run(async (ctx) => {
+      await ctx.db.insert("caseGraphs", {
+        graphId,
+        caseId: graph.caseId,
+        version: 2,
+        lifecycle: "published",
+        visibility: "private",
+        ownerId: OWNER_ID,
+        uploadId,
+        title: graph.title,
+        graphJson: JSON.stringify(graph),
+        graphSchemaVersion: graph.schemaVersion,
+        compilerMetadataJson: JSON.stringify(graph.compilerMetadata),
+        sourceDigest: graph.compilerMetadata.sourceContentHash,
+        createdBy: "user",
+        createdAt: Date.parse("2026-07-19T03:00:00.000Z"),
+      });
+    });
+    const request = {
+      schemaVersion: HEARING_START_SCHEMA_VERSION,
+      requestId: "19191919-1919-4919-8919-191919191919",
+      requestedAt: "2026-07-19T03:00:00.000Z",
+      case: { kind: "owned", uploadId },
+      userSide: "user",
+    } as const;
+
+    const view = HearingRuntimeViewV1Schema.parse(
+      await backend.action(startReference, {
+        ownerId: OWNER_ID,
+        requestJson: JSON.stringify(request),
+      }),
+    );
+    expect(view.case).toMatchObject({
+      caseId: graph.caseId,
+      title: graph.title,
+    });
+    await expect(
+      backend.action(startReference, {
+        ownerId: OTHER_OWNER_ID,
+        requestJson: JSON.stringify({
+          ...request,
+          requestId: "18181818-1818-4818-8818-181818181818",
+        }),
+      }),
+    ).rejects.toThrow("HEARING_CASE_NOT_FOUND");
   });
 
   it("continues a partially appended command when the exact request is retried", async () => {
