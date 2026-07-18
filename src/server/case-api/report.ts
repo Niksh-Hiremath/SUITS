@@ -1,5 +1,13 @@
-import type { CaseCompilationResult } from "../case-compiler";
+import type {
+  CaseCompilerValidationReport,
+} from "../case-compiler";
+import type { CaseGraph } from "../../domain/case-graph";
 import type { PromptInjectionFlag } from "../case-ingestion";
+
+export type CaseCompilationReviewInput = Readonly<{
+  caseGraph: CaseGraph;
+  validationReport: CaseCompilerValidationReport;
+}>;
 
 export type CaseReviewIssue = Readonly<{
   code: string;
@@ -20,7 +28,7 @@ export type CaseCompilationReviewReport = Readonly<{
 }>;
 
 export function buildCaseCompilationReviewReport(
-  compilation: CaseCompilationResult,
+  compilation: CaseCompilationReviewInput,
   injectionFlags: readonly PromptInjectionFlag[],
 ): CaseCompilationReviewReport {
   const grounding = compilation.validationReport.grounding;

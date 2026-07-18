@@ -2,10 +2,13 @@ import OpenAI from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { CaseGraphV1Schema } from "@/domain/case-graph";
 import { readServerEnv } from "@/lib/env";
 import {
   CaseCompilationError,
   CaseCompilerInputSchema,
+  CaseCompilerValidationReportSchema,
+  MAX_CASE_COMPILER_SOURCE_SEGMENTS,
   OpenAICaseCompilerProvider,
   compileCasePacket,
 } from "@/server/case-compiler";
@@ -27,6 +30,8 @@ import {
 import {
   DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
   MAX_CASE_UPLOAD_SIZE_BYTES,
+  MAX_PROMPT_INJECTION_FLAGS,
+  PromptInjectionFlagSchema,
   ingestCaseUpload,
   sha256Hex,
 } from "@/server/case-ingestion";
@@ -46,9 +51,9 @@ const StorageUploadResponseSchema = z
 
 const DraftRegistrationResponseSchema = z
   .object({
-    uploadId: z.string().trim().min(1).max(128),
-    caseId: z.string().trim().min(1).max(128),
-    version: z.number().int().positive(),
+    uploadId: z.string().regex(/^upload:[a-f0-9]{48}$/u),
+    caseId: z.string().regex(/^case:[a-f0-9]{48}$/u),
+    version: z.literal(2),
     status: z.literal("indexed"),
   })
   .strict();
@@ -59,6 +64,27 @@ const CaseCompilePermitResponseSchema = z
     retryAfterSeconds: z.number().int().min(0).max(600),
   })
   .strict();
+
+const CaseCompileReplayResponseSchema = z.discriminatedUnion("found", [
+  z.object({ found: z.literal(false) }).strict(),
+  z
+    .object({
+      found: z.literal(true),
+      caseGraph: CaseGraphV1Schema,
+      validationReport: CaseCompilerValidationReportSchema,
+      injectionFlags: z.array(PromptInjectionFlagSchema).max(MAX_PROMPT_INJECTION_FLAGS),
+      upload: z
+        .object({
+          uploadId: z.string().regex(/^upload:[a-f0-9]{48}$/u),
+          fileName: z.string().trim().min(1).max(300),
+          mimeType: z.string().trim().min(1).max(160),
+          sizeBytes: z.number().int().positive().max(MAX_CASE_UPLOAD_SIZE_BYTES),
+          sourceSegmentCount: z.number().int().positive().max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 function jsonError(
   status: number,
@@ -174,6 +200,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
+    const permit = await callConvexCaseService({
+      path: "/service/case-compile-permit",
+      body: { clientKeyHash },
+      responseSchema: CaseCompilePermitResponseSchema,
+      signal: request.signal,
+    });
+    if (!permit.allowed) {
+      return jsonError(
+        429,
+        "CASE_COMPILATION_RATE_LIMITED",
+        "Too many case compilation attempts. Wait a few minutes and try again.",
+        { "Retry-After": String(permit.retryAfterSeconds) },
+      );
+    }
     const multipartBody = await readBoundedRequestBody(
       request,
       MAX_CASE_UPLOAD_SIZE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES,
@@ -207,6 +247,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requestId,
       contentDigest,
     );
+    const replay = await callConvexCaseService({
+      path: "/service/case-draft/lookup",
+      body: { ownerId: ownerSession.ownerId, uploadId },
+      responseSchema: CaseCompileReplayResponseSchema,
+      signal: request.signal,
+    });
+    if (replay.found) {
+      if (
+        replay.upload.uploadId !== uploadId ||
+        replay.caseGraph.caseId !== caseId ||
+        replay.caseGraph.status !== "draft" ||
+        replay.caseGraph.sourceSegments.length !== replay.upload.sourceSegmentCount ||
+        replay.validationReport.status === "rejected"
+      ) {
+        throw new ConvexCaseServiceError("CASE_COMPILE_REPLAY_MISMATCH", 502);
+      }
+      return NextResponse.json(
+        {
+          caseGraph: replay.caseGraph,
+          report: buildCaseCompilationReviewReport(replay, replay.injectionFlags),
+          upload: replay.upload,
+        },
+        { headers: { "Cache-Control": "no-store", "X-SUITS-Replayed": "true" } },
+      );
+    }
     const ingestion = await ingestCaseUpload(
       {
         uploadId,
@@ -228,20 +293,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         422,
         "CASE_PACKET_COMPILER_LIMIT_EXCEEDED",
         "The extracted packet is too large for one grounded compilation. Split it into a smaller packet and retry.",
-      );
-    }
-    const permit = await callConvexCaseService({
-      path: "/service/case-compile-permit",
-      body: { clientKeyHash },
-      responseSchema: CaseCompilePermitResponseSchema,
-      signal: request.signal,
-    });
-    if (!permit.allowed) {
-      return jsonError(
-        429,
-        "CASE_COMPILATION_RATE_LIMITED",
-        "Too many case compilation attempts. Wait a few minutes and try again.",
-        { "Retry-After": String(permit.retryAfterSeconds) },
       );
     }
     const { uploadUrl } = await callConvexCaseService({
@@ -282,6 +333,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       timeoutMs: 120_000,
       signal: request.signal,
     });
+    if (registration.uploadId !== uploadId || registration.caseId !== caseId) {
+      throw new ConvexCaseServiceError("CASE_DRAFT_RESPONSE_MISMATCH", 502);
+    }
 
     return NextResponse.json(
       {

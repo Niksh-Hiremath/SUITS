@@ -32,7 +32,7 @@ describe("browser case API contracts", () => {
     ).toBe(graph.caseId);
     expect(
       CasePublishResponseSchema.parse({
-        caseId: graph.caseId,
+        caseId: `case:${"b".repeat(48)}`,
         version: 2,
         published: true,
         replayed: false,

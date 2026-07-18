@@ -44,8 +44,8 @@ export const CaseCompileResponseSchema = z
 
 export const CasePublishResponseSchema = z
   .object({
-    caseId: z.string().trim().min(1).max(128),
-    version: z.number().int().positive(),
+    caseId: z.string().regex(/^case:[a-f0-9]{48}$/u),
+    version: z.literal(2),
     published: z.literal(true),
     replayed: z.boolean(),
   })

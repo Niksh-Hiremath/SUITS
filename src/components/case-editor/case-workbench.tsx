@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import {
@@ -302,7 +303,7 @@ export function CaseWorkbench() {
           <h2>{compiled?.caseGraph.title}</h2>
           <p>Version {published.version} is ready for a fictional educational hearing.</p>
           <div className={styles.actions}>
-            <a className={styles.primaryButton} href={`/courtroom/?caseId=${encodeURIComponent(published.caseId)}`}>Prepare hearing</a>
+            <Link className={styles.primaryButton} href="/cases">Return to case library</Link>
             <button className={styles.secondaryButton} onClick={reset} type="button">Compile another case</button>
           </div>
         </section>

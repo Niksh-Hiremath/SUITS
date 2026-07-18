@@ -14,18 +14,28 @@ import {
 export const runtime = "nodejs";
 
 const MAX_PUBLISH_BODY_BYTES = 4 * 1024 * 1024;
+const COMPILED_CASE_ID_PATTERN = /^case:[a-f0-9]{48}$/u;
 
 const PublishRequestSchema = z
   .object({
-    uploadId: z.string().trim().min(3).max(128),
+    uploadId: z.string().regex(/^upload:[a-f0-9]{48}$/u),
     caseGraph: CaseGraphV1Schema,
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if (!COMPILED_CASE_ID_PATTERN.test(request.caseGraph.caseId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["caseGraph", "caseId"],
+        message: "Published uploads require a server-derived case ID",
+      });
+    }
+  });
 
 const PublishResponseSchema = z
   .object({
-    caseId: z.string().trim().min(1).max(128),
-    version: z.number().int().positive(),
+    caseId: z.string().regex(COMPILED_CASE_ID_PATTERN),
+    version: z.literal(2),
     published: z.literal(true),
     replayed: z.boolean(),
   })
@@ -56,7 +66,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return jsonError(413, "PUBLISH_BODY_TOO_LARGE", "The reviewed case exceeds the publication limit.");
   }
 
-  const ownerSession = verifyCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
+  let ownerSession;
+  try {
+    ownerSession = verifyCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
+  } catch (error) {
+    console.error("case_session_configuration_failed", {
+      name: error instanceof Error ? error.name : "UnknownError",
+    });
+    return jsonError(503, "CASE_SESSION_UNAVAILABLE", "A secure case session could not be verified.");
+  }
   if (!ownerSession) {
     return jsonError(401, "CASE_OWNER_SESSION_REQUIRED", "Recompile the packet to restore its secure owner session.");
   }
@@ -84,6 +102,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       timeoutMs: 120_000,
       signal: request.signal,
     });
+    if (result.caseId !== parsed.caseGraph.caseId) {
+      throw new ConvexCaseServiceError("CASE_PUBLISH_RESPONSE_MISMATCH", 502);
+    }
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof RequestBodyLimitError) {
