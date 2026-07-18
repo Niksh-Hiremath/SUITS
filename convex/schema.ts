@@ -507,6 +507,9 @@ export default defineSchema({
       v.literal("GENERATE_DEBRIEF"),
       v.literal("FAIL_STEP"),
       v.literal("RECOVER_STEP"),
+      v.literal("UPDATE_OPPOSING_STRATEGY"),
+      v.literal("DENY_STRIKE_MOTION"),
+      v.literal("WITHDRAW_STRIKE_MOTION"),
     ),
     actorId: v.string(),
     actorRole: eventActorRole,
@@ -545,6 +548,7 @@ export default defineSchema({
     sourceSegmentIds: v.array(v.string()),
     turnIds: v.array(v.string()),
     occurredAt: v.number(),
+    occurredAtIso: v.optional(v.string()),
     committedAt: v.number(),
   })
     .index("by_event_id", ["eventId"])
@@ -575,6 +579,12 @@ export default defineSchema({
   trialProjections: defineTable({
     projectionId: v.string(),
     trialId: v.string(),
+    // Optional only so pre-Milestone-3 projections remain readable. Every
+    // active trial-state.v3 projection is required to populate these fields.
+    ownerId: v.optional(v.string()),
+    graphId: v.optional(v.string()),
+    caseId: v.optional(v.string()),
+    caseVersion: v.optional(v.number()),
     stateVersion: v.number(),
     lastSequence: v.number(),
     stateJson: v.string(),
@@ -582,7 +592,9 @@ export default defineSchema({
     eventSchemaVersion: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_trial", ["trialId"]),
+  })
+    .index("by_trial", ["trialId"])
+    .index("by_owner", ["ownerId"]),
 
   trialSnapshots: defineTable({
     snapshotId: v.string(),

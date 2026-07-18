@@ -35,6 +35,7 @@ const EXPECTED_ACTIONS_BY_ACTOR = {
     "WITHDRAW_SETTLEMENT",
     "REST_CASE",
     "GIVE_CLOSING",
+    "WITHDRAW_STRIKE_MOTION",
   ],
   opposing_counsel: [
     "CALL_WITNESS",
@@ -57,6 +58,8 @@ const EXPECTED_ACTIONS_BY_ACTOR = {
     "WITHDRAW_SETTLEMENT",
     "REST_CASE",
     "GIVE_CLOSING",
+    "UPDATE_OPPOSING_STRATEGY",
+    "WITHDRAW_STRIKE_MOTION",
   ],
   judge: [
     "BEGIN_PHASE",
@@ -73,6 +76,7 @@ const EXPECTED_ACTIONS_BY_ACTOR = {
     "RESUME_TRIAL",
     "INSTRUCT_JURY",
     "RENDER_VERDICT",
+    "DENY_STRIKE_MOTION",
   ],
   witness: ["ANSWER_QUESTION"],
   clerk: ["SWEAR_WITNESS"],
@@ -101,6 +105,7 @@ const EXPECTED_ACTIONS_BY_ACTOR = {
     "RENDER_VERDICT",
     "FAIL_STEP",
     "RECOVER_STEP",
+    "DENY_STRIKE_MOTION",
   ],
   debrief_coach: ["GENERATE_DEBRIEF"],
 } as const satisfies Readonly<Record<ActorRole, readonly TrialActionType[]>>;

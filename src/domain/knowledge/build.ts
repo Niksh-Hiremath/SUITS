@@ -1,4 +1,9 @@
-import type { CaseGraph, Fact, Party } from "../case-graph";
+import {
+  assertCaseGraphContentHash,
+  type CaseGraph,
+  type Fact,
+  type Party,
+} from "../case-graph";
 import type {
   ActorRef,
   EvidenceStateEntry,
@@ -33,7 +38,6 @@ export interface KnowledgeStateProjection {
   emotionalStateByWitnessId?: Readonly<
     Record<string, "neutral" | "confident" | "nervous" | "defensive" | "empathetic">
   >;
-  additionalKnownFactIdsByActorId?: Readonly<Record<string, readonly string[]>>;
 }
 
 function compareIds(left: string, right: string): number {
@@ -61,10 +65,11 @@ function sourceSegmentIdsForEvidence(
 }
 
 function assertMatchingCase(state: KnowledgeStateProjection): void {
-  if (
-    state.trial.caseId !== state.caseGraph.caseId ||
-    state.trial.caseVersion !== state.caseGraph.version
-  ) {
+  const graph = assertCaseGraphContentHash(
+    state.caseGraph,
+    state.trial.caseGraphContentHash,
+  );
+  if (state.trial.caseId !== graph.caseId || state.trial.caseVersion !== graph.version) {
     throw new Error(
       `Knowledge context case mismatch: trial ${state.trial.caseId}@${state.trial.caseVersion}, graph ${state.caseGraph.caseId}@${state.caseGraph.version}`,
     );
@@ -81,8 +86,20 @@ function partyForActor(
   state: KnowledgeStateProjection,
   actor: ActorRef,
 ): Party {
+  const policyBinding = state.trial.policySnapshot.mappings.actors.find(
+    (binding) => binding.actorId === actor.actorId,
+  );
+  if (!policyBinding) {
+    throw new Error(`Actor ${actor.actorId} is absent from the pinned trial policy`);
+  }
+  const representedPartyIds = new Set(policyBinding.representedPartyIds);
   const explicitPartyId = state.partyIdByActorId?.[actor.actorId];
   if (explicitPartyId) {
+    if (!representedPartyIds.has(explicitPartyId)) {
+      throw new Error(
+        `Actor ${actor.actorId} does not represent pinned party ${explicitPartyId}`,
+      );
+    }
     const explicitParty = state.caseGraph.parties.find((party) => party.partyId === explicitPartyId);
     if (!explicitParty) {
       throw new Error(`Unknown party mapping for actor ${actor.actorId}: ${explicitPartyId}`);
@@ -94,7 +111,7 @@ function partyForActor(
   }
 
   const candidates = state.caseGraph.parties.filter(
-    (party) => party.simulationSide === actor.side,
+    (party) => representedPartyIds.has(party.partyId),
   );
   if (candidates.length !== 1) {
     throw new Error(
@@ -233,20 +250,40 @@ function buildWitnessView(
     state.caseGraph.evidence.map((evidence) => [evidence.evidenceId, evidence]),
   );
   const perceivedFactIds = new Set(witness.knowledgeBoundary.perceivedFactIds);
-  const knownFactIds = uniqueSorted([
-    ...witness.knowledgeBoundary.knownFactIds,
-    ...(state.additionalKnownFactIdsByActorId?.[actor.actorId] ?? []).filter(
-      (factId) => state.trial.facts[factId]?.status !== "hidden",
-    ),
-  ]);
+  const knownFactIds = uniqueSorted(witness.knowledgeBoundary.knownFactIds);
   const admittedSeenEvidenceIds = new Set(
     witness.knowledgeBoundary.seenEvidenceIds.filter(
       (evidenceId) => state.trial.evidence[evidenceId]?.status === "admitted",
     ),
   );
+  const activeQuestion = state.trial.activeQuestionId
+    ? state.trial.questions[state.trial.activeQuestionId]
+    : undefined;
+  const presentedEvidenceIds = new Set(
+    activeQuestion?.witnessId === witness.witnessId
+      ? activeQuestion.presentedEvidenceIds.filter((evidenceId) => {
+          const evidence = state.trial.evidence[evidenceId];
+          return (
+            witness.knowledgeBoundary.seenEvidenceIds.includes(evidenceId) &&
+            evidence !== undefined &&
+            evidence.status !== "excluded" &&
+            evidence.status !== "withdrawn"
+          );
+        })
+      : [],
+  );
   const availablePriorStatementIds = new Set(
     witness.knowledgeBoundary.availablePriorStatementIds,
   );
+  const scopedPublicRecord = parseJuryRecord({
+    ...publicRecord,
+    facts: publicRecord.facts.filter((fact) => knownFactIds.includes(fact.factId)),
+    evidence: publicRecord.evidence.filter((evidence) =>
+      admittedSeenEvidenceIds.has(evidence.evidenceId),
+    ),
+    testimony: [],
+    instructions: [],
+  });
 
   return parseKnowledgeView({
     schemaVersion: KNOWLEDGE_VIEW_SCHEMA_VERSION,
@@ -259,7 +296,7 @@ function buildWitnessView(
       caseVersion: state.caseGraph.version,
       title: state.caseGraph.title,
     },
-    publicRecord,
+    publicRecord: scopedPublicRecord,
     witness: {
       witnessId: witness.witnessId,
       name: witness.name,
@@ -313,10 +350,31 @@ function buildWitnessView(
       allowedTopics: [...witness.knowledgeBoundary.allowedTopics],
       forbiddenTopics: [...witness.knowledgeBoundary.forbiddenTopics],
     },
+    presentedEvidence: uniqueSorted([...presentedEvidenceIds]).flatMap(
+      (evidenceId) => {
+        const evidenceState = state.trial.evidence[evidenceId];
+        const authoredItem = authoredEvidence.get(evidenceId);
+        if (!evidenceState || !authoredItem) return [];
+        if (
+          evidenceState.status === "excluded" ||
+          evidenceState.status === "withdrawn"
+        ) {
+          return [];
+        }
+        return [
+          {
+            evidenceId,
+            name: evidenceState.name,
+            description: authoredItem.description,
+            status: evidenceState.status,
+          },
+        ];
+      },
+    ),
     currentExchange: currentExchange(
       state,
       new Set(knownFactIds),
-      admittedSeenEvidenceIds,
+      new Set([...admittedSeenEvidenceIds, ...presentedEvidenceIds]),
     ),
   });
 }
@@ -349,6 +407,20 @@ function buildCounselView(
   const privatePosition = state.caseGraph.settlement.participants.find(
     (position) => position.partyId === party.partyId,
   );
+  const canonicalStrategy =
+    actor.role === "opposing_counsel" &&
+    state.trial.opposingStrategy?.ownerActorId === actor.actorId
+      ? state.trial.opposingStrategy
+      : null;
+  const strategyMemory = canonicalStrategy
+    ? [
+        ...canonicalStrategy.objectives.map((objective) => `Objective: ${objective}`),
+        ...canonicalStrategy.witnessPriorityIds.map((witnessId) => `Witness priority: ${witnessId}`),
+        ...canonicalStrategy.evidencePriorityIds.map((evidenceId) => `Evidence priority: ${evidenceId}`),
+        `Settlement posture: ${canonicalStrategy.settlementPosture}`,
+        ...canonicalStrategy.privateNotes.map((note) => `Private note: ${note}`),
+      ]
+    : [...(state.strategyMemoryByActorId?.[actor.actorId] ?? [])];
 
   return parseKnowledgeView({
     schemaVersion: KNOWLEDGE_VIEW_SCHEMA_VERSION,
@@ -375,7 +447,7 @@ function buildCounselView(
         description: authoredEvidence.get(evidence.evidenceId)?.description ?? evidence.name,
         status: evidence.status,
       })),
-      strategyMemory: [...(state.strategyMemoryByActorId?.[actor.actorId] ?? [])],
+      strategyMemory,
       privateSettlement:
         state.caseGraph.settlement.enabled && privatePosition
           ? {
@@ -393,26 +465,23 @@ function buildCounselView(
                 state.trial.settlementOffers,
                 (offer) => offer.offerId,
               )
-                .filter((offer) => offer.visibleToSides.includes(actor.side))
-                .map((offer) => {
-                  const proposer = state.caseGraph.parties.find(
-                    (candidate) => candidate.simulationSide === offer.proposedBySide,
-                  );
-                  if (!proposer) {
-                    throw new Error(`Settlement offer ${offer.offerId} has no proposing party`);
+                .filter(
+                  (offer) =>
+                    offer.visibleToSides.includes(actor.side) &&
+                    (offer.proposedByPartyId === party.partyId ||
+                      offer.recipientPartyIds.includes(party.partyId)),
+                )
+                 .map((offer) => {
+                   const proposer = state.caseGraph.parties.find(
+                     (candidate) => candidate.partyId === offer.proposedByPartyId,
+                   );
+                   if (!proposer) {
+                     throw new Error(`Settlement offer ${offer.offerId} has no proposing party`);
                   }
                   return {
                     offerId: offer.offerId,
                     proposerPartyId: proposer.partyId,
-                    recipientPartyIds: uniqueSorted(
-                      state.caseGraph.parties
-                        .filter(
-                          (candidate) =>
-                            offer.visibleToSides.includes(candidate.simulationSide) &&
-                            candidate.partyId !== proposer.partyId,
-                        )
-                        .map((candidate) => candidate.partyId),
-                    ),
+                    recipientPartyIds: uniqueSorted(offer.recipientPartyIds),
                     amount: offer.terms.amount,
                     nonMonetaryTerms: [...offer.terms.nonMonetaryTerms],
                     status: offer.status,

@@ -198,6 +198,7 @@ function prepareRinaResponse(harness: Harness, suffix = "one"): string {
       examinationKind: "direct",
       text: "What did you report in your safety complaint?",
       turnId: `turn_question_${suffix}`,
+      presentedEvidenceIds: ["evidence_complaint_email"],
     },
     ACTORS.userCounsel,
   );
@@ -225,6 +226,69 @@ function answerRina(harness: Harness, responseId: string, suffix = "one"): Commi
     },
     ACTORS.rina,
   );
+}
+
+function createFoundationTestimony(
+  harness: Harness,
+  input: {
+    suffix: string;
+    witnessId: string;
+    witnessActor: ActorRef;
+    counselActor: ActorRef;
+    calledBySide: "user" | "opposing";
+    evidenceId: string;
+    factIds?: string[];
+  },
+): string {
+  const questionId = `question_foundation_${input.suffix}`;
+  const responseId = `response_foundation_${input.suffix}`;
+  const testimonyId = `testimony_foundation_${input.suffix}`;
+  harness.commit(
+    "CALL_WITNESS",
+    { witnessId: input.witnessId, calledBySide: input.calledBySide },
+    input.counselActor,
+  );
+  harness.commit(
+    "SWEAR_WITNESS",
+    { witnessId: input.witnessId },
+    ACTORS.judge,
+  );
+  harness.commit(
+    "ASK_QUESTION",
+    {
+      questionId,
+      witnessId: input.witnessId,
+      examinationKind: "direct",
+      text: "Do you recognize and authenticate this record?",
+      turnId: `turn_foundation_question_${input.suffix}`,
+      presentedEvidenceIds: [input.evidenceId],
+    },
+    input.counselActor,
+  );
+  harness.commit(
+    "REQUEST_RESPONSE",
+    {
+      responseId,
+      actorId: input.witnessActor.actorId,
+      purpose: "answer_question",
+    },
+    ACTORS.system,
+  );
+  harness.commit(
+    "ANSWER_QUESTION",
+    {
+      responseId,
+      questionId,
+      witnessId: input.witnessId,
+      testimonyId,
+      turnId: `turn_foundation_answer_${input.suffix}`,
+      text: "Yes. I recognize this record and can authenticate it.",
+      factIds: input.factIds ?? [],
+      evidenceIds: [input.evidenceId],
+    },
+    input.witnessActor,
+  );
+  return testimonyId;
 }
 
 describe("trial action validation", () => {
@@ -269,7 +333,7 @@ describe("trial action validation", () => {
 
   it("rejects use of evidence outside the case graph", () => {
     const harness = createHarness();
-    harness.start();
+    enterCaseInChief(harness);
     const action = harness.draft(
       "OFFER_EVIDENCE",
       {
@@ -298,12 +362,23 @@ describe("trial action validation", () => {
     enterCaseInChief(staleResponseHarness);
     const responseId = prepareRinaResponse(staleResponseHarness, "stale");
     staleResponseHarness.commit(
-      "PROPOSE_ASSERTION",
+      "PROPOSE_SETTLEMENT",
       {
-        factId: "fact_intervening_assertion",
-        proposition: "An intervening event advanced the canonical state version.",
-        provenanceIds: ["prov_intervening_assertion"],
-        visibility: "public",
+        offerId: "offer_intervening_stale_response",
+        parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: {
+          amount: 90_000,
+          currency: "USD",
+          nonMonetaryTerms: ["Neutral reference"],
+          summary: "An intervening offer advances the canonical state version.",
+        },
+        expiresAtSequence:
+          staleResponseHarness.state.lastSequence +
+          1 +
+          staleResponseHarness.state.policySnapshot.settlement
+            .expiresAfterEventCount,
       },
       ACTORS.userCounsel,
     );
@@ -361,14 +436,16 @@ describe("trial action validation", () => {
 describe("fact and evidence lifecycles", () => {
   it("keeps generated assertions proposed until explicit verification and ruling", () => {
     const harness = createHarness();
-    harness.start();
+    enterCaseInChief(harness);
+    const responseId = prepareRinaResponse(harness, "generated_basis");
+    answerRina(harness, responseId, "generated_basis");
 
     harness.commit(
       "PROPOSE_ASSERTION",
       {
         factId: "fact_generated_assertion",
         proposition: "A generated assertion that is not part of authored truth.",
-        provenanceIds: ["prov_generated_assertion"],
+        provenanceIds: ["testimony_generated_basis"],
         visibility: "public",
       },
       ACTORS.userCounsel,
@@ -393,12 +470,46 @@ describe("fact and evidence lifecycles", () => {
 
   it("moves facts through reveal, dispute, verify, and exclusion without implicit admission", () => {
     const harness = createHarness();
-    harness.start();
+    enterCaseInChief(harness);
     expect(harness.state.facts.fact_manager_accessed_complaint.status).toBe("hidden");
+
+    const foundationTestimonyId = createFoundationTestimony(harness, {
+      suffix: "revision_history_reveal",
+      witnessId: ACTORS.maya.witnessId,
+      witnessActor: ACTORS.maya,
+      counselActor: ACTORS.userCounsel,
+      calledBySide: "user",
+      evidenceId: "evidence_revision_history",
+    });
+
+    harness.commit(
+      "OFFER_EVIDENCE",
+      {
+        evidenceId: "evidence_revision_history",
+        offeredBySide: "user",
+        foundationTestimonyIds: [foundationTestimonyId],
+      },
+      ACTORS.userCounsel,
+    );
+    harness.commit(
+      "RULE_ON_EVIDENCE",
+      {
+        evidenceId: "evidence_revision_history",
+        ruling: "admitted",
+        reason: "The revision history was authenticated for the simulation.",
+      },
+      ACTORS.judge,
+    );
 
     harness.commit(
       "REVEAL_HIDDEN_FACT",
-      { factId: "fact_manager_accessed_complaint" },
+      {
+        factId: "fact_manager_accessed_complaint",
+        basis: {
+          kind: "evidence",
+          evidenceId: "evidence_revision_history",
+        },
+      },
       ACTORS.judge,
     );
     expect(harness.state.facts.fact_manager_accessed_complaint).toMatchObject({
@@ -433,36 +544,57 @@ describe("fact and evidence lifecycles", () => {
   });
 
   it("supports offer, admission, exclusion, and withdrawal evidence outcomes", () => {
-    const harness = createHarness();
-    harness.start();
+    const withdrawalHarness = createHarness();
+    enterCaseInChief(withdrawalHarness);
+    const complaintFoundation = createFoundationTestimony(withdrawalHarness, {
+      suffix: "complaint_withdrawal",
+      witnessId: ACTORS.rina.witnessId,
+      witnessActor: ACTORS.rina,
+      counselActor: ACTORS.userCounsel,
+      calledBySide: "user",
+      evidenceId: "evidence_complaint_email",
+      factIds: ["fact_complaint_sent"],
+    });
 
-    harness.commit(
+    withdrawalHarness.commit(
       "OFFER_EVIDENCE",
       {
         evidenceId: "evidence_complaint_email",
         offeredBySide: "user",
-        foundationTestimonyIds: [],
+        foundationTestimonyIds: [complaintFoundation],
       },
       ACTORS.userCounsel,
     );
-    expect(harness.state.evidence.evidence_complaint_email.status).toBe("offered");
-    harness.commit(
+    expect(withdrawalHarness.state.evidence.evidence_complaint_email.status).toBe("offered");
+    withdrawalHarness.commit(
       "WITHDRAW_EVIDENCE",
       { evidenceId: "evidence_complaint_email" },
       ACTORS.userCounsel,
     );
-    expect(harness.state.evidence.evidence_complaint_email.status).toBe("withdrawn");
+    expect(withdrawalHarness.state.evidence.evidence_complaint_email.status).toBe("withdrawn");
 
-    harness.commit(
+    const admissionHarness = createHarness();
+    enterCaseInChief(admissionHarness);
+    const metadataFoundation = createFoundationTestimony(admissionHarness, {
+      suffix: "draft_metadata_admission",
+      witnessId: ACTORS.maya.witnessId,
+      witnessActor: ACTORS.maya,
+      counselActor: ACTORS.opposingCounsel,
+      calledBySide: "opposing",
+      evidenceId: "evidence_draft_metadata",
+      factIds: ["fact_draft_created"],
+    });
+
+    admissionHarness.commit(
       "OFFER_EVIDENCE",
       {
         evidenceId: "evidence_draft_metadata",
         offeredBySide: "opposing",
-        foundationTestimonyIds: [],
+        foundationTestimonyIds: [metadataFoundation],
       },
       ACTORS.opposingCounsel,
     );
-    harness.commit(
+    admissionHarness.commit(
       "RULE_ON_EVIDENCE",
       {
         evidenceId: "evidence_draft_metadata",
@@ -471,18 +603,29 @@ describe("fact and evidence lifecycles", () => {
       },
       ACTORS.judge,
     );
-    expect(harness.state.evidence.evidence_draft_metadata.status).toBe("admitted");
+    expect(admissionHarness.state.evidence.evidence_draft_metadata.status).toBe("admitted");
 
-    harness.commit(
+    const exclusionHarness = createHarness();
+    enterCaseInChief(exclusionHarness);
+    const revisionFoundation = createFoundationTestimony(exclusionHarness, {
+      suffix: "revision_history_exclusion",
+      witnessId: ACTORS.maya.witnessId,
+      witnessActor: ACTORS.maya,
+      counselActor: ACTORS.userCounsel,
+      calledBySide: "user",
+      evidenceId: "evidence_revision_history",
+    });
+
+    exclusionHarness.commit(
       "OFFER_EVIDENCE",
       {
         evidenceId: "evidence_revision_history",
         offeredBySide: "user",
-        foundationTestimonyIds: [],
+        foundationTestimonyIds: [revisionFoundation],
       },
       ACTORS.userCounsel,
     );
-    harness.commit(
+    exclusionHarness.commit(
       "RULE_ON_EVIDENCE",
       {
         evidenceId: "evidence_revision_history",
@@ -491,7 +634,7 @@ describe("fact and evidence lifecycles", () => {
       },
       ACTORS.judge,
     );
-    expect(harness.state.evidence.evidence_revision_history.status).toBe("excluded");
+    expect(exclusionHarness.state.evidence.evidence_revision_history.status).toBe("excluded");
   });
 });
 
@@ -517,7 +660,7 @@ describe("append-only testimony and idempotency", () => {
       {
         motionId: "motion_strike_one",
         testimonyIds: ["testimony_one"],
-        factIds: [],
+        factIds: ["fact_complaint_sent"],
       },
       ACTORS.judge,
     );
@@ -557,7 +700,7 @@ describe("interruption and trial-control lifecycles", () => {
         interruptedResponseId: resumableResponseId,
         objectionId: null,
       },
-      ACTORS.opposingCounsel,
+      ACTORS.system,
     );
     resumeHarness.commit(
       "RESOLVE_INTERRUPTION",
@@ -584,6 +727,7 @@ describe("interruption and trial-control lifecycles", () => {
         examinationKind: "direct",
         text: "What happened next?",
         turnId: "turn_question_second_interrupt",
+        presentedEvidenceIds: [],
       },
       ACTORS.userCounsel,
     );
@@ -603,7 +747,7 @@ describe("interruption and trial-control lifecycles", () => {
         interruptedResponseId: "response_second_interrupt",
         objectionId: null,
       },
-      ACTORS.opposingCounsel,
+      ACTORS.system,
     );
     expect(resumeHarness.state.activeInterruption?.interruptId).toBe("interrupt_second");
 
@@ -617,7 +761,7 @@ describe("interruption and trial-control lifecycles", () => {
         interruptedResponseId: cancelledResponseId,
         objectionId: null,
       },
-      ACTORS.opposingCounsel,
+      ACTORS.system,
     );
     cancelHarness.commit(
       "RESOLVE_INTERRUPTION",
@@ -647,7 +791,7 @@ describe("interruption and trial-control lifecycles", () => {
         interruptedResponseId: "response_cancel_retry",
         objectionId: null,
       },
-      ACTORS.opposingCounsel,
+      ACTORS.system,
     );
     expect(cancelHarness.state.activeInterruption?.interruptId).toBe("interrupt_after_cancel");
   });
@@ -694,13 +838,15 @@ describe("settlement lifecycle", () => {
     const graph = createThreeWitnessCaseGraphV1Fixture();
     graph.settlement.expiresAfterEventCount = 2;
     const harness = createHarness(graph);
-    harness.start();
+    enterCaseInChief(harness);
 
     harness.commit(
       "PROPOSE_SETTLEMENT",
       {
         offerId: "offer_initial",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: terms("Initial claimant offer", 100_000),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -711,6 +857,8 @@ describe("settlement lifecycle", () => {
       {
         offerId: "offer_counter",
         parentOfferId: "offer_initial",
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
         terms: terms("Respondent counteroffer", 65_000),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -730,6 +878,8 @@ describe("settlement lifecycle", () => {
       {
         offerId: "offer_withdrawn",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: terms("Offer later withdrawn", 80_000),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -748,20 +898,25 @@ describe("settlement lifecycle", () => {
       {
         offerId: "offer_expiring",
         parentOfferId: null,
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
         terms: terms("Short-lived offer", 70_000),
         expiresAtSequence: expirySequence,
       },
       ACTORS.opposingCounsel,
     );
     harness.commit(
-      "PROPOSE_ASSERTION",
+      "UPDATE_OPPOSING_STRATEGY",
       {
-        factId: "fact_expiry_clock_advanced",
-        proposition: "A material event advanced the settlement expiry clock.",
-        provenanceIds: ["prov_expiry_clock_advanced"],
-        visibility: "restricted",
+        strategyId: "strategy_expiry_clock",
+        revision: 1,
+        objectives: ["Advance the append-only clock without changing the offer."],
+        witnessPriorityIds: [],
+        evidencePriorityIds: [],
+        settlementPosture: "avoid",
+        privateNotes: [],
       },
-      ACTORS.userCounsel,
+      ACTORS.opposingCounsel,
     );
     expect(harness.state.lastSequence + 1).toBe(expirySequence);
     harness.commit(
@@ -776,6 +931,8 @@ describe("settlement lifecycle", () => {
       {
         offerId: "offer_accepted",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: terms("Final accepted offer", 85_000),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -801,6 +958,8 @@ describe("settlement lifecycle", () => {
       {
         offerId: "offer_counterparty_only",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: terms("Counterparty-only offer", 90_000),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -814,6 +973,8 @@ describe("settlement lifecycle", () => {
         {
           offerId: "offer_invalid_same_side_counter",
           parentOfferId: "offer_counterparty_only",
+          proposedByPartyId: "party_rina_shah",
+          recipientPartyIds: ["party_redwood_signal"],
           terms: terms("Invalid same-side counter", 95_000),
           expiresAtSequence: exactExpiry(harness),
         },

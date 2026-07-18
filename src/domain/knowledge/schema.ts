@@ -2,7 +2,10 @@ import { z } from "zod";
 
 import { CaseGraphEntityIdSchema } from "../case-graph";
 
-export const KNOWLEDGE_VIEW_SCHEMA_VERSION = "knowledge-view.v1" as const;
+export const KNOWLEDGE_VIEW_SCHEMA_VERSION_V1 = "knowledge-view.v1" as const;
+export const KNOWLEDGE_VIEW_SCHEMA_VERSION_V2 = "knowledge-view.v2" as const;
+export const KNOWLEDGE_VIEW_SCHEMA_VERSION =
+  KNOWLEDGE_VIEW_SCHEMA_VERSION_V2;
 export const JURY_RECORD_SCHEMA_VERSION = "jury-record.v1" as const;
 
 const NonEmptyTextSchema = z.string().trim().min(1);
@@ -104,6 +107,15 @@ export const WitnessEvidenceSchema = z
     name: NonEmptyTextSchema,
     description: NonEmptyTextSchema,
     status: z.literal("admitted"),
+  })
+  .strict();
+
+export const WitnessPresentedEvidenceSchema = z
+  .object({
+    evidenceId: CaseGraphEntityIdSchema,
+    name: NonEmptyTextSchema,
+    description: NonEmptyTextSchema,
+    status: z.enum(["uploaded", "indexed", "offered", "admitted"]),
   })
   .strict();
 
@@ -326,8 +338,8 @@ export const DebriefStrataSchema = z
   })
   .strict();
 
-const KnowledgeViewBaseShape = {
-  schemaVersion: z.literal(KNOWLEDGE_VIEW_SCHEMA_VERSION),
+const KnowledgeViewBaseShapeV1 = {
+  schemaVersion: z.literal(KNOWLEDGE_VIEW_SCHEMA_VERSION_V1),
   trialId: CaseGraphEntityIdSchema,
   stateVersion: z.number().int().nonnegative(),
   actorId: CaseGraphEntityIdSchema,
@@ -336,7 +348,7 @@ const KnowledgeViewBaseShape = {
 
 export const WitnessKnowledgeViewV1Schema = z
   .object({
-    ...KnowledgeViewBaseShape,
+    ...KnowledgeViewBaseShapeV1,
     actorRole: z.literal("witness"),
     publicRecord: JuryRecordV1Schema,
     witness: WitnessScopeSchema,
@@ -345,7 +357,7 @@ export const WitnessKnowledgeViewV1Schema = z
   .strict();
 
 const CounselKnowledgeViewBaseShape = {
-  ...KnowledgeViewBaseShape,
+  ...KnowledgeViewBaseShapeV1,
   publicRecord: JuryRecordV1Schema,
   counsel: CounselScopeSchema,
   currentExchange: CurrentExchangeSchema.nullable(),
@@ -372,7 +384,7 @@ export const CounselKnowledgeViewV1Schema = z.discriminatedUnion("actorRole", [
 
 export const JudgeKnowledgeViewV1Schema = z
   .object({
-    ...KnowledgeViewBaseShape,
+    ...KnowledgeViewBaseShapeV1,
     actorRole: z.literal("judge"),
     publicRecord: JuryRecordV1Schema,
     rules: RuleProfileViewSchema,
@@ -383,7 +395,7 @@ export const JudgeKnowledgeViewV1Schema = z
 
 export const JuryKnowledgeViewV1Schema = z
   .object({
-    ...KnowledgeViewBaseShape,
+    ...KnowledgeViewBaseShapeV1,
     actorRole: z.literal("jury"),
     publicRecord: JuryRecordV1Schema,
   })
@@ -391,7 +403,7 @@ export const JuryKnowledgeViewV1Schema = z
 
 export const DebriefKnowledgeViewV1Schema = z
   .object({
-    ...KnowledgeViewBaseShape,
+    ...KnowledgeViewBaseShapeV1,
     actorRole: z.literal("debrief"),
     strata: DebriefStrataSchema,
   })
@@ -406,7 +418,85 @@ export const KnowledgeViewV1Schema = z.discriminatedUnion("actorRole", [
   DebriefKnowledgeViewV1Schema,
 ]);
 
-export const KnowledgeViewSchema = KnowledgeViewV1Schema;
+const KnowledgeViewBaseShapeV2 = {
+  ...KnowledgeViewBaseShapeV1,
+  schemaVersion: z.literal(KNOWLEDGE_VIEW_SCHEMA_VERSION_V2),
+} as const;
+
+export const WitnessKnowledgeViewV2Schema = z
+  .object({
+    ...KnowledgeViewBaseShapeV2,
+    actorRole: z.literal("witness"),
+    publicRecord: JuryRecordV1Schema,
+    witness: WitnessScopeSchema,
+    presentedEvidence: z.array(WitnessPresentedEvidenceSchema),
+    currentExchange: CurrentExchangeSchema.nullable(),
+  })
+  .strict();
+
+const CounselKnowledgeViewV2BaseShape = {
+  ...KnowledgeViewBaseShapeV2,
+  publicRecord: JuryRecordV1Schema,
+  counsel: CounselScopeSchema,
+  currentExchange: CurrentExchangeSchema.nullable(),
+} as const;
+
+export const UserCounselKnowledgeViewV2Schema = z
+  .object({
+    ...CounselKnowledgeViewV2BaseShape,
+    actorRole: z.literal("user_counsel"),
+  })
+  .strict();
+
+export const OpposingCounselKnowledgeViewV2Schema = z
+  .object({
+    ...CounselKnowledgeViewV2BaseShape,
+    actorRole: z.literal("opposing_counsel"),
+  })
+  .strict();
+
+export const CounselKnowledgeViewV2Schema = z.discriminatedUnion("actorRole", [
+  UserCounselKnowledgeViewV2Schema,
+  OpposingCounselKnowledgeViewV2Schema,
+]);
+
+export const JudgeKnowledgeViewV2Schema = z
+  .object({
+    ...KnowledgeViewBaseShapeV2,
+    actorRole: z.literal("judge"),
+    publicRecord: JuryRecordV1Schema,
+    rules: RuleProfileViewSchema,
+    proceduralRecord: ProceduralRecordSchema,
+    currentExchange: CurrentExchangeSchema.nullable(),
+  })
+  .strict();
+
+export const JuryKnowledgeViewV2Schema = z
+  .object({
+    ...KnowledgeViewBaseShapeV2,
+    actorRole: z.literal("jury"),
+    publicRecord: JuryRecordV1Schema,
+  })
+  .strict();
+
+export const DebriefKnowledgeViewV2Schema = z
+  .object({
+    ...KnowledgeViewBaseShapeV2,
+    actorRole: z.literal("debrief"),
+    strata: DebriefStrataSchema,
+  })
+  .strict();
+
+export const KnowledgeViewV2Schema = z.discriminatedUnion("actorRole", [
+  WitnessKnowledgeViewV2Schema,
+  UserCounselKnowledgeViewV2Schema,
+  OpposingCounselKnowledgeViewV2Schema,
+  JudgeKnowledgeViewV2Schema,
+  JuryKnowledgeViewV2Schema,
+  DebriefKnowledgeViewV2Schema,
+]);
+
+export const KnowledgeViewSchema = KnowledgeViewV2Schema;
 
 export type FactLifecycle = z.infer<typeof FactLifecycleSchema>;
 export type EvidenceLifecycle = z.infer<typeof EvidenceLifecycleSchema>;
@@ -414,7 +504,8 @@ export type TestimonyLifecycle = z.infer<typeof TestimonyLifecycleSchema>;
 export type JuryRecordV1 = z.infer<typeof JuryRecordV1Schema>;
 export type JuryRecord = JuryRecordV1;
 export type KnowledgeViewV1 = z.infer<typeof KnowledgeViewV1Schema>;
-export type KnowledgeView = KnowledgeViewV1;
+export type KnowledgeViewV2 = z.infer<typeof KnowledgeViewV2Schema>;
+export type KnowledgeView = KnowledgeViewV2;
 
 export function parseKnowledgeView(input: unknown): KnowledgeView {
   return KnowledgeViewSchema.parse(input);

@@ -244,15 +244,19 @@ function exactExpiry(harness: Harness): number {
 }
 
 function addAuditAssertion(harness: Harness, suffix: string): void {
+  const current = harness.state.opposingStrategy;
   harness.commit(
-    "PROPOSE_ASSERTION",
+    "UPDATE_OPPOSING_STRATEGY",
     {
-      factId: `fact_policy_clock_${suffix}`,
-      proposition: `Policy-clock event ${suffix} advanced the append-only trial sequence.`,
-      provenanceIds: [`provenance_policy_clock_${suffix}`],
-      visibility: "public",
+      strategyId: current?.strategyId ?? "strategy_policy_clock",
+      revision: (current?.revision ?? 0) + 1,
+      objectives: [`Policy-clock event ${suffix} advances the append-only sequence.`],
+      witnessPriorityIds: [],
+      evidencePriorityIds: [],
+      settlementPosture: "avoid",
+      privateNotes: [],
     },
-    ACTORS.userCounsel,
+    ACTORS.opposingCounsel,
   );
 }
 
@@ -311,6 +315,20 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       ACTORS.userCounsel,
     );
     harness.commit(
+      "SWEAR_WITNESS",
+      { witnessId: "witness_rina_shah" },
+      ACTORS.judge,
+    );
+    harness.commit(
+      "END_EXAMINATION",
+      {
+        witnessId: "witness_rina_shah",
+        examinationKind: "direct",
+        disposition: "waived",
+      },
+      ACTORS.userCounsel,
+    );
+    harness.commit(
       "RELEASE_WITNESS",
       { witnessId: "witness_rina_shah" },
       ACTORS.userCounsel,
@@ -363,6 +381,7 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
         examinationKind: "direct",
         text: "What did the access log show?",
         turnId: "turn_policy_objection_question",
+        presentedEvidenceIds: [],
       },
       ACTORS.userCounsel,
     );
@@ -390,6 +409,8 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_disabled",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: settlementTerms(100_000, ["Neutral reference"]),
         expiresAtSequence: exactExpiry(disabled),
       },
@@ -406,12 +427,135 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_too_early",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: settlementTerms(100_000, ["Neutral reference"]),
         expiresAtSequence: exactExpiry(delayed),
       },
       ACTORS.userCounsel,
       "WRONG_PHASE",
     );
+  });
+
+  it("enforces private settlement authority and persists the proposing party", () => {
+    const harness = createHarness();
+    harness.start();
+
+    harness.expectDenied(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_spoofed_proposer",
+        parentOfferId: null,
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: settlementTerms(100_000, ["Neutral reference"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+      "ACTOR_NOT_PERMITTED",
+    );
+    harness.expectDenied(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_below_authority",
+        parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: settlementTerms(20_000, ["Neutral reference"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
+    harness.expectDenied(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_empty_nonmonetary_only",
+        parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: {
+          amount: null,
+          currency: null,
+          nonMonetaryTerms: [],
+          summary: "An empty non-monetary proposal is not a settlement.",
+        },
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
+    harness.expectDenied(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_invalid_parent",
+        parentOfferId: "offer_not_a_proposal_parent",
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: settlementTerms(100_000, ["Neutral reference"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
+    harness.expectDenied(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_disallowed_term",
+        parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: settlementTerms(100_000, ["Confidentiality"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
+
+    const proposed = harness.commit(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_within_authority",
+        parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
+        terms: settlementTerms(100_000, ["Neutral reference"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.userCounsel,
+    );
+
+    expect(
+      proposed.state.settlementOffers.offer_within_authority
+        .proposedByPartyId,
+    ).toBe("party_rina_shah");
+  });
+
+  it("requires the recipient's private authority before accepting", () => {
+    const harness = createHarness();
+    harness.start();
+    harness.commit(
+      "PROPOSE_SETTLEMENT",
+      {
+        offerId: "offer_below_recipient_authority",
+        parentOfferId: null,
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
+        terms: settlementTerms(20_000, ["Neutral reference"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.opposingCounsel,
+    );
+
+    harness.expectDenied(
+      "ACCEPT_SETTLEMENT",
+      { offerId: "offer_below_recipient_authority" },
+      ACTORS.userCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
+    expect(
+      harness.state.settlementOffers.offer_below_recipient_authority.status,
+    ).toBe("open");
   });
 
   it("rejects counteroffers when the pinned switch is disabled", () => {
@@ -424,6 +568,8 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_no_counter_parent",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: settlementTerms(100_000, ["Neutral reference"]),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -435,6 +581,8 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_disallowed_counter",
         parentOfferId: "offer_no_counter_parent",
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
         terms: settlementTerms(50_000, ["Confidentiality"]),
         expiresAtSequence: exactExpiry(harness),
       },
@@ -448,6 +596,7 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
     graph.settlement.expiresAfterEventCount = 3;
     const harness = createHarness(graph);
     harness.start();
+    harness.commit("BEGIN_PHASE", { phase: "case_in_chief" }, ACTORS.judge);
     const configuredExpiry = exactExpiry(harness);
 
     harness.expectDenied(
@@ -455,6 +604,8 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_wrong_expiry",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: settlementTerms(100_000, ["Neutral reference"]),
         expiresAtSequence: configuredExpiry + 1,
       },
@@ -467,16 +618,18 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
       {
         offerId: "offer_exact_expiry",
         parentOfferId: null,
+        proposedByPartyId: "party_rina_shah",
+        recipientPartyIds: ["party_redwood_signal"],
         terms: settlementTerms(100_000, ["Neutral reference"]),
         expiresAtSequence: configuredExpiry,
       },
       ACTORS.userCounsel,
     );
-    expect(harness.events.at(-1)?.sequence).toBe(2);
-    expect(configuredExpiry).toBe(5);
+    expect(harness.events.at(-1)?.sequence).toBe(3);
+    expect(configuredExpiry).toBe(6);
 
     addAuditAssertion(harness, "before_boundary_one");
-    expect(harness.state.lastSequence).toBe(3);
+    expect(harness.state.lastSequence).toBe(4);
     harness.expectDenied(
       "EXPIRE_SETTLEMENT",
       { offerId: "offer_exact_expiry" },
@@ -485,7 +638,20 @@ describe("TrialPolicySnapshot enforcement by the trial engine", () => {
     );
 
     addAuditAssertion(harness, "before_boundary_two");
-    expect(harness.state.lastSequence).toBe(4);
+    expect(harness.state.lastSequence).toBe(5);
+    harness.expectDenied(
+      "COUNTER_SETTLEMENT",
+      {
+        offerId: "offer_counter_after_parent_expiry",
+        parentOfferId: "offer_exact_expiry",
+        proposedByPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
+        terms: settlementTerms(50_000, ["Confidentiality"]),
+        expiresAtSequence: exactExpiry(harness),
+      },
+      ACTORS.opposingCounsel,
+      "INVALID_SETTLEMENT_STATUS",
+    );
     const expired = harness.commit(
       "EXPIRE_SETTLEMENT",
       { offerId: "offer_exact_expiry" },

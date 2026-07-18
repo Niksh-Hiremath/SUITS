@@ -1,19 +1,48 @@
 import { z } from "zod";
-import { TrialPolicySnapshotSchema } from "../trial-policy/schema";
+import {
+  TrialPolicySnapshotV1Schema,
+  TrialPolicySnapshotV2Schema,
+} from "../trial-policy/schema";
 
 export const TRIAL_ACTION_SCHEMA_VERSION_V1 = "trial-action.v1" as const;
 export const TRIAL_ACTION_SCHEMA_VERSION_V2 = "trial-action.v2" as const;
+export const TRIAL_ACTION_SCHEMA_VERSION_V3 = "trial-action.v3" as const;
 export const TRIAL_EVENT_SCHEMA_VERSION_V1 = "trial-event.v1" as const;
 export const TRIAL_EVENT_SCHEMA_VERSION_V2 = "trial-event.v2" as const;
+export const TRIAL_EVENT_SCHEMA_VERSION_V3 = "trial-event.v3" as const;
 export const TRIAL_STATE_SCHEMA_VERSION_V1 = "trial-state.v1" as const;
 export const TRIAL_STATE_SCHEMA_VERSION_V2 = "trial-state.v2" as const;
+export const TRIAL_STATE_SCHEMA_VERSION_V3 = "trial-state.v3" as const;
 
-export const TRIAL_ACTION_SCHEMA_VERSION = TRIAL_ACTION_SCHEMA_VERSION_V2;
-export const TRIAL_EVENT_SCHEMA_VERSION = TRIAL_EVENT_SCHEMA_VERSION_V2;
-export const TRIAL_STATE_SCHEMA_VERSION = TRIAL_STATE_SCHEMA_VERSION_V2;
+export const TRIAL_ACTION_SCHEMA_VERSION = TRIAL_ACTION_SCHEMA_VERSION_V3;
+export const TRIAL_EVENT_SCHEMA_VERSION = TRIAL_EVENT_SCHEMA_VERSION_V3;
+export const TRIAL_STATE_SCHEMA_VERSION = TRIAL_STATE_SCHEMA_VERSION_V3;
 
 const IdentifierSchema = z.string().trim().min(1).max(256);
+const CaseGraphContentHashSchema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/, "Expected a lowercase SHA-256 digest");
 const DateTimeSchema = z.string().datetime({ offset: true });
+
+const UniqueIdentifierListSchema = z
+  .array(IdentifierSchema)
+  .min(1)
+  .superRefine((identifiers, context) => {
+    const seen = new Set<string>();
+    identifiers.forEach((identifier, index) => {
+      if (seen.has(identifier)) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: `Duplicate ID: ${identifier}`,
+        });
+      }
+      seen.add(identifier);
+    });
+  });
+const SingleRecipientPartyListSchema = z
+  .array(IdentifierSchema)
+  .length(1, "Bilateral settlement requires exactly one recipient party");
 
 export const TrialSideSchema = z.enum(["user", "opposing", "neutral"]);
 export type TrialSide = z.infer<typeof TrialSideSchema>;
@@ -156,7 +185,7 @@ export const FactStateEntrySchema = z
   .strict();
 export type FactStateEntry = z.infer<typeof FactStateEntrySchema>;
 
-export const EvidenceStateEntrySchema = z
+export const EvidenceStateEntryV1Schema = z
   .object({
     evidenceId: IdentifierSchema,
     name: z.string().trim().min(1).max(500),
@@ -166,18 +195,111 @@ export const EvidenceStateEntrySchema = z
     lastEventId: IdentifierSchema,
   })
   .strict();
+export const EvidenceStateEntryV2Schema = EvidenceStateEntryV1Schema;
+export const EvidenceStateEntryV3Schema = EvidenceStateEntryV2Schema.extend({
+  foundationTestimonyIds: z.array(IdentifierSchema),
+}).strict();
+export const EvidenceStateEntrySchema = EvidenceStateEntryV3Schema;
 export type EvidenceStateEntry = z.infer<typeof EvidenceStateEntrySchema>;
 
-export const WitnessStateEntrySchema = z
+export const ExaminationKindSchema = z.enum([
+  "direct",
+  "cross",
+  "redirect",
+  "recross",
+]);
+export type ExaminationKind = z.infer<typeof ExaminationKindSchema>;
+
+export const WitnessStateEntryV1Schema = z
   .object({
     witnessId: IdentifierSchema,
     status: z.enum(["available", "called", "sworn", "testifying", "released"]),
     calledBySide: TrialSideSchema.nullable(),
-    examinationKind: z.enum(["direct", "cross", "redirect", "recross"]).nullable(),
+    examinationKind: ExaminationKindSchema.nullable(),
     lastEventId: IdentifierSchema,
   })
   .strict();
+export const WitnessStateEntryV2Schema = WitnessStateEntryV1Schema;
+export const WitnessStateEntryV3Schema = WitnessStateEntryV2Schema.extend({
+  appearanceIds: z.array(IdentifierSchema),
+  callCount: z.number().int().nonnegative(),
+}).strict();
+export const WitnessStateEntrySchema = WitnessStateEntryV3Schema;
 export type WitnessStateEntry = z.infer<typeof WitnessStateEntrySchema>;
+
+export const ExaminationLegStateV3Schema = z
+  .object({
+    kind: ExaminationKindSchema,
+    ownerSide: z.enum(["user", "opposing"]),
+    status: z.enum([
+      "not_available",
+      "available",
+      "in_progress",
+      "completed",
+      "waived",
+      "terminated",
+    ]),
+    questionIds: z.array(IdentifierSchema),
+    answeredQuestionCount: z.number().int().nonnegative(),
+    startedEventId: IdentifierSchema.nullable(),
+    endedEventId: IdentifierSchema.nullable(),
+  })
+  .strict();
+export const ExaminationLegStateSchema = ExaminationLegStateV3Schema;
+export type ExaminationLegState = z.infer<typeof ExaminationLegStateSchema>;
+
+export const WitnessAppearanceStateV3Schema = z
+  .object({
+    appearanceId: IdentifierSchema,
+    witnessId: IdentifierSchema,
+    ordinal: z.number().int().positive(),
+    invocation: z.enum(["call", "recall"]),
+    callingSide: z.enum(["user", "opposing"]),
+    stage: z.enum([
+      "awaiting_oath",
+      "direct",
+      "cross",
+      "redirect",
+      "recross",
+      "ready_for_release",
+      "released",
+    ]),
+    legs: z
+      .object({
+        direct: ExaminationLegStateV3Schema,
+        cross: ExaminationLegStateV3Schema,
+        redirect: ExaminationLegStateV3Schema,
+        recross: ExaminationLegStateV3Schema,
+      })
+      .strict(),
+    calledEventId: IdentifierSchema,
+    swornEventId: IdentifierSchema.nullable(),
+    releasedEventId: IdentifierSchema.nullable(),
+  })
+  .strict();
+export const WitnessAppearanceStateSchema = WitnessAppearanceStateV3Schema;
+export type WitnessAppearanceState = z.infer<typeof WitnessAppearanceStateSchema>;
+
+export const QuestionStateEntryV3Schema = z
+  .object({
+    questionId: IdentifierSchema,
+    appearanceId: IdentifierSchema,
+    witnessId: IdentifierSchema,
+    examinationKind: ExaminationKindSchema,
+    askedByActorId: IdentifierSchema,
+    askedBySide: z.enum(["user", "opposing"]),
+    questionTurnId: IdentifierSchema,
+    presentedEvidenceIds: z.array(IdentifierSchema),
+    rephrasesQuestionId: IdentifierSchema.nullable(),
+    status: z.enum(["open", "answered", "sustained", "withdrawn"]),
+    responseIds: z.array(IdentifierSchema),
+    activeResponseId: IdentifierSchema.nullable(),
+    testimonyId: IdentifierSchema.nullable(),
+    lastEventId: IdentifierSchema,
+  })
+  .strict();
+export const QuestionStateEntrySchema = QuestionStateEntryV3Schema;
+export type QuestionStateEntry = z.infer<typeof QuestionStateEntrySchema>;
 
 export const TestimonyStateEntrySchema = z
   .object({
@@ -205,7 +327,7 @@ export const SettlementTermsSchema = z
   .strict();
 export type SettlementTerms = z.infer<typeof SettlementTermsSchema>;
 
-export const SettlementOfferStateEntrySchema = z
+export const SettlementOfferStateEntryV1Schema = z
   .object({
     offerId: IdentifierSchema,
     parentOfferId: IdentifierSchema.nullable(),
@@ -218,9 +340,18 @@ export const SettlementOfferStateEntrySchema = z
     lastEventId: IdentifierSchema,
   })
   .strict();
+export const SettlementOfferStateEntryV2Schema =
+  SettlementOfferStateEntryV1Schema;
+export const SettlementOfferStateEntryV3Schema =
+  SettlementOfferStateEntryV2Schema.extend({
+    proposedByPartyId: IdentifierSchema,
+    recipientPartyIds: SingleRecipientPartyListSchema,
+  }).strict();
+export const SettlementOfferStateEntrySchema =
+  SettlementOfferStateEntryV3Schema;
 export type SettlementOfferStateEntry = z.infer<typeof SettlementOfferStateEntrySchema>;
 
-export const ObjectionStateEntrySchema = z
+export const ObjectionStateEntryV1Schema = z
   .object({
     objectionId: IdentifierSchema,
     questionId: IdentifierSchema,
@@ -243,9 +374,14 @@ export const ObjectionStateEntrySchema = z
     rulingEventId: IdentifierSchema.nullable(),
   })
   .strict();
+export const ObjectionStateEntryV2Schema = ObjectionStateEntryV1Schema;
+export const ObjectionStateEntryV3Schema = ObjectionStateEntryV2Schema.extend({
+  interruptedResponseId: IdentifierSchema.nullable(),
+}).strict();
+export const ObjectionStateEntrySchema = ObjectionStateEntryV3Schema;
 export type ObjectionStateEntry = z.infer<typeof ObjectionStateEntrySchema>;
 
-export const PendingResponseStateEntrySchema = z
+export const PendingResponseStateEntryV1Schema = z
   .object({
     responseId: IdentifierSchema,
     actorId: IdentifierSchema,
@@ -256,7 +392,53 @@ export const PendingResponseStateEntrySchema = z
     lastEventId: IdentifierSchema,
   })
   .strict();
+export const PendingResponseStateEntryV2Schema =
+  PendingResponseStateEntryV1Schema;
+export const PendingResponseStateEntryV3Schema =
+  PendingResponseStateEntryV2Schema.extend({
+    appearanceId: IdentifierSchema.nullable(),
+    questionId: IdentifierSchema.nullable(),
+    witnessId: IdentifierSchema.nullable(),
+  }).strict();
+export const PendingResponseStateEntrySchema =
+  PendingResponseStateEntryV3Schema;
 export type PendingResponseStateEntry = z.infer<typeof PendingResponseStateEntrySchema>;
+
+export const StrikeMotionStateEntryV3Schema = z
+  .object({
+    motionId: IdentifierSchema,
+    movedByActorId: IdentifierSchema,
+    testimonyIds: z.array(IdentifierSchema).min(1),
+    reason: z.string().trim().min(1).max(2_000),
+    status: z.enum(["pending", "granted", "denied", "withdrawn"]),
+    sourceEventId: IdentifierSchema,
+    rulingEventId: IdentifierSchema.nullable(),
+  })
+  .strict();
+export const StrikeMotionStateEntrySchema = StrikeMotionStateEntryV3Schema;
+export type StrikeMotionStateEntry = z.infer<typeof StrikeMotionStateEntrySchema>;
+
+export const OpposingStrategyStateV3Schema = z
+  .object({
+    strategyId: IdentifierSchema,
+    ownerActorId: IdentifierSchema,
+    revision: z.number().int().positive(),
+    objectives: z.array(z.string().trim().min(1).max(1_000)).min(1),
+    witnessPriorityIds: z.array(IdentifierSchema),
+    evidencePriorityIds: z.array(IdentifierSchema),
+    settlementPosture: z.enum([
+      "avoid",
+      "explore",
+      "counter",
+      "recommend_acceptance",
+    ]),
+    privateNotes: z.array(z.string().trim().min(1).max(2_000)),
+    sourceEventId: IdentifierSchema,
+    lastEventId: IdentifierSchema,
+  })
+  .strict();
+export const OpposingStrategyStateSchema = OpposingStrategyStateV3Schema;
+export type OpposingStrategyState = z.infer<typeof OpposingStrategyStateSchema>;
 
 export const InterruptionStateSchema = z
   .object({
@@ -295,7 +477,7 @@ export const TranscriptTurnSchema = z
 export type TranscriptTurn = z.infer<typeof TranscriptTurnSchema>;
 
 const InitialFactSchema = FactStateEntrySchema.omit({ sourceEventId: true, lastEventId: true });
-const InitialEvidenceSchema = EvidenceStateEntrySchema.omit({
+const InitialEvidenceV1Schema = EvidenceStateEntryV1Schema.omit({
   offeredBySide: true,
   rulingEventId: true,
   lastEventId: true,
@@ -308,7 +490,7 @@ const startTrialPayloadV1Shape = {
   actors: z.array(ActorRefSchema).min(4),
   witnessIds: z.array(IdentifierSchema).min(1),
   initialFacts: z.array(InitialFactSchema),
-  initialEvidence: z.array(InitialEvidenceSchema),
+  initialEvidence: z.array(InitialEvidenceV1Schema),
   userSide: z.enum(["user", "opposing"]),
 };
 
@@ -318,7 +500,17 @@ export const StartTrialPayloadV1Schema = z
 export const StartTrialPayloadV2Schema = z
   .object({
     ...startTrialPayloadV1Shape,
-    policySnapshot: TrialPolicySnapshotSchema,
+    policySnapshot: TrialPolicySnapshotV1Schema,
+  })
+  .strict();
+export const StartTrialPayloadV3Schema = z
+  .object({
+    ...startTrialPayloadV1Shape,
+    caseGraphContentHash: CaseGraphContentHashSchema,
+    juryInstructionIds: UniqueIdentifierListSchema,
+    caseProvenanceIds: UniqueIdentifierListSchema,
+    sourceSegmentIds: UniqueIdentifierListSchema,
+    policySnapshot: TrialPolicySnapshotV2Schema,
   })
   .strict();
 const BeginPhasePayloadSchema = z.object({ phase: TrialPhaseSchema }).strict();
@@ -326,15 +518,19 @@ const WitnessPayloadSchema = z.object({ witnessId: IdentifierSchema }).strict();
 const CallWitnessPayloadSchema = z
   .object({ witnessId: IdentifierSchema, calledBySide: z.enum(["user", "opposing"]) })
   .strict();
-const AskQuestionPayloadSchema = z
+const AskQuestionPayloadV1Schema = z
   .object({
     questionId: IdentifierSchema,
     witnessId: IdentifierSchema,
-    examinationKind: z.enum(["direct", "cross", "redirect", "recross"]),
+    examinationKind: ExaminationKindSchema,
     text: z.string().trim().min(1).max(8_000),
     turnId: IdentifierSchema,
   })
   .strict();
+const AskQuestionPayloadV2Schema = AskQuestionPayloadV1Schema;
+const AskQuestionPayloadV3Schema = AskQuestionPayloadV2Schema.extend({
+  presentedEvidenceIds: z.array(IdentifierSchema),
+}).strict();
 const AnswerQuestionPayloadSchema = z
   .object({
     responseId: IdentifierSchema,
@@ -347,9 +543,13 @@ const AnswerQuestionPayloadSchema = z
     evidenceIds: z.array(IdentifierSchema),
   })
   .strict();
-const EndExaminationPayloadSchema = z
-  .object({ witnessId: IdentifierSchema, examinationKind: z.enum(["direct", "cross", "redirect", "recross"]) })
+const EndExaminationPayloadV1Schema = z
+  .object({ witnessId: IdentifierSchema, examinationKind: ExaminationKindSchema })
   .strict();
+const EndExaminationPayloadV2Schema = EndExaminationPayloadV1Schema;
+const EndExaminationPayloadV3Schema = EndExaminationPayloadV2Schema.extend({
+  disposition: z.enum(["completed", "waived"]),
+}).strict();
 const ObjectPayloadSchema = z
   .object({
     objectionId: IdentifierSchema,
@@ -375,6 +575,15 @@ const MoveStrikePayloadSchema = z
 const StrikePayloadSchema = z
   .object({ motionId: IdentifierSchema, testimonyIds: z.array(IdentifierSchema).min(1), factIds: z.array(IdentifierSchema) })
   .strict();
+const DenyStrikeMotionPayloadV3Schema = z
+  .object({
+    motionId: IdentifierSchema,
+    reason: z.string().trim().min(1).max(4_000),
+  })
+  .strict();
+const WithdrawStrikeMotionPayloadV3Schema = z
+  .object({ motionId: IdentifierSchema })
+  .strict();
 const EvidencePayloadSchema = z.object({ evidenceId: IdentifierSchema }).strict();
 const OfferEvidencePayloadSchema = z
   .object({ evidenceId: IdentifierSchema, offeredBySide: z.enum(["user", "opposing"]), foundationTestimonyIds: z.array(IdentifierSchema) })
@@ -383,6 +592,17 @@ const RuleEvidencePayloadSchema = z
   .object({ evidenceId: IdentifierSchema, ruling: z.enum(["admitted", "excluded"]), reason: z.string().trim().min(1).max(4_000) })
   .strict();
 const FactPayloadSchema = z.object({ factId: IdentifierSchema }).strict();
+const RevealHiddenFactPayloadV3Schema = z
+  .object({
+    factId: IdentifierSchema,
+    basis: z
+      .object({
+        kind: z.literal("evidence"),
+        evidenceId: IdentifierSchema,
+      })
+      .strict(),
+  })
+  .strict();
 const RuleAssertionPayloadSchema = z
   .object({
     factId: IdentifierSchema,
@@ -408,9 +628,14 @@ const BeginInterruptionPayloadSchema = z
 const ResolveInterruptionPayloadSchema = z
   .object({ interruptId: IdentifierSchema, outcome: z.enum(["cancel", "resume"]) })
   .strict();
-const SettlementPayloadSchema = z
+const SettlementPayloadV1Schema = z
   .object({ offerId: IdentifierSchema, parentOfferId: IdentifierSchema.nullable(), terms: SettlementTermsSchema, expiresAtSequence: z.number().int().positive() })
   .strict();
+const SettlementPayloadV2Schema = SettlementPayloadV1Schema;
+const SettlementPayloadV3Schema = SettlementPayloadV2Schema.extend({
+  proposedByPartyId: IdentifierSchema,
+  recipientPartyIds: SingleRecipientPartyListSchema,
+}).strict();
 const OfferIdPayloadSchema = z.object({ offerId: IdentifierSchema }).strict();
 const ClosingPayloadSchema = z
   .object({ side: z.enum(["user", "opposing"]), turnId: IdentifierSchema, text: z.string().trim().min(1).max(20_000), citations: CitationSetSchema })
@@ -422,9 +647,14 @@ const VerdictPayloadSchema = z
 const DebriefPayloadSchema = z.object({ debriefId: IdentifierSchema }).strict();
 const FailurePayloadSchema = FailureStateSchema.omit({ sourceEventId: true });
 const RecoverPayloadSchema = z.object({ stepId: IdentifierSchema }).strict();
+const UpdateOpposingStrategyPayloadV3Schema = OpposingStrategyStateV3Schema.omit({
+  ownerActorId: true,
+  sourceEventId: true,
+  lastEventId: true,
+});
 const EmptyPayloadSchema = z.object({}).strict();
 
-export const TRIAL_ACTION_TYPES = [
+export const TRIAL_ACTION_TYPES_V1 = [
   "START_TRIAL", "BEGIN_PHASE", "CALL_WITNESS", "SWEAR_WITNESS", "ASK_QUESTION",
   "ANSWER_QUESTION", "END_EXAMINATION", "RECALL_WITNESS", "RELEASE_WITNESS", "OBJECT",
   "RULE_ON_OBJECTION", "REPHRASE_QUESTION", "MOVE_TO_STRIKE", "STRIKE_TESTIMONY",
@@ -436,7 +666,21 @@ export const TRIAL_ACTION_TYPES = [
   "WITHDRAW_SETTLEMENT", "EXPIRE_SETTLEMENT", "REST_CASE", "GIVE_CLOSING", "INSTRUCT_JURY",
   "DELIBERATE", "RENDER_VERDICT", "GENERATE_DEBRIEF", "FAIL_STEP", "RECOVER_STEP",
 ] as const;
-export const TrialActionTypeSchema = z.enum(TRIAL_ACTION_TYPES);
+export const TRIAL_ACTION_TYPES_V2 = TRIAL_ACTION_TYPES_V1;
+export const TRIAL_ACTION_TYPES_V3 = [
+  ...TRIAL_ACTION_TYPES_V2,
+  "UPDATE_OPPOSING_STRATEGY",
+  "DENY_STRIKE_MOTION",
+  "WITHDRAW_STRIKE_MOTION",
+] as const;
+export const TRIAL_ACTION_TYPES = TRIAL_ACTION_TYPES_V3;
+export const TrialActionTypeV1Schema = z.enum(TRIAL_ACTION_TYPES_V1);
+export const TrialActionTypeV2Schema = z.enum(TRIAL_ACTION_TYPES_V2);
+export const TrialActionTypeV3Schema = z.enum(TRIAL_ACTION_TYPES_V3);
+export const TrialActionTypeSchema = TrialActionTypeV3Schema;
+export type TrialActionTypeV1 = z.infer<typeof TrialActionTypeV1Schema>;
+export type TrialActionTypeV2 = z.infer<typeof TrialActionTypeV2Schema>;
+export type TrialActionTypeV3 = z.infer<typeof TrialActionTypeV3Schema>;
 export type TrialActionType = z.infer<typeof TrialActionTypeSchema>;
 
 function actionBaseShape<Version extends string>(schemaVersion: Version) {
@@ -470,17 +714,28 @@ const action = <
 function actionSchemasFor<
   Version extends string,
   StartPayload extends z.ZodType,
->(schemaVersion: Version, startPayload: StartPayload) {
+  AskQuestionPayload extends z.ZodType,
+  EndExaminationPayload extends z.ZodType,
+  RevealHiddenFactPayload extends z.ZodType,
+  SettlementPayload extends z.ZodType,
+>(
+  schemaVersion: Version,
+  startPayload: StartPayload,
+  askQuestionPayload: AskQuestionPayload,
+  endExaminationPayload: EndExaminationPayload,
+  revealHiddenFactPayload: RevealHiddenFactPayload,
+  settlementPayload: SettlementPayload,
+) {
   return [
     action(schemaVersion, "START_TRIAL", startPayload), action(schemaVersion, "BEGIN_PHASE", BeginPhasePayloadSchema),
     action(schemaVersion, "CALL_WITNESS", CallWitnessPayloadSchema), action(schemaVersion, "SWEAR_WITNESS", WitnessPayloadSchema),
-    action(schemaVersion, "ASK_QUESTION", AskQuestionPayloadSchema), action(schemaVersion, "ANSWER_QUESTION", AnswerQuestionPayloadSchema),
-    action(schemaVersion, "END_EXAMINATION", EndExaminationPayloadSchema), action(schemaVersion, "RECALL_WITNESS", CallWitnessPayloadSchema),
+    action(schemaVersion, "ASK_QUESTION", askQuestionPayload), action(schemaVersion, "ANSWER_QUESTION", AnswerQuestionPayloadSchema),
+    action(schemaVersion, "END_EXAMINATION", endExaminationPayload), action(schemaVersion, "RECALL_WITNESS", CallWitnessPayloadSchema),
     action(schemaVersion, "RELEASE_WITNESS", WitnessPayloadSchema), action(schemaVersion, "OBJECT", ObjectPayloadSchema),
     action(schemaVersion, "RULE_ON_OBJECTION", RuleObjectionPayloadSchema), action(schemaVersion, "REPHRASE_QUESTION", RephrasePayloadSchema),
     action(schemaVersion, "MOVE_TO_STRIKE", MoveStrikePayloadSchema), action(schemaVersion, "STRIKE_TESTIMONY", StrikePayloadSchema),
     action(schemaVersion, "OFFER_EVIDENCE", OfferEvidencePayloadSchema), action(schemaVersion, "RULE_ON_EVIDENCE", RuleEvidencePayloadSchema),
-    action(schemaVersion, "WITHDRAW_EVIDENCE", EvidencePayloadSchema), action(schemaVersion, "REVEAL_HIDDEN_FACT", FactPayloadSchema),
+    action(schemaVersion, "WITHDRAW_EVIDENCE", EvidencePayloadSchema), action(schemaVersion, "REVEAL_HIDDEN_FACT", revealHiddenFactPayload),
     action(schemaVersion, "PROPOSE_ASSERTION", ProposeAssertionPayloadSchema), action(schemaVersion, "VERIFY_ASSERTION", FactPayloadSchema),
     action(schemaVersion, "DISPUTE_ASSERTION", FactPayloadSchema), action(schemaVersion, "RULE_ON_ASSERTION", RuleAssertionPayloadSchema),
     action(schemaVersion, "REQUEST_RESPONSE", RequestResponsePayloadSchema),
@@ -488,8 +743,8 @@ function actionSchemasFor<
     action(schemaVersion, "BEGIN_INTERRUPTION", BeginInterruptionPayloadSchema), action(schemaVersion, "RESOLVE_INTERRUPTION", ResolveInterruptionPayloadSchema),
     action(schemaVersion, "RESUME_INTERRUPTED_SPEECH", BeginInterruptionPayloadSchema.pick({ interruptId: true, interruptedResponseId: true })),
     action(schemaVersion, "PAUSE_TRIAL", EmptyPayloadSchema), action(schemaVersion, "REQUEST_RECESS", EmptyPayloadSchema),
-    action(schemaVersion, "RESUME_TRIAL", EmptyPayloadSchema), action(schemaVersion, "PROPOSE_SETTLEMENT", SettlementPayloadSchema),
-    action(schemaVersion, "COUNTER_SETTLEMENT", SettlementPayloadSchema), action(schemaVersion, "ACCEPT_SETTLEMENT", OfferIdPayloadSchema),
+    action(schemaVersion, "RESUME_TRIAL", EmptyPayloadSchema), action(schemaVersion, "PROPOSE_SETTLEMENT", settlementPayload),
+    action(schemaVersion, "COUNTER_SETTLEMENT", settlementPayload), action(schemaVersion, "ACCEPT_SETTLEMENT", OfferIdPayloadSchema),
     action(schemaVersion, "REJECT_SETTLEMENT", OfferIdPayloadSchema), action(schemaVersion, "WITHDRAW_SETTLEMENT", OfferIdPayloadSchema),
     action(schemaVersion, "EXPIRE_SETTLEMENT", OfferIdPayloadSchema), action(schemaVersion, "REST_CASE", z.object({ side: z.enum(["user", "opposing"]) }).strict()),
     action(schemaVersion, "GIVE_CLOSING", ClosingPayloadSchema), action(schemaVersion, "INSTRUCT_JURY", InstructionsPayloadSchema),
@@ -502,11 +757,44 @@ function actionSchemasFor<
 const trialActionV1Schemas = actionSchemasFor(
   TRIAL_ACTION_SCHEMA_VERSION_V1,
   StartTrialPayloadV1Schema,
+  AskQuestionPayloadV1Schema,
+  EndExaminationPayloadV1Schema,
+  FactPayloadSchema,
+  SettlementPayloadV1Schema,
 );
 const trialActionV2Schemas = actionSchemasFor(
   TRIAL_ACTION_SCHEMA_VERSION_V2,
   StartTrialPayloadV2Schema,
+  AskQuestionPayloadV2Schema,
+  EndExaminationPayloadV2Schema,
+  FactPayloadSchema,
+  SettlementPayloadV2Schema,
 );
+const trialActionV3Schemas = [
+  ...actionSchemasFor(
+    TRIAL_ACTION_SCHEMA_VERSION_V3,
+    StartTrialPayloadV3Schema,
+    AskQuestionPayloadV3Schema,
+    EndExaminationPayloadV3Schema,
+    RevealHiddenFactPayloadV3Schema,
+    SettlementPayloadV3Schema,
+  ),
+  action(
+    TRIAL_ACTION_SCHEMA_VERSION_V3,
+    "UPDATE_OPPOSING_STRATEGY",
+    UpdateOpposingStrategyPayloadV3Schema,
+  ),
+  action(
+    TRIAL_ACTION_SCHEMA_VERSION_V3,
+    "DENY_STRIKE_MOTION",
+    DenyStrikeMotionPayloadV3Schema,
+  ),
+  action(
+    TRIAL_ACTION_SCHEMA_VERSION_V3,
+    "WITHDRAW_STRIKE_MOTION",
+    WithdrawStrikeMotionPayloadV3Schema,
+  ),
+] as const;
 
 export const TrialActionV1Schema = z.discriminatedUnion(
   "type",
@@ -516,14 +804,28 @@ export const TrialActionV2Schema = z.discriminatedUnion(
   "type",
   trialActionV2Schemas,
 );
-export const TrialActionSchema = TrialActionV2Schema;
+export const TrialActionV3Schema = z.discriminatedUnion(
+  "type",
+  trialActionV3Schemas,
+);
+export const TrialActionSchema = TrialActionV3Schema;
 export type TrialActionV1 = z.infer<typeof TrialActionV1Schema>;
 export type TrialActionV2 = z.infer<typeof TrialActionV2Schema>;
-export type TrialAction = TrialActionV2;
+export type TrialActionV3 = z.infer<typeof TrialActionV3Schema>;
+export type TrialAction = TrialActionV3;
 export type TrialActionByType<K extends TrialActionType> = Extract<TrialAction, { type: K }>;
 
-export const TRIAL_EVENT_TYPES = TRIAL_ACTION_TYPES;
-export const TrialEventTypeSchema = TrialActionTypeSchema;
+export const TRIAL_EVENT_TYPES_V1 = TRIAL_ACTION_TYPES_V1;
+export const TRIAL_EVENT_TYPES_V2 = TRIAL_ACTION_TYPES_V2;
+export const TRIAL_EVENT_TYPES_V3 = TRIAL_ACTION_TYPES_V3;
+export const TRIAL_EVENT_TYPES = TRIAL_EVENT_TYPES_V3;
+export const TrialEventTypeV1Schema = TrialActionTypeV1Schema;
+export const TrialEventTypeV2Schema = TrialActionTypeV2Schema;
+export const TrialEventTypeV3Schema = TrialActionTypeV3Schema;
+export const TrialEventTypeSchema = TrialEventTypeV3Schema;
+export type TrialEventTypeV1 = TrialActionTypeV1;
+export type TrialEventTypeV2 = TrialActionTypeV2;
+export type TrialEventTypeV3 = TrialActionTypeV3;
 export type TrialEventType = TrialActionType;
 
 type TrialEventEnvelope<Version extends string> = {
@@ -547,12 +849,12 @@ type TrialEventEnvelope<Version extends string> = {
 type TrialEventForAction<
   ActionUnion extends { type: TrialActionType; payload: unknown },
   Version extends string,
-> = {
-  [K in TrialEventType]: TrialEventEnvelope<Version> & {
-    type: K;
-    payload: Extract<ActionUnion, { type: K }>["payload"];
-  };
-}[TrialEventType];
+> = ActionUnion extends unknown
+  ? TrialEventEnvelope<Version> & {
+      type: ActionUnion["type"];
+      payload: ActionUnion["payload"];
+    }
+  : never;
 export type TrialEventV1 = TrialEventForAction<
   TrialActionV1,
   typeof TRIAL_EVENT_SCHEMA_VERSION_V1
@@ -561,7 +863,11 @@ export type TrialEventV2 = TrialEventForAction<
   TrialActionV2,
   typeof TRIAL_EVENT_SCHEMA_VERSION_V2
 >;
-export type TrialEvent = TrialEventV2;
+export type TrialEventV3 = TrialEventForAction<
+  TrialActionV3,
+  typeof TRIAL_EVENT_SCHEMA_VERSION_V3
+>;
+export type TrialEvent = TrialEventV3;
 export type TrialEventByType<K extends TrialEventType> = Extract<TrialEvent, { type: K }>;
 
 function eventBaseShape<Version extends string>(schemaVersion: Version) {
@@ -605,8 +911,10 @@ function eventSchemasFor(
   schemaVersion: string,
   actionSchemas: readonly z.ZodObject<z.ZodRawShape>[],
 ): EventSchemaTuple {
-  return actionSchemas.map((schema, index) => {
-    const type = TRIAL_EVENT_TYPES[index];
+  return actionSchemas.map((schema) => {
+    const type = (
+      schema.shape.type as unknown as { value: TrialEventType }
+    ).value;
     return event(
       schemaVersion,
       type,
@@ -623,6 +931,10 @@ const trialEventV2Schemas = eventSchemasFor(
   TRIAL_EVENT_SCHEMA_VERSION_V2,
   trialActionV2Schemas,
 );
+const trialEventV3Schemas = eventSchemasFor(
+  TRIAL_EVENT_SCHEMA_VERSION_V3,
+  trialActionV3Schemas,
+);
 
 export const TrialEventV1Schema = z.discriminatedUnion(
   "type",
@@ -632,7 +944,11 @@ export const TrialEventV2Schema = z.discriminatedUnion(
   "type",
   trialEventV2Schemas,
 ) as unknown as z.ZodType<TrialEventV2>;
-export const TrialEventSchema = TrialEventV2Schema;
+export const TrialEventV3Schema = z.discriminatedUnion(
+  "type",
+  trialEventV3Schemas,
+) as unknown as z.ZodType<TrialEventV3>;
+export const TrialEventSchema = TrialEventV3Schema;
 
 export const EVENT_TYPE_FOR_ACTION = Object.freeze(
   Object.fromEntries(TRIAL_ACTION_TYPES.map((type) => [type, type])) as Record<TrialActionType, TrialEventType>,
@@ -653,12 +969,12 @@ const trialStateV1Shape = {
   userSide: z.enum(["user", "opposing"]),
   actors: z.record(z.string(), ActorRefSchema),
   facts: z.record(z.string(), FactStateEntrySchema),
-  evidence: z.record(z.string(), EvidenceStateEntrySchema),
-  witnesses: z.record(z.string(), WitnessStateEntrySchema),
+  evidence: z.record(z.string(), EvidenceStateEntryV1Schema),
+  witnesses: z.record(z.string(), WitnessStateEntryV1Schema),
   testimony: z.record(z.string(), TestimonyStateEntrySchema),
-  settlementOffers: z.record(z.string(), SettlementOfferStateEntrySchema),
-  objections: z.record(z.string(), ObjectionStateEntrySchema),
-  pendingResponses: z.record(z.string(), PendingResponseStateEntrySchema),
+  settlementOffers: z.record(z.string(), SettlementOfferStateEntryV1Schema),
+  objections: z.record(z.string(), ObjectionStateEntryV1Schema),
+  pendingResponses: z.record(z.string(), PendingResponseStateEntryV1Schema),
   transcriptTurns: z.record(z.string(), TranscriptTurnSchema),
   activeWitnessId: IdentifierSchema.nullable(),
   activeQuestionId: IdentifierSchema.nullable(),
@@ -674,6 +990,26 @@ const trialStateV1Shape = {
   failure: FailureStateSchema.nullable(),
 };
 
+const trialStateV3Shape = {
+  ...trialStateV1Shape,
+  caseGraphContentHash: CaseGraphContentHashSchema,
+  juryInstructionIds: UniqueIdentifierListSchema,
+  caseProvenanceIds: UniqueIdentifierListSchema,
+  sourceSegmentIds: UniqueIdentifierListSchema,
+  closingSides: z.array(z.enum(["user", "opposing"])),
+  deliberated: z.boolean(),
+  evidence: z.record(z.string(), EvidenceStateEntryV3Schema),
+  witnesses: z.record(z.string(), WitnessStateEntryV3Schema),
+  pendingResponses: z.record(z.string(), PendingResponseStateEntryV3Schema),
+  settlementOffers: z.record(z.string(), SettlementOfferStateEntryV3Schema),
+  objections: z.record(z.string(), ObjectionStateEntryV3Schema),
+  appearances: z.record(z.string(), WitnessAppearanceStateV3Schema),
+  questions: z.record(z.string(), QuestionStateEntryV3Schema),
+  strikeMotions: z.record(z.string(), StrikeMotionStateEntryV3Schema),
+  opposingStrategy: OpposingStrategyStateV3Schema.nullable(),
+  activeAppearanceId: IdentifierSchema.nullable(),
+};
+
 export const TrialStateV1Schema = z
   .object({
     schemaVersion: z.literal(TRIAL_STATE_SCHEMA_VERSION_V1),
@@ -684,13 +1020,21 @@ export const TrialStateV2Schema = z
   .object({
     schemaVersion: z.literal(TRIAL_STATE_SCHEMA_VERSION_V2),
     ...trialStateV1Shape,
-    policySnapshot: TrialPolicySnapshotSchema,
+    policySnapshot: TrialPolicySnapshotV1Schema,
   })
   .strict();
-export const TrialStateSchema = TrialStateV2Schema;
+export const TrialStateV3Schema = z
+  .object({
+    schemaVersion: z.literal(TRIAL_STATE_SCHEMA_VERSION_V3),
+    ...trialStateV3Shape,
+    policySnapshot: TrialPolicySnapshotV2Schema,
+  })
+  .strict();
+export const TrialStateSchema = TrialStateV3Schema;
 export type TrialStateV1 = z.infer<typeof TrialStateV1Schema>;
 export type TrialStateV2 = z.infer<typeof TrialStateV2Schema>;
-export type TrialState = TrialStateV2;
+export type TrialStateV3 = z.infer<typeof TrialStateV3Schema>;
+export type TrialState = TrialStateV3;
 
 export function assertNever(value: never): never {
   throw new Error(`Unhandled discriminated value: ${JSON.stringify(value)}`);

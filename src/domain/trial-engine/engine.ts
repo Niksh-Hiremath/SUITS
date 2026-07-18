@@ -1,4 +1,8 @@
-import type { CaseGraph } from "../case-graph";
+import {
+  collectCaseGraphProvenanceIds,
+  computeCaseGraphContentHash,
+  type CaseGraph,
+} from "../case-graph";
 import {
   createTrialPolicySnapshot,
   type TrialPolicyActorBindingInput,
@@ -47,10 +51,30 @@ function citationsFor(action: TrialAction): CitationSet {
     if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
     return typeof value === "string" ? [value] : [];
   };
+  const basis =
+    typeof payload.basis === "object" &&
+    payload.basis !== null &&
+    !Array.isArray(payload.basis)
+      ? payload.basis as Record<string, unknown>
+      : null;
+  const basisId = (kind: string, key: string): string[] =>
+    basis?.kind === kind && typeof basis[key] === "string"
+      ? [basis[key]]
+      : [];
   return {
     factIds: unique([...strings("factId"), ...strings("factIds")]),
-    evidenceIds: unique([...strings("evidenceId"), ...strings("evidenceIds")]),
-    testimonyIds: unique(strings("testimonyIds")),
+    evidenceIds: unique([
+      ...strings("evidenceId"),
+      ...strings("evidenceIds"),
+      ...strings("presentedEvidenceIds"),
+      ...strings("evidencePriorityIds"),
+      ...basisId("evidence", "evidenceId"),
+    ]),
+    testimonyIds: unique([
+      ...strings("testimonyIds"),
+      ...strings("foundationTestimonyIds"),
+      ...basisId("testimony", "testimonyId"),
+    ]),
     eventIds: [],
     sourceSegmentIds: [],
   };
@@ -116,6 +140,10 @@ export function reduceTrial(eventInputs: readonly unknown[]): TrialState {
     const reconstructedAction = actionFromEvent(event);
     const validation = validateAction(state, reconstructedAction);
     if (!validation.ok) throw new TrialEngineError(validation.issue);
+    const expectedEvent = eventFromAction(state, validation.action);
+    if (JSON.stringify(event) !== JSON.stringify(expectedEvent)) {
+      throw new Error(`EVENT_ENVELOPE_MISMATCH:${event.eventId}`);
+    }
     state = state === null ? initializeTrialFromEvent(event) : applyTrialEvent(state, event);
   }
   if (state === null) throw new Error("TRIAL_NOT_STARTED");
@@ -159,6 +187,14 @@ export function createStartTrialAction(input: StartTrialActionInput): TrialActio
       caseId: input.graph.caseId,
       caseVersion: input.graph.version,
       caseGraphHash: input.graph.compilerMetadata.sourceContentHash,
+      caseGraphContentHash: computeCaseGraphContentHash(input.graph),
+      juryInstructionIds: input.graph.juryInstructions.map(
+        (instruction) => instruction.instructionId,
+      ),
+      caseProvenanceIds: collectCaseGraphProvenanceIds(input.graph),
+      sourceSegmentIds: input.graph.sourceSegments.map(
+        (segment) => segment.sourceSegmentId,
+      ),
       actors: input.actors,
       witnessIds: input.graph.witnesses.map((witness) => witness.witnessId),
       initialFacts: input.graph.facts.map((fact) => ({

@@ -60,6 +60,9 @@ const trialActionPermissionMatrix = {
   GENERATE_DEBRIEF: roles("debrief_coach"),
   FAIL_STEP: roles("system"),
   RECOVER_STEP: roles("system"),
+  UPDATE_OPPOSING_STRATEGY: roles("opposing_counsel"),
+  DENY_STRIKE_MOTION: roles("judge", "system"),
+  WITHDRAW_STRIKE_MOTION: roles("user_counsel", "opposing_counsel"),
 } as const satisfies TrialActionPermissionMatrix;
 
 /**
