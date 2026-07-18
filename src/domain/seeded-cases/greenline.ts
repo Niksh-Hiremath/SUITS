@@ -1,0 +1,783 @@
+import {
+  CASE_GRAPH_SCHEMA_VERSION,
+  CASE_GRAPH_VERSION,
+  parseCaseGraphV1,
+  type CaseGraphV1,
+} from "../case-graph";
+import { authoringProvenance, sourceProvenance } from "./provenance";
+
+const rawGreenlineCase = {
+  schemaVersion: CASE_GRAPH_SCHEMA_VERSION,
+  caseId: "case_greenline_cold_chain_v1",
+  version: CASE_GRAPH_VERSION,
+  title: "Greenline Grocers v. Nimbus Cold Chain",
+  summary:
+    "A fictional commercial dispute over spoiled produce, conflicting refrigeration records, and a delayed receiving dock.",
+  status: "published",
+  educationalDisclaimer:
+    "Fictional educational simulation only. This case is not legal advice, concerns no real business or shipment, and cannot predict a real outcome.",
+  jurisdictionProfile: {
+    profileId: "greenline_jurisdiction_commercial_v1",
+    name: "Lakes District Fictional Commercial Rules",
+    rulesVersion: "lakes-commercial.v1",
+    governingLaw:
+      "Fictional contract, damages, and evidence rules authored solely for classroom simulation.",
+    burdenOfProof: "preponderance",
+    permittedObjectionGrounds: [
+      "relevance",
+      "hearsay",
+      "leading",
+      "speculation",
+      "foundation",
+      "asked_and_answered",
+      "argumentative",
+      "compound",
+      "privilege",
+    ],
+    provenance: [
+      authoringProvenance(
+        "greenline_prov_jurisdiction",
+        "The commercial rule profile is authored simulation configuration.",
+      ),
+    ],
+  },
+  parties: [
+    {
+      partyId: "greenline_party_grocers",
+      name: "Greenline Grocers Cooperative",
+      kind: "organization",
+      proceduralRole: "claimant",
+      simulationSide: "user",
+      description: "A fictional grocery cooperative that rejected a shipment of temperature-sensitive produce.",
+      counselName: null,
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_party_grocers",
+          ["greenline_segment_receiving"],
+          "The receiving report identifies Greenline as consignee.",
+        ),
+      ],
+    },
+    {
+      partyId: "greenline_party_nimbus",
+      name: "Nimbus Cold Chain LLC",
+      kind: "organization",
+      proceduralRole: "respondent",
+      simulationSide: "opposing",
+      description: "A fictional carrier that says its refrigeration unit remained within contract temperature.",
+      counselName: "Sofia Grant",
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_party_nimbus",
+          ["greenline_segment_manifest"],
+          "The shipping manifest identifies Nimbus as carrier.",
+        ),
+      ],
+    },
+  ],
+  issues: [
+    {
+      issueId: "greenline_issue_performance",
+      title: "Temperature-control performance",
+      question: "Did Nimbus fail to maintain the contract temperature during transit?",
+      burdenPartyId: "greenline_party_grocers",
+      standard: "Greenline must prove nonperformance by a preponderance of admitted evidence.",
+      relatedFactIds: [
+        "greenline_fact_loaded_cold",
+        "greenline_fact_excursion",
+        "greenline_fact_driver_log",
+        "greenline_fact_alarm_muted",
+      ],
+      relatedEvidenceIds: [
+        "greenline_evidence_manifest",
+        "greenline_evidence_sensor",
+        "greenline_evidence_driver_log",
+        "greenline_evidence_maintenance",
+      ],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_issue_performance",
+          ["greenline_segment_manifest", "greenline_segment_sensor", "greenline_segment_driver_log"],
+          "The manifest and conflicting temperature records frame performance.",
+        ),
+      ],
+    },
+    {
+      issueId: "greenline_issue_causation",
+      title: "Cause of spoilage",
+      question:
+        "Was the produce loss caused by a transit temperature excursion, Greenline's dock delay, or both?",
+      burdenPartyId: "greenline_party_grocers",
+      standard: "Greenline must prove causation and recoverable loss by a preponderance.",
+      relatedFactIds: [
+        "greenline_fact_excursion",
+        "greenline_fact_dock_delay",
+        "greenline_fact_spoilage",
+      ],
+      relatedEvidenceIds: [
+        "greenline_evidence_sensor",
+        "greenline_evidence_dock_scans",
+        "greenline_evidence_quality_report",
+      ],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_issue_causation",
+          ["greenline_segment_sensor", "greenline_segment_dock", "greenline_segment_quality"],
+          "Temperature, dock, and quality records identify competing causes.",
+        ),
+      ],
+    },
+  ],
+  timeline: [
+    {
+      timelineEventId: "greenline_timeline_loading",
+      occurredAt: "2026-04-21T05:45:00Z",
+      summary: "The produce was loaded at 2.8 degrees Celsius and sealed for transport.",
+      relatedFactIds: ["greenline_fact_loaded_cold"],
+      relatedEvidenceIds: ["greenline_evidence_manifest"],
+      witnessIds: ["greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_timeline_loading",
+          ["greenline_segment_manifest"],
+          "The signed shipping manifest records loading temperature and time.",
+        ),
+      ],
+    },
+    {
+      timelineEventId: "greenline_timeline_excursion",
+      occurredAt: "2026-04-21T07:08:00Z",
+      summary: "The independent logger began recording a sustained temperature rise above eight degrees.",
+      relatedFactIds: ["greenline_fact_excursion", "greenline_fact_alarm_muted"],
+      relatedEvidenceIds: ["greenline_evidence_sensor", "greenline_evidence_maintenance"],
+      witnessIds: ["greenline_witness_colin", "greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_timeline_excursion",
+          ["greenline_segment_sensor", "greenline_segment_maintenance"],
+          "The logger export and maintenance record establish the interval.",
+        ),
+      ],
+    },
+    {
+      timelineEventId: "greenline_timeline_delivery",
+      occurredAt: "2026-04-21T09:16:00Z",
+      summary: "Nimbus arrived at Greenline; pallet unloading scans began forty-two minutes later.",
+      relatedFactIds: ["greenline_fact_dock_delay", "greenline_fact_spoilage"],
+      relatedEvidenceIds: ["greenline_evidence_dock_scans", "greenline_evidence_quality_report"],
+      witnessIds: ["greenline_witness_ava", "greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_timeline_delivery",
+          ["greenline_segment_dock", "greenline_segment_quality"],
+          "Gate and pallet scans establish arrival and unloading times.",
+        ),
+      ],
+    },
+  ],
+  facts: [
+    {
+      factId: "greenline_fact_loaded_cold",
+      proposition: "The shipment was loaded and sealed at 2.8 degrees Celsius.",
+      classification: "authoring_truth",
+      initialStatus: "verified",
+      visibility: "public",
+      assertedByPartyIds: ["greenline_party_nimbus"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      relatedEvidenceIds: ["greenline_evidence_manifest"],
+      witnessIds: ["greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_loaded",
+          ["greenline_segment_manifest"],
+          "The signed manifest directly records loading temperature.",
+        ),
+      ],
+    },
+    {
+      factId: "greenline_fact_excursion",
+      proposition: "The pallet logger recorded temperatures above eight degrees for ninety-five minutes in transit.",
+      classification: "authoring_truth",
+      initialStatus: "hidden",
+      visibility: "restricted",
+      assertedByPartyIds: [],
+      relatedIssueIds: ["greenline_issue_performance", "greenline_issue_causation"],
+      relatedEvidenceIds: ["greenline_evidence_sensor"],
+      witnessIds: ["greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_excursion",
+          ["greenline_segment_sensor", "greenline_segment_analyst"],
+          "The logger samples and analyst calculation support the duration.",
+          0.98,
+        ),
+      ],
+    },
+    {
+      factId: "greenline_fact_driver_log",
+      proposition: "Colin's handwritten log records three degrees Celsius throughout the trip.",
+      classification: "authoring_truth",
+      initialStatus: "verified",
+      visibility: "public",
+      assertedByPartyIds: ["greenline_party_nimbus"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      relatedEvidenceIds: ["greenline_evidence_driver_log"],
+      witnessIds: ["greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_driver_log",
+          ["greenline_segment_driver_log"],
+          "The driver log contains repeated three-degree entries.",
+        ),
+      ],
+    },
+    {
+      factId: "greenline_fact_alarm_muted",
+      proposition: "The refrigeration controller's high-temperature alarm was placed in mute mode before departure.",
+      classification: "authoring_truth",
+      initialStatus: "hidden",
+      visibility: "restricted",
+      assertedByPartyIds: [],
+      relatedIssueIds: ["greenline_issue_performance"],
+      relatedEvidenceIds: ["greenline_evidence_maintenance"],
+      witnessIds: ["greenline_witness_colin", "greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_alarm",
+          ["greenline_segment_maintenance"],
+          "The controller service export records mute mode and operator login.",
+        ),
+      ],
+    },
+    {
+      factId: "greenline_fact_dock_delay",
+      proposition: "Nimbus alleges Greenline left the sealed truck at the receiving dock for forty-two minutes.",
+      classification: "party_allegation",
+      initialStatus: "proposed",
+      visibility: "public",
+      assertedByPartyIds: ["greenline_party_nimbus"],
+      relatedIssueIds: ["greenline_issue_causation"],
+      relatedEvidenceIds: ["greenline_evidence_dock_scans"],
+      witnessIds: ["greenline_witness_ava", "greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_dock_delay",
+          ["greenline_segment_dock"],
+          "Gate and first-pallet scans are forty-two minutes apart.",
+          0.95,
+        ),
+      ],
+    },
+    {
+      factId: "greenline_fact_spoilage",
+      proposition: "The receiving inspection rejected 148 crates for heat-related softening.",
+      classification: "authoring_truth",
+      initialStatus: "verified",
+      visibility: "public",
+      assertedByPartyIds: ["greenline_party_grocers"],
+      relatedIssueIds: ["greenline_issue_causation"],
+      relatedEvidenceIds: ["greenline_evidence_quality_report"],
+      witnessIds: ["greenline_witness_ava", "greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_fact_spoilage",
+          ["greenline_segment_quality"],
+          "The receiving quality report records crate count and observed condition.",
+        ),
+      ],
+    },
+  ],
+  evidence: [
+    {
+      evidenceId: "greenline_evidence_manifest",
+      name: "Cold-chain shipping manifest",
+      description: "The signed loading manifest with seal number, departure time, and loading temperature.",
+      kind: "document",
+      initialStatus: "indexed",
+      authoringAdmissibility: "likely_admissible",
+      offeredByPartyIds: ["greenline_party_nimbus"],
+      relatedFactIds: ["greenline_fact_loaded_cold"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      custodianWitnessIds: ["greenline_witness_colin"],
+      authenticatingWitnessIds: ["greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_manifest",
+          ["greenline_segment_manifest"],
+          "The packet contains the signed fictional manifest.",
+        ),
+      ],
+    },
+    {
+      evidenceId: "greenline_evidence_sensor",
+      name: "Independent pallet logger export",
+      description: "A digitally signed CSV containing one-minute temperature samples from the shipment pallet.",
+      kind: "digital",
+      initialStatus: "indexed",
+      authoringAdmissibility: "likely_admissible",
+      offeredByPartyIds: ["greenline_party_grocers"],
+      relatedFactIds: ["greenline_fact_excursion"],
+      relatedIssueIds: ["greenline_issue_performance", "greenline_issue_causation"],
+      custodianWitnessIds: ["greenline_witness_leena"],
+      authenticatingWitnessIds: ["greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_sensor",
+          ["greenline_segment_sensor", "greenline_segment_analyst"],
+          "The packet contains the signed logger export and validation memo.",
+        ),
+      ],
+    },
+    {
+      evidenceId: "greenline_evidence_driver_log",
+      name: "Driver temperature log",
+      description: "Colin's handwritten hourly temperature entries for the delivery route.",
+      kind: "document",
+      initialStatus: "indexed",
+      authoringAdmissibility: "likely_admissible",
+      offeredByPartyIds: ["greenline_party_nimbus"],
+      relatedFactIds: ["greenline_fact_driver_log"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      custodianWitnessIds: ["greenline_witness_colin"],
+      authenticatingWitnessIds: ["greenline_witness_colin"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_driver_log",
+          ["greenline_segment_driver_log"],
+          "The packet includes the scanned handwritten log.",
+        ),
+      ],
+    },
+    {
+      evidenceId: "greenline_evidence_maintenance",
+      name: "Refrigeration controller service record",
+      description: "A service export showing alarm settings and operator activity before departure.",
+      kind: "digital",
+      initialStatus: "indexed",
+      authoringAdmissibility: "undetermined",
+      offeredByPartyIds: ["greenline_party_grocers"],
+      relatedFactIds: ["greenline_fact_alarm_muted"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      custodianWitnessIds: ["greenline_witness_colin"],
+      authenticatingWitnessIds: ["greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_maintenance",
+          ["greenline_segment_maintenance"],
+          "The packet includes a fictional controller service export.",
+        ),
+      ],
+    },
+    {
+      evidenceId: "greenline_evidence_dock_scans",
+      name: "Receiving gate and pallet scans",
+      description: "System timestamps for truck arrival, dock assignment, and the first unloaded pallet.",
+      kind: "digital",
+      initialStatus: "indexed",
+      authoringAdmissibility: "likely_admissible",
+      offeredByPartyIds: ["greenline_party_nimbus", "greenline_party_grocers"],
+      relatedFactIds: ["greenline_fact_dock_delay"],
+      relatedIssueIds: ["greenline_issue_causation"],
+      custodianWitnessIds: ["greenline_witness_ava"],
+      authenticatingWitnessIds: ["greenline_witness_ava"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_dock",
+          ["greenline_segment_dock"],
+          "The packet includes the receiving-system scan export.",
+        ),
+      ],
+    },
+    {
+      evidenceId: "greenline_evidence_quality_report",
+      name: "Receiving quality report",
+      description: "A same-day inspection report documenting heat-related softening and rejected crates.",
+      kind: "document",
+      initialStatus: "indexed",
+      authoringAdmissibility: "likely_admissible",
+      offeredByPartyIds: ["greenline_party_grocers"],
+      relatedFactIds: ["greenline_fact_spoilage"],
+      relatedIssueIds: ["greenline_issue_causation"],
+      custodianWitnessIds: ["greenline_witness_ava"],
+      authenticatingWitnessIds: ["greenline_witness_ava", "greenline_witness_leena"],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_evidence_quality",
+          ["greenline_segment_quality"],
+          "The packet contains the signed fictional quality report.",
+        ),
+      ],
+    },
+  ],
+  witnesses: [
+    {
+      witnessId: "greenline_witness_ava",
+      name: "Ava Moreno",
+      kind: "fact",
+      role: "Greenline receiving manager",
+      alignedPartyId: "greenline_party_grocers",
+      callableByPartyIds: ["greenline_party_grocers", "greenline_party_nimbus"],
+      summary: "Ava supervised receiving, documented the rejected produce, and disputes a lengthy dock delay.",
+      emotionalBaseline: "confident",
+      knowledgeBoundary: {
+        knownFactIds: [
+          "greenline_fact_dock_delay",
+          "greenline_fact_spoilage",
+        ],
+        perceivedFactIds: ["greenline_fact_dock_delay", "greenline_fact_spoilage"],
+        seenEvidenceIds: [
+          "greenline_evidence_dock_scans",
+          "greenline_evidence_quality_report",
+        ],
+        availablePriorStatementIds: ["greenline_statement_ava"],
+        unknownFactIds: [
+          "greenline_fact_loaded_cold",
+          "greenline_fact_excursion",
+          "greenline_fact_driver_log",
+          "greenline_fact_alarm_muted",
+        ],
+        allowedTopics: ["truck arrival", "unloading process", "produce condition"],
+        forbiddenTopics: ["in-transit controller operation", "logger calibration"],
+      },
+      priorStatements: [
+        {
+          priorStatementId: "greenline_statement_ava",
+          madeAt: "2026-04-21T12:20:00Z",
+          kind: "email",
+          text: "Our crew began unloading within ten minutes of the truck reaching the gate.",
+          relatedFactIds: ["greenline_fact_dock_delay"],
+          relatedEvidenceIds: ["greenline_evidence_dock_scans"],
+          provenance: [
+            sourceProvenance(
+              "greenline_prov_statement_ava",
+              ["greenline_segment_receiving"],
+              "Ava's same-day receiving email contains this statement.",
+            ),
+          ],
+        },
+      ],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_witness_ava",
+          ["greenline_segment_receiving", "greenline_segment_quality"],
+          "The receiving records identify Ava and her responsibilities.",
+        ),
+      ],
+    },
+    {
+      witnessId: "greenline_witness_colin",
+      name: "Colin Brooks",
+      kind: "fact",
+      role: "Nimbus delivery driver",
+      alignedPartyId: "greenline_party_nimbus",
+      callableByPartyIds: ["greenline_party_grocers", "greenline_party_nimbus"],
+      summary: "Colin loaded the shipment, recorded temperatures, operated the controller, and completed delivery.",
+      emotionalBaseline: "defensive",
+      knowledgeBoundary: {
+        knownFactIds: [
+          "greenline_fact_loaded_cold",
+          "greenline_fact_driver_log",
+          "greenline_fact_alarm_muted",
+          "greenline_fact_dock_delay",
+        ],
+        perceivedFactIds: [
+          "greenline_fact_loaded_cold",
+          "greenline_fact_driver_log",
+          "greenline_fact_alarm_muted",
+          "greenline_fact_dock_delay",
+        ],
+        seenEvidenceIds: [
+          "greenline_evidence_manifest",
+          "greenline_evidence_driver_log",
+          "greenline_evidence_maintenance",
+          "greenline_evidence_dock_scans",
+        ],
+        availablePriorStatementIds: ["greenline_statement_colin"],
+        unknownFactIds: ["greenline_fact_excursion", "greenline_fact_spoilage"],
+        allowedTopics: ["loading", "route checks", "controller operation", "delivery timing"],
+        forbiddenTopics: ["logger laboratory validation", "Greenline quality protocol"],
+      },
+      priorStatements: [
+        {
+          priorStatementId: "greenline_statement_colin",
+          madeAt: "2026-04-22T09:00:00Z",
+          kind: "affidavit",
+          text: "The display stayed at three degrees throughout the trip, and I received no high-temperature alarm.",
+          relatedFactIds: ["greenline_fact_driver_log", "greenline_fact_alarm_muted"],
+          relatedEvidenceIds: ["greenline_evidence_driver_log", "greenline_evidence_maintenance"],
+          provenance: [
+            sourceProvenance(
+              "greenline_prov_statement_colin",
+              ["greenline_segment_driver_log", "greenline_segment_maintenance"],
+              "Colin's declaration is bundled with his log and controller record.",
+            ),
+          ],
+        },
+      ],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_witness_colin",
+          ["greenline_segment_manifest", "greenline_segment_driver_log"],
+          "The manifest and log identify Colin as driver.",
+        ),
+      ],
+    },
+    {
+      witnessId: "greenline_witness_leena",
+      name: "Dr. Leena Vos",
+      kind: "expert",
+      role: "Independent cold-chain data analyst",
+      alignedPartyId: null,
+      callableByPartyIds: ["greenline_party_grocers", "greenline_party_nimbus"],
+      summary: "Leena validated the logger, compared the records, and assessed temperature-related spoilage.",
+      emotionalBaseline: "neutral",
+      knowledgeBoundary: {
+        knownFactIds: [
+          "greenline_fact_excursion",
+          "greenline_fact_driver_log",
+          "greenline_fact_alarm_muted",
+          "greenline_fact_spoilage",
+        ],
+        perceivedFactIds: [],
+        seenEvidenceIds: [
+          "greenline_evidence_sensor",
+          "greenline_evidence_driver_log",
+          "greenline_evidence_maintenance",
+          "greenline_evidence_quality_report",
+        ],
+        availablePriorStatementIds: ["greenline_statement_leena"],
+        unknownFactIds: ["greenline_fact_loaded_cold", "greenline_fact_dock_delay"],
+        allowedTopics: ["logger validation", "temperature analysis", "spoilage mechanisms"],
+        forbiddenTopics: ["party negotiation positions", "driver intent"],
+      },
+      priorStatements: [
+        {
+          priorStatementId: "greenline_statement_leena",
+          madeAt: "2026-04-28T16:00:00Z",
+          kind: "report",
+          text: "The signed samples show a ninety-five-minute excursion inconsistent with the hourly handwritten entries.",
+          relatedFactIds: ["greenline_fact_excursion", "greenline_fact_driver_log"],
+          relatedEvidenceIds: ["greenline_evidence_sensor", "greenline_evidence_driver_log"],
+          provenance: [
+            sourceProvenance(
+              "greenline_prov_statement_leena",
+              ["greenline_segment_analyst"],
+              "Leena's signed validation memo contains this conclusion.",
+            ),
+          ],
+        },
+      ],
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_witness_leena",
+          ["greenline_segment_analyst"],
+          "The validation memo identifies Leena and her limited analytical role.",
+        ),
+      ],
+    },
+  ],
+  contradictions: [
+    {
+      contradictionId: "greenline_contradiction_temperature",
+      summary: "Colin reported a steady three degrees, while the independent logger records a long excursion above eight degrees.",
+      left: { kind: "prior_statement", priorStatementId: "greenline_statement_colin" },
+      right: { kind: "evidence", evidenceId: "greenline_evidence_sensor" },
+      witnessIds: ["greenline_witness_colin", "greenline_witness_leena"],
+      relatedIssueIds: ["greenline_issue_performance"],
+      severity: "decisive",
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_contradiction_temperature",
+          ["greenline_segment_driver_log", "greenline_segment_sensor", "greenline_segment_analyst"],
+          "The handwritten entries and signed logger samples materially diverge.",
+        ),
+      ],
+    },
+    {
+      contradictionId: "greenline_contradiction_dock",
+      summary: "Ava said unloading began within ten minutes, while scan timestamps place the first pallet forty-two minutes after arrival.",
+      left: { kind: "prior_statement", priorStatementId: "greenline_statement_ava" },
+      right: { kind: "evidence", evidenceId: "greenline_evidence_dock_scans" },
+      witnessIds: ["greenline_witness_ava", "greenline_witness_colin"],
+      relatedIssueIds: ["greenline_issue_causation"],
+      severity: "material",
+      provenance: [
+        sourceProvenance(
+          "greenline_prov_contradiction_dock",
+          ["greenline_segment_receiving", "greenline_segment_dock"],
+          "The receiving email and scan system report different unloading intervals.",
+        ),
+      ],
+    },
+  ],
+  settlement: {
+    enabled: true,
+    currency: "USD",
+    participants: [
+      {
+        partyId: "greenline_party_grocers",
+        minimumAuthority: 55_000,
+        maximumAuthority: 240_000,
+        reservationValue: 125_000,
+        targetValue: 190_000,
+        confidentialPriorities: ["recover supplier credits", "preserve the seasonal delivery schedule"],
+        permittedNonMonetaryTerms: ["temperature-audit access", "priority replacement shipment"],
+      },
+      {
+        partyId: "greenline_party_nimbus",
+        minimumAuthority: 30_000,
+        maximumAuthority: 165_000,
+        reservationValue: 120_000,
+        targetValue: 62_000,
+        confidentialPriorities: ["avoid systemic-control admissions", "retain Greenline as a customer"],
+        permittedNonMonetaryTerms: ["future freight credit", "joint dock protocol"],
+      },
+    ],
+    opensAtPhase: "pretrial",
+    expiresAfterEventCount: 30,
+    allowCounteroffers: true,
+    provenance: [
+      authoringProvenance(
+        "greenline_prov_settlement",
+        "Private settlement ranges are authored simulation controls, not factual packet content.",
+      ),
+    ],
+  },
+  juryInstructions: [
+    {
+      instructionId: "greenline_instruction_performance",
+      title: "Contract performance",
+      text:
+        "Decide from admitted evidence whether Nimbus materially failed to maintain the fictional contract temperature during transit.",
+      relatedIssueIds: ["greenline_issue_performance"],
+      requiredFactIds: ["greenline_fact_loaded_cold", "greenline_fact_excursion"],
+      relatedEvidenceIds: ["greenline_evidence_manifest", "greenline_evidence_sensor"],
+      provenance: [
+        authoringProvenance(
+          "greenline_prov_instruction_performance",
+          "This instruction is authored for the fictional educational rule profile.",
+        ),
+      ],
+    },
+    {
+      instructionId: "greenline_instruction_causation",
+      title: "Causation and allocation",
+      text:
+        "Consider whether admitted proof attributes the produce loss to transit conditions, receiving delay, or a supported combination of causes.",
+      relatedIssueIds: ["greenline_issue_causation"],
+      requiredFactIds: ["greenline_fact_spoilage"],
+      relatedEvidenceIds: [
+        "greenline_evidence_sensor",
+        "greenline_evidence_dock_scans",
+        "greenline_evidence_quality_report",
+      ],
+      provenance: [
+        authoringProvenance(
+          "greenline_prov_instruction_causation",
+          "This instruction is authored for the fictional educational rule profile.",
+        ),
+      ],
+    },
+  ],
+  sourceSegments: [
+    {
+      sourceSegmentId: "greenline_segment_manifest",
+      sourceId: "greenline_source_packet",
+      documentName: "shipping-manifest.txt",
+      mimeType: "text/plain",
+      locator: { kind: "text", startOffset: 0, endOffset: 430 },
+      excerpt: "Loaded 05:45 at 2.8 C; seal GL-2044; carrier Nimbus Cold Chain; driver Colin Brooks.",
+      sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+    },
+    {
+      sourceSegmentId: "greenline_segment_sensor",
+      sourceId: "greenline_source_packet",
+      documentName: "pallet-logger.csv",
+      mimeType: "text/csv",
+      locator: { kind: "text", startOffset: 431, endOffset: 970 },
+      excerpt: "07:08,8.1; 07:09,8.3; ... ; 08:43,8.2 — signature valid.",
+      sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+    },
+    {
+      sourceSegmentId: "greenline_segment_driver_log",
+      sourceId: "greenline_source_packet",
+      documentName: "driver-temperature-log.md",
+      mimeType: "text/markdown",
+      locator: { kind: "text", startOffset: 971, endOffset: 1_390 },
+      excerpt: "06:00 — 3 C; 07:00 — 3 C; 08:00 — 3 C; 09:00 — 3 C.",
+      sha256: "3333333333333333333333333333333333333333333333333333333333333333",
+    },
+    {
+      sourceSegmentId: "greenline_segment_maintenance",
+      sourceId: "greenline_source_packet",
+      documentName: "controller-service-export.txt",
+      mimeType: "text/plain",
+      locator: { kind: "text", startOffset: 1_391, endOffset: 1_850 },
+      excerpt: "05:31 high_temp_alarm=MUTED; operator=cbrooks; no restore event before 10:00.",
+      sha256: "4444444444444444444444444444444444444444444444444444444444444444",
+    },
+    {
+      sourceSegmentId: "greenline_segment_dock",
+      sourceId: "greenline_source_packet",
+      documentName: "receiving-scans.csv",
+      mimeType: "text/csv",
+      locator: { kind: "text", startOffset: 1_851, endOffset: 2_280 },
+      excerpt: "gate_arrival=09:16; dock_assigned=09:37; first_pallet_scan=09:58.",
+      sha256: "5555555555555555555555555555555555555555555555555555555555555555",
+    },
+    {
+      sourceSegmentId: "greenline_segment_receiving",
+      sourceId: "greenline_source_packet",
+      documentName: "receiving-manager-email.txt",
+      mimeType: "text/plain",
+      locator: { kind: "text", startOffset: 2_281, endOffset: 2_710 },
+      excerpt: "Our crew began unloading within ten minutes of the truck reaching the gate.",
+      sha256: "6666666666666666666666666666666666666666666666666666666666666666",
+    },
+    {
+      sourceSegmentId: "greenline_segment_quality",
+      sourceId: "greenline_source_packet",
+      documentName: "receiving-quality-report.txt",
+      mimeType: "text/plain",
+      locator: { kind: "text", startOffset: 2_711, endOffset: 3_160 },
+      excerpt: "Rejected: 148 crates. Condition: heat-related softening observed at same-day inspection.",
+      sha256: "7777777777777777777777777777777777777777777777777777777777777777",
+    },
+    {
+      sourceSegmentId: "greenline_segment_analyst",
+      sourceId: "greenline_source_packet",
+      documentName: "logger-validation-memo.txt",
+      mimeType: "text/plain",
+      locator: { kind: "text", startOffset: 3_161, endOffset: 3_720 },
+      excerpt: "The signed logger samples show a ninety-five-minute excursion inconsistent with the driver log.",
+      sha256: "8888888888888888888888888888888888888888888888888888888888888888",
+    },
+  ],
+  compilerMetadata: {
+    method: "seeded",
+    model: null,
+    requestId: null,
+    promptVersion: "case-compiler.seeded.v1",
+    compiledAt: "2026-07-18T12:45:00Z",
+    sourceContentHash: "9090909090909090909090909090909090909090909090909090909090909090",
+    sourceSegmentCount: 8,
+    warnings: [],
+    uncertainties: [
+      {
+        uncertaintyId: "greenline_uncertainty_dock_exposure",
+        description:
+          "The scan interval is known, but the packet does not establish when the trailer doors first opened.",
+        relatedFactIds: ["greenline_fact_dock_delay"],
+        relatedEvidenceIds: ["greenline_evidence_dock_scans"],
+        relatedWitnessIds: ["greenline_witness_ava", "greenline_witness_colin"],
+        sourceSegmentIds: ["greenline_segment_dock", "greenline_segment_receiving"],
+      },
+    ],
+  },
+} satisfies CaseGraphV1;
+
+export const GREENLINE_CASE_GRAPH_V1 = parseCaseGraphV1(rawGreenlineCase);
+
+export function createGreenlineCaseGraph(): CaseGraphV1 {
+  return structuredClone(GREENLINE_CASE_GRAPH_V1);
+}
