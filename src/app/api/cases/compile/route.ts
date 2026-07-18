@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import OpenAI from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -7,25 +5,28 @@ import { z } from "zod";
 import { readServerEnv } from "@/lib/env";
 import {
   CaseCompilationError,
+  CaseCompilerInputSchema,
   OpenAICaseCompilerProvider,
   compileCasePacket,
 } from "@/server/case-compiler";
 import {
-  CASE_OWNER_COOKIE_MAX_AGE_SECONDS,
   CASE_OWNER_COOKIE_NAME,
   ConvexCaseServiceError,
   buildCaseCompilationReviewReport,
   caseCompilationClientKey,
   caseCompileRateLimiter,
   callConvexCaseService,
-  resolveCaseOwnerSession,
+  deriveCaseCompilationIds,
+  parseCaseCompileRequestId,
   resolveCaseUploadMimeType,
   validateConvexStorageUploadUrl,
+  verifyCaseOwnerSession,
 } from "@/server/case-api";
 import {
   DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
   MAX_CASE_UPLOAD_SIZE_BYTES,
   ingestCaseUpload,
+  sha256Hex,
 } from "@/server/case-ingestion";
 
 export const runtime = "nodejs";
@@ -127,6 +128,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   ) {
     return jsonError(413, "UPLOAD_SIZE_EXCEEDED", "The case packet exceeds the 20 MB upload limit.");
   }
+  let ownerSession;
+  try {
+    ownerSession = verifyCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
+  } catch (error) {
+    console.error("case_session_configuration_failed", {
+      name: error instanceof Error ? error.name : "UnknownError",
+    });
+    return jsonError(503, "CASE_SESSION_UNAVAILABLE", "A secure case session could not be verified.");
+  }
+  if (!ownerSession) {
+    return jsonError(
+      401,
+      "CASE_OWNER_SESSION_REQUIRED",
+      "Establish a secure case session before compiling a packet.",
+    );
+  }
   const rateLimit = caseCompileRateLimiter.check(caseCompilationClientKey(request.headers));
   if (!rateLimit.allowed) {
     return jsonError(
@@ -139,6 +156,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   try {
     const form = await request.formData();
+    const requestId = parseCaseCompileRequestId(form.get("requestId"));
+    if (requestId === null) {
+      return jsonError(400, "CASE_COMPILE_REQUEST_ID_REQUIRED", "A retry-safe compilation request ID is required.");
+    }
     const packet = form.get("packet");
     if (!(packet instanceof File)) {
       return jsonError(400, "UPLOAD_FILE_REQUIRED", "Attach one fictional case packet in the packet field.");
@@ -150,8 +171,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const bytes = new Uint8Array(await packet.arrayBuffer());
     const mimeType = resolveCaseUploadMimeType(packet.name, packet.type, bytes);
-    const uploadId = `upload:${randomUUID()}`;
-    const caseId = `case:${randomUUID()}`;
+    const contentDigest = sha256Hex(bytes);
+    const { uploadId, caseId } = deriveCaseCompilationIds(
+      ownerSession.ownerId,
+      requestId,
+      contentDigest,
+    );
     const ingestion = await ingestCaseUpload(
       {
         uploadId,
@@ -159,10 +184,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         originalName: packet.name,
         mimeType,
         bytes,
+        expectedContentDigest: contentDigest,
       },
       DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
     );
-    const ownerSession = resolveCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
+    const compilerInput = CaseCompilerInputSchema.safeParse({
+      caseId,
+      sourceSegments: ingestion.segments,
+    });
+    if (!compilerInput.success) {
+      return jsonError(
+        422,
+        "CASE_PACKET_COMPILER_LIMIT_EXCEEDED",
+        "The extracted packet is too large for one grounded compilation. Split it into a smaller packet and retry.",
+      );
+    }
     const { uploadUrl } = await callConvexCaseService({
       path: "/service/case-upload-url",
       body: {},
@@ -174,7 +210,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const provider = new OpenAICaseCompilerProvider(new OpenAI({ apiKey: environment.OPENAI_API_KEY }));
     const compilation = await compileCasePacket({
       provider,
-      input: { caseId, sourceSegments: ingestion.segments },
+      input: compilerInput.data,
       signal: request.signal,
     });
     const storageId = await storePacket(uploadUrl, bytes, mimeType, request.signal);
@@ -202,7 +238,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       signal: request.signal,
     });
 
-    const response = NextResponse.json(
+    return NextResponse.json(
       {
         caseGraph: compilation.caseGraph,
         report: buildCaseCompilationReviewReport(compilation, ingestion.injectionFlags),
@@ -216,14 +252,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
       { headers: { "Cache-Control": "no-store" } },
     );
-    response.cookies.set(CASE_OWNER_COOKIE_NAME, ownerSession.cookieValue, {
-      httpOnly: true,
-      maxAge: CASE_OWNER_COOKIE_MAX_AGE_SECONDS,
-      path: "/",
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-    });
-    return response;
   } catch (error) {
     if (error instanceof CaseCompilationError) {
       const providerFailed = error.attempts.length > 0 &&
@@ -258,6 +286,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return jsonError(422, "CASE_BOUNDARY_VALIDATION_FAILED", "The case packet failed strict validation.");
     }
     if (error instanceof Error) {
+      if (error.message === "CASE_COMPILE_REQUEST_ID_INVALID") {
+        return jsonError(400, error.message, "The compilation request ID must be a UUIDv4 value.");
+      }
       const ingestionResponse = ingestionErrorResponse(error);
       if (ingestionResponse) return ingestionResponse;
       if (error.message.includes("OPENAI_API_KEY")) {

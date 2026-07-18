@@ -2,19 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveCaseCompilationIds,
-  deriveCaseOwnerSessionId,
   parseCaseCompileRequestId,
 } from "./idempotency";
 
 const SECRET = "test-only-session-secret-that-is-long-enough";
 const REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
-const OWNER_ID = `owner:${deriveCaseOwnerSessionId(REQUEST_ID, SECRET)}`;
+const OWNER_ID = "owner:0a4661ed-21c4-4609-8d1a-ea70be86af58";
 
 describe("case compile idempotency", () => {
   it("derives stable opaque owner, upload, and case IDs", () => {
-    expect(deriveCaseOwnerSessionId(REQUEST_ID, SECRET)).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    );
     const first = deriveCaseCompilationIds(OWNER_ID, REQUEST_ID, "a".repeat(64), SECRET);
     const replay = deriveCaseCompilationIds(OWNER_ID, REQUEST_ID, "a".repeat(64), SECRET);
     expect(replay).toEqual(first);
@@ -27,7 +23,7 @@ describe("case compile idempotency", () => {
     expect(deriveCaseCompilationIds(OWNER_ID, REQUEST_ID, "b".repeat(64), SECRET)).not.toEqual(baseline);
     expect(
       deriveCaseCompilationIds(
-        `owner:${deriveCaseOwnerSessionId("00000000-0000-4000-8000-000000000000", SECRET)}`,
+        "owner:00000000-0000-4000-8000-000000000000",
         REQUEST_ID,
         "a".repeat(64),
         SECRET,
