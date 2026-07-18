@@ -244,10 +244,10 @@ export function CaseWorkbench() {
               />
             </label>
             <label>
-              Educational disclaimer
+              Educational disclaimer · policy locked
               <textarea
                 maxLength={1_000}
-                onChange={(event) => updateGraph((graph) => ({ ...graph, educationalDisclaimer: event.target.value }))}
+                readOnly
                 rows={3}
                 value={compiled.caseGraph.educationalDisclaimer}
               />
