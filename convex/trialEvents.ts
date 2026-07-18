@@ -4,6 +4,16 @@ import {
   CaseGraphV1Schema,
   type CaseGraphV1,
 } from "../src/domain/case-graph";
+import {
+  CourtroomModelCallTraceSchema,
+  type CourtroomModelCallTrace,
+  type WitnessAnswerModelOutput,
+} from "../src/domain/courtroom-ai";
+import {
+  HearingWitnessGenerationPrecommitSchema,
+  witnessAnswerOutputCitations,
+  type HearingWitnessGenerationPrecommit,
+} from "../src/domain/hearing-runtime/model-boundary";
 import type { TrialPolicyActorBindingInput } from "../src/domain/trial-policy";
 import {
   TRIAL_ACTION_SCHEMA_VERSION_V3,
@@ -30,6 +40,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { persistTerminalCourtroomModelCallForOwner } from "./courtroomModelCalls";
 
 const MAX_JSON_CHARACTERS = 750_000;
 const MAX_REFERENCES_PER_EVENT = 128;
@@ -138,6 +149,164 @@ function canonicalJson(value: unknown): string {
 
 function sameCanonicalJson(left: unknown, right: unknown): boolean {
   return canonicalJson(left) === canonicalJson(right);
+}
+
+function invalidWitnessGeneration(): never {
+  throw new Error("WITNESS_GENERATION_INVALID");
+}
+
+function staleWitnessGeneration(): never {
+  throw new Error("WITNESS_GENERATION_STALE");
+}
+
+function parseWitnessGenerationJson(
+  generationJson: string,
+): HearingWitnessGenerationPrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidWitnessGeneration();
+  }
+  const parsed = HearingWitnessGenerationPrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidWitnessGeneration();
+}
+
+function sameIdentifierSet(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    new Set(left).size === left.length &&
+    new Set(right).size === right.length &&
+    left.every((identifier) => right.includes(identifier))
+  );
+}
+
+const SAFE_WITNESS_DISPOSITION_TEXT: Readonly<
+  Record<
+    Exclude<WitnessAnswerModelOutput["disposition"], "substantive">,
+    string
+  >
+> = Object.freeze({
+  insufficient_knowledge: "I do not know that from my own knowledge.",
+  outside_permitted_scope:
+    "I cannot answer that from my permitted knowledge in this simulation.",
+  cannot_recall: "I do not recall that.",
+  question_unclear: "Could you please clarify the question?",
+});
+
+function materializedWitnessOutputText(
+  output: WitnessAnswerModelOutput,
+): string {
+  if (output.disposition === "substantive") {
+    if (output.segments.length === 0) return invalidWitnessGeneration();
+    return output.segments.map((segment) => segment.text).join(" ");
+  }
+  if (output.segments.length !== 0) return invalidWitnessGeneration();
+  return SAFE_WITNESS_DISPOSITION_TEXT[output.disposition];
+}
+
+type GeneratedWitnessAnswerAction = Extract<
+  TrialActionV3,
+  { type: "ANSWER_QUESTION" }
+>;
+
+function requireGeneratedWitnessAnswerAction(
+  action: TrialActionV3,
+  generation: HearingWitnessGenerationPrecommit,
+): GeneratedWitnessAnswerAction {
+  if (
+    action.type !== "ANSWER_QUESTION" ||
+    action.source !== "ai" ||
+    action.actor.role !== "witness" ||
+    action.actor.witnessId === null ||
+    action.modelMetadata === null
+  ) {
+    return invalidWitnessGeneration();
+  }
+
+  const { trace } = generation;
+  if (
+    action.trialId !== generation.trialId ||
+    action.trialId !== trace.trialId ||
+    action.responseId !== generation.responseId ||
+    action.payload.responseId !== generation.responseId ||
+    action.actor.actorId !== trace.actorId ||
+    action.actor.witnessId !== action.payload.witnessId ||
+    !sameCanonicalJson(action.modelMetadata, generation.modelMetadata)
+  ) {
+    return invalidWitnessGeneration();
+  }
+
+  if (
+    trace.expectedStateVersion === null ||
+    trace.expectedLastEventId === null ||
+    trace.knowledgeScope.stateVersion === null ||
+    action.expectedStateVersion !== trace.expectedStateVersion ||
+    trace.knowledgeScope.stateVersion !== trace.expectedStateVersion ||
+    action.causationId !== trace.expectedLastEventId
+  ) {
+    return staleWitnessGeneration();
+  }
+
+  const outputCitations = witnessAnswerOutputCitations(generation.output);
+  if (
+    action.payload.text !== materializedWitnessOutputText(generation.output) ||
+    !sameIdentifierSet(action.payload.factIds, outputCitations.factIds) ||
+    !sameIdentifierSet(
+      action.payload.evidenceIds,
+      outputCitations.evidenceIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.factIds,
+      trace.acceptedCitations.factIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.evidenceIds,
+      trace.acceptedCitations.evidenceIds,
+    )
+  ) {
+    return invalidWitnessGeneration();
+  }
+
+  return action;
+}
+
+async function requireStoredGeneratedWitnessEvent(
+  ctx: MutationCtx,
+  input: Readonly<{
+    action: GeneratedWitnessAnswerAction;
+    eventId: string;
+    trace: CourtroomModelCallTrace;
+  }>,
+): Promise<void> {
+  const event = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) => index.eq("eventId", input.eventId))
+    .unique();
+  if (
+    !event ||
+    event.actionId !== input.action.actionId ||
+    event.trialId !== input.action.trialId ||
+    event.eventType !== "ANSWER_QUESTION" ||
+    event.source !== "ai" ||
+    event.actorId !== input.action.actor.actorId ||
+    event.responseId !== input.action.responseId ||
+    !sameIdentifierSet(event.factIds, input.action.payload.factIds) ||
+    !sameIdentifierSet(event.evidenceIds, input.action.payload.evidenceIds) ||
+    !sameIdentifierSet(
+      event.factIds,
+      input.trace.acceptedCitations.factIds,
+    ) ||
+    !sameIdentifierSet(
+      event.evidenceIds,
+      input.trace.acceptedCitations.evidenceIds,
+    )
+  ) {
+    return invalidWitnessGeneration();
+  }
 }
 
 async function requirePublishedGraph(
@@ -918,6 +1087,78 @@ export const appendTrustedForOwner = internalMutation({
       writeSnapshot: args.writeSnapshot,
       playerControlledOnly: false,
     });
+  },
+});
+
+/**
+ * Atomically commits one accepted AI witness answer and its redacted model
+ * call audit. Any generation mismatch or trace conflict aborts the entire
+ * mutation, including the event, projection, receipt, and optional snapshot.
+ */
+export const appendGeneratedForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+    generationJson: v.string(),
+    writeSnapshot: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInput: unknown;
+    try {
+      actionInput = parseJsonObject(args.actionJson, "actionJson");
+    } catch {
+      return invalidWitnessGeneration();
+    }
+    const parsedAction = TrialActionV3Schema.safeParse(actionInput);
+    if (!parsedAction.success) return invalidWitnessGeneration();
+    const generation = parseWitnessGenerationJson(args.generationJson);
+    const action = requireGeneratedWitnessAnswerAction(
+      parsedAction.data,
+      generation,
+    );
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", action.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+
+    const receipt = await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
+      projection,
+      writeSnapshot: args.writeSnapshot,
+      playerControlledOnly: false,
+    });
+    const committedEventId = receipt.eventIds[0];
+    if (
+      receipt.eventIds.length !== 1 ||
+      committedEventId === undefined ||
+      receipt.actionId !== action.actionId ||
+      receipt.trialId !== action.trialId
+    ) {
+      return invalidWitnessGeneration();
+    }
+    await requireStoredGeneratedWitnessEvent(ctx, {
+      action,
+      eventId: committedEventId,
+      trace: generation.trace,
+    });
+
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: action.actionId,
+      committedEventId,
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return receipt;
   },
 });
 
