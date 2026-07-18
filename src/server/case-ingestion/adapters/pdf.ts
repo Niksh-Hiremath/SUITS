@@ -119,18 +119,25 @@ export const PDF_EXTRACTION_ADAPTER: DocumentExtractionAdapter = Object.freeze({
       }
       if (info.total <= 0) throw new DocumentExtractionError("UPLOAD_CONTENT_EMPTY");
 
-      const result = await runPdfOperation(
-        () => parser.getText(),
-        deadline,
-        destroy,
-        "UPLOAD_PDF_EXTRACTION_TIMEOUT",
-      );
-      const blocks: ExtractedBlock[] = result.pages.flatMap((page) => {
-        const text = normalizeExtractedText(page.text);
-        return text.length === 0
-          ? []
-          : [{ text, pageNumber: page.num, label: `Page ${page.num}` }];
-      });
+      const blocks: ExtractedBlock[] = [];
+      let extractedCharacters = 0;
+      for (let pageNumber = 1; pageNumber <= info.total; pageNumber += 1) {
+        const result = await runPdfOperation(
+          () => parser.getText({ partial: [pageNumber] }),
+          deadline,
+          destroy,
+          "UPLOAD_PDF_EXTRACTION_TIMEOUT",
+        );
+        for (const page of result.pages) {
+          const text = normalizeExtractedText(page.text);
+          if (text.length === 0) continue;
+          extractedCharacters += text.length + (blocks.length === 0 ? 0 : 2);
+          if (extractedCharacters > input.maximumCharacters) {
+            throw new DocumentExtractionError("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
+          }
+          blocks.push({ text, pageNumber: page.num, label: `Page ${page.num}` });
+        }
+      }
       document = ExtractedDocumentSchema.parse({
         adapterId: PDF_EXTRACTION_ADAPTER_ID,
         mimeType: input.mimeType,

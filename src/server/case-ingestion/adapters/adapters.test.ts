@@ -253,6 +253,16 @@ describe("production document extraction adapters", () => {
         maximumCharacters: 12,
       }),
     ).rejects.toThrow("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
+
+    const pdf = createPdf(["Short first page.", "This second page crosses the extraction budget."]);
+    await expect(
+      PDF_EXTRACTION_ADAPTER.extract({
+        bytes: pdf,
+        originalName: "large.pdf",
+        mimeType: "application/pdf",
+        maximumCharacters: 30,
+      }),
+    ).rejects.toThrow("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
   });
 
   it("rejects a PDF above the page cap before page text extraction", async () => {
