@@ -143,10 +143,11 @@ describe("case compile claim acquisition", () => {
       30_000 + CASE_COMPILE_CLAIM_LEASE_TTL_MS,
     );
 
-    expect(transition.quotaRequired).toBe(false);
+    expect(transition.quotaRequired).toBe(true);
     expect(transition.persistence).toBe("patch");
     expect(transition.claim.generation).toBe(2);
     expect(transition.claim.leaseToken).toBe(LEASE_B);
+    expect(transition.claim.quotaConsumedAt).toBe(30_000 + CASE_COMPILE_CLAIM_LEASE_TTL_MS);
     expect(transition.response).toMatchObject({ outcome: "acquired", acquisition: "takeover" });
   });
 
@@ -215,8 +216,9 @@ describe("case compile claim fencing", () => {
       request({ leaseToken: LEASE_B }),
       70_000,
     );
-    expect(reacquired.quotaRequired).toBe(false);
+    expect(reacquired.quotaRequired).toBe(true);
     expect(reacquired.claim.generation).toBe(2);
+    expect(reacquired.claim.quotaConsumedAt).toBe(70_000);
     expect(reacquired.response).toMatchObject({ outcome: "acquired", acquisition: "retry" });
   });
 

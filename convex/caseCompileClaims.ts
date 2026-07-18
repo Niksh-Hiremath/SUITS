@@ -322,7 +322,11 @@ function activeLease(
     now < claim.leaseExpiresAt;
 }
 
-/** Pure acquisition transition. Only the insert branch requires a quota permit. */
+/**
+ * Pure acquisition transition. Every new generation that may invoke the
+ * compiler requires a quota permit; idempotent, busy, terminal, and completed
+ * decisions do not.
+ */
 export async function evaluateCaseCompileClaim(
   existingInput: unknown | null,
   requestInput: unknown,
@@ -411,10 +415,11 @@ export async function evaluateCaseCompileClaim(
     lastHeartbeatAt: now,
     failureCode: null,
     completedAt: null,
+    quotaConsumedAt: now,
     updatedAt: now,
   });
   return {
-    quotaRequired: false,
+    quotaRequired: true,
     persistence: "patch",
     claim,
     response: acquiredResponse(claim, acquisition),
@@ -669,7 +674,7 @@ async function persistClaim(
   await ctx.db.patch(existing._id, claim);
 }
 
-async function consumeNewClaimQuota(
+async function consumeCompileGenerationQuota(
   ctx: MutationCtx,
   clientKeyHash: string,
   now: number,
@@ -729,7 +734,7 @@ export const acquire = internalMutation({
 
     const evaluation = await evaluateCaseCompileClaim(existing, request, now);
     if (evaluation.quotaRequired) {
-      const permit = await consumeNewClaimQuota(ctx, request.clientKeyHash, now);
+      const permit = await consumeCompileGenerationQuota(ctx, request.clientKeyHash, now);
       if (!permit.allowed) {
         return AcquireCaseCompileClaimResponseSchema.parse({
           outcome: "quota_exceeded",
