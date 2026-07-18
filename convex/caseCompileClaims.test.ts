@@ -245,6 +245,7 @@ describe("case compile claim fencing", () => {
     const completeRequest = CompleteCaseCompileClaimRequestSchema.parse(await fence(claim));
     const completed = await evaluateCaseCompileCompletion(claim, completeRequest, 105_000);
     expect(completed.claim.status).toBe("completed");
+    expect(completed.claim.leaseToken).toBeNull();
     expect(completed.claim.completedAt).toBe(105_000);
     expect(completed.response).toEqual({
       outcome: "completed",

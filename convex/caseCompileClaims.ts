@@ -523,6 +523,7 @@ export async function evaluateCaseCompileCompletion(
   const claim = CaseCompileClaimStateSchema.parse({
     ...existing,
     status: "completed",
+    leaseToken: null,
     leaseExpiresAt: null,
     failureCode: null,
     completedAt: now,
@@ -632,6 +633,7 @@ function completedReplayClaim(
     return CaseCompileClaimStateSchema.parse({
       ...existing,
       status: "completed",
+      leaseToken: null,
       leaseExpiresAt: null,
       failureCode: null,
       completedAt: existing.completedAt ?? now,
