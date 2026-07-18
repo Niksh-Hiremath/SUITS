@@ -13,6 +13,7 @@ import {
 import type { CaseGraph } from "@/domain/case-graph";
 
 import { CaseGraphReviewEditor } from "./case-graph-review-editor";
+import { CaseSourceReview } from "./case-source-review";
 import styles from "./case-workbench.module.css";
 
 type WorkbenchStage = "select" | "compiling" | "review" | "publishing" | "published" | "error";
@@ -244,6 +245,8 @@ export function CaseWorkbench() {
               graph={compiled.caseGraph}
               onChange={(caseGraph) => setCompiled((current) => current ? { ...current, caseGraph } : current)}
             />
+
+            <CaseSourceReview caseGraph={compiled.caseGraph} />
 
             {error && <p className={styles.error} role="alert">{error}</p>}
             <div className={styles.actions}>
