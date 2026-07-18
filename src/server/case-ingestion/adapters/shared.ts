@@ -1,9 +1,51 @@
+import { performance } from "node:perf_hooks";
+
 import type { ExtractedBlock } from "../schema";
+
+export const MAX_DOCUMENT_EXTRACTION_DURATION_MS = 30_000;
 
 export class DocumentExtractionError extends Error {
   constructor(code: string, cause?: unknown) {
     super(code, cause === undefined ? undefined : { cause });
     this.name = "DocumentExtractionError";
+  }
+}
+
+export class ExtractionDeadline {
+  readonly #signal: AbortSignal | undefined;
+  readonly #startedAt: number;
+  readonly #timeoutMilliseconds: number;
+
+  constructor(signal?: AbortSignal, timeoutMilliseconds?: number) {
+    if (
+      timeoutMilliseconds !== undefined &&
+      (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0)
+    ) {
+      throw new DocumentExtractionError("UPLOAD_EXTRACTION_TIMEOUT_INVALID");
+    }
+    this.#signal = signal;
+    this.#startedAt = performance.now();
+    this.#timeoutMilliseconds = Math.min(
+      timeoutMilliseconds ?? MAX_DOCUMENT_EXTRACTION_DURATION_MS,
+      MAX_DOCUMENT_EXTRACTION_DURATION_MS,
+    );
+  }
+
+  get signal(): AbortSignal | undefined {
+    return this.#signal;
+  }
+
+  remainingMilliseconds(): number {
+    return Math.max(0, this.#timeoutMilliseconds - (performance.now() - this.#startedAt));
+  }
+
+  throwIfUnavailable(timeoutCode: string): void {
+    if (this.#signal?.aborted) {
+      throw new DocumentExtractionError("UPLOAD_EXTRACTION_CANCELLED", this.#signal.reason);
+    }
+    if (this.remainingMilliseconds() <= 0) {
+      throw new DocumentExtractionError(timeoutCode);
+    }
   }
 }
 

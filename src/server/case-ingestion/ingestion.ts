@@ -28,6 +28,8 @@ export type BinaryExtractionInput = {
   originalName: string;
   mimeType: BinaryCaseUploadMimeType;
   maximumCharacters: number;
+  signal?: AbortSignal;
+  timeoutMilliseconds?: number;
 };
 
 export interface DocumentExtractionAdapter {
@@ -43,6 +45,7 @@ export type IngestCaseUploadInput = {
   mimeType: string;
   bytes: Uint8Array;
   expectedContentDigest?: string;
+  signal?: AbortSignal;
 };
 
 export type CaseIngestionResult = {
@@ -167,6 +170,7 @@ async function extractBinaryDocument(
   originalName: string,
   mimeType: BinaryCaseUploadMimeType,
   adapters: readonly DocumentExtractionAdapter[],
+  signal?: AbortSignal,
 ): Promise<ExtractedDocument> {
   const adapter = adapters.find((candidate) => candidate.supportedMimeTypes.includes(mimeType));
   if (!adapter) throw new Error("UPLOAD_EXTRACTION_ADAPTER_UNAVAILABLE");
@@ -176,6 +180,7 @@ async function extractBinaryDocument(
       originalName,
       mimeType,
       maximumCharacters: MAX_EXTRACTED_CHARACTERS,
+      signal,
     }),
   );
   if (document.adapterId !== adapter.adapterId || document.mimeType !== mimeType) {
@@ -284,6 +289,7 @@ export async function ingestCaseUpload(
       upload.originalName,
       upload.mimeType,
       adapters,
+      input.signal,
     );
   } else {
     throw new Error("UPLOAD_MIME_TYPE_UNSUPPORTED");
