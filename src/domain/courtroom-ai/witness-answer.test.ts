@@ -258,6 +258,73 @@ describe("witness answer contracts", () => {
     ).toContain("response_not_pending");
   });
 
+  it("reports every material request-to-view binding mismatch before generation", () => {
+    const { request, state } = createPendingWitnessRequest();
+    const mutations: Array<{
+      code: ReturnType<typeof validateWitnessAnswerRequestBinding>[number]["code"];
+      mutate: (candidate: WitnessAnswerRequest) => void;
+    }> = [
+      {
+        code: "trial_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.knowledgeView.trialId = "trial:wrong-binding";
+        },
+      },
+      {
+        code: "head_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.expectedLastEventId = "event:wrong-head";
+        },
+      },
+      {
+        code: "actor_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.actorId = "actor:wrong-witness";
+        },
+      },
+      {
+        code: "witness_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.witnessId = "witness:wrong";
+        },
+      },
+      {
+        code: "response_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.responseId = "response:wrong";
+        },
+      },
+      {
+        code: "question_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.question.text = "A different question";
+        },
+      },
+      {
+        code: "exchange_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.knowledgeView.currentExchange = null;
+        },
+      },
+      {
+        code: "presented_evidence_binding_mismatch",
+        mutate: (candidate) => {
+          candidate.question.presentedEvidenceIds = [];
+        },
+      },
+    ];
+
+    for (const scenario of mutations) {
+      const candidate = structuredClone(request);
+      scenario.mutate(candidate);
+      expect(
+        validateWitnessAnswerRequestBinding(candidate, state).map(
+          (entry) => entry.code,
+        ),
+      ).toContain(scenario.code);
+    }
+  });
+
   it("accepts grounded segments and materializes stable action-safe fields", () => {
     const { request } = createPendingWitnessRequest();
     const output = substantiveOutput(request);
