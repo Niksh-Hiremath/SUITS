@@ -1,0 +1,165 @@
+import { httpRouter, makeFunctionReference } from "convex/server";
+
+import { httpAction } from "./_generated/server";
+import {
+  PublishCaseDraftRequestSchema,
+  RegisterCaseDraftRequestSchema,
+  CaseServiceUploadUrlRequestSchema,
+  authorizeCaseServiceRequest,
+  caseServiceErrorResponse,
+  caseServiceJson,
+  deriveDraftGraphId,
+  derivePublishedGraphId,
+  parseCaseServiceJson,
+  verifyRegisterCaseDraftIntegrity,
+} from "./caseServiceBoundary";
+
+type RegisterDraftMutationArgs = {
+  ownerId: string;
+  uploadId: string;
+  caseId: string;
+  draftGraphId: string;
+  storageId: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentDigest: string;
+  extractionAdapterId: string;
+  extractionCharacterCount: number;
+  injectionFlags: Array<{
+    patternId: "instruction_override" | "role_impersonation" | "tool_invocation" | "secret_exfiltration" | "safety_bypass";
+    severity: "low" | "medium" | "high";
+    startOffset: number;
+    endOffset: number;
+    fingerprint: string;
+  }>;
+  sourceSegmentsJson: string;
+  caseGraphJson: string;
+  validationReportJson: string;
+  observabilityJson: string;
+};
+
+type RegisterDraftMutationResult = {
+  uploadId: string;
+  caseId: string;
+  version: number;
+  status: "indexed";
+  replayed: boolean;
+};
+
+type PublishDraftMutationArgs = {
+  ownerId: string;
+  uploadId: string;
+  draftGraphId: string;
+  publishedGraphId: string;
+  caseGraphJson: string;
+};
+
+type PublishDraftMutationResult = {
+  caseId: string;
+  version: number;
+  published: boolean;
+  replayed: boolean;
+};
+
+const generateUploadUrlReference = makeFunctionReference<
+  "mutation",
+  Record<string, never>,
+  string
+>("caseUploads:generateServiceUploadUrl");
+const registerDraftReference = makeFunctionReference<
+  "mutation",
+  RegisterDraftMutationArgs,
+  RegisterDraftMutationResult
+>("caseDrafts:registerCompiledDraft");
+const publishDraftReference = makeFunctionReference<
+  "mutation",
+  PublishDraftMutationArgs,
+  PublishDraftMutationResult
+>("caseDrafts:publishCompiledDraft");
+
+const generateUploadUrl = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    await parseCaseServiceJson(request, CaseServiceUploadUrlRequestSchema);
+    const uploadUrl = await ctx.runMutation(generateUploadUrlReference, {});
+    return caseServiceJson({ uploadUrl });
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const registerDraft = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const parsed = await parseCaseServiceJson(request, RegisterCaseDraftRequestSchema);
+    const body = await verifyRegisterCaseDraftIntegrity(parsed);
+    const draftGraphId = await deriveDraftGraphId(body.uploadId);
+    const result = await ctx.runMutation(registerDraftReference, {
+      ownerId: body.ownerId,
+      uploadId: body.uploadId,
+      caseId: body.caseId,
+      draftGraphId,
+      storageId: body.storageId,
+      originalName: body.originalName,
+      mimeType: body.mimeType,
+      sizeBytes: body.sizeBytes,
+      contentDigest: body.contentDigest,
+      extractionAdapterId: body.extractionAdapterId,
+      extractionCharacterCount: body.extractionCharacterCount,
+      injectionFlags: body.injectionFlags,
+      sourceSegmentsJson: JSON.stringify(body.sourceSegments),
+      caseGraphJson: JSON.stringify(body.caseGraph),
+      validationReportJson: JSON.stringify(body.validationReport),
+      observabilityJson: JSON.stringify(body.observability),
+    });
+    return caseServiceJson(
+      {
+        uploadId: result.uploadId,
+        caseId: result.caseId,
+        version: result.version,
+        status: result.status,
+      },
+      result.replayed ? 200 : 201,
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const publishDraft = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, PublishCaseDraftRequestSchema);
+    const [draftGraphId, publishedGraphId] = await Promise.all([
+      deriveDraftGraphId(body.uploadId),
+      derivePublishedGraphId(body.ownerId, body.uploadId),
+    ]);
+    const result = await ctx.runMutation(publishDraftReference, {
+      ownerId: body.ownerId,
+      uploadId: body.uploadId,
+      draftGraphId,
+      publishedGraphId,
+      caseGraphJson: JSON.stringify(body.caseGraph),
+    });
+    return caseServiceJson(
+      {
+        caseId: result.caseId,
+        version: result.version,
+        published: result.published,
+        replayed: result.replayed,
+      },
+      result.replayed ? 200 : 201,
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const http = httpRouter();
+
+http.route({ path: "/service/case-upload-url", method: "POST", handler: generateUploadUrl });
+http.route({ path: "/service/case-draft/register", method: "POST", handler: registerDraft });
+http.route({ path: "/service/case-draft/publish", method: "POST", handler: publishDraft });
+
+export default http;

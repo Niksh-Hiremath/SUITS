@@ -109,6 +109,16 @@ export const generateUploadUrl = mutation({
   },
 });
 
+/**
+ * Server-only upload URL generation for the unauthenticated Next.js case flow.
+ * The public HTTP boundary authenticates the service secret before invoking
+ * this internal mutation; no credential is accepted as a Convex function arg.
+ */
+export const generateServiceUploadUrl = internalMutation({
+  args: {},
+  handler: async (ctx) => await ctx.storage.generateUploadUrl(),
+});
+
 export const registerStoredUpload = mutation({
   args: {
     caseId: v.string(),
