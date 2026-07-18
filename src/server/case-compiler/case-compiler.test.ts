@@ -227,6 +227,7 @@ describe("injection-resistant prompt framing", () => {
       { type: "output", output: invalid },
       { type: "output", output: valid },
     ]);
+    const retryDelays: number[] = [];
 
     const result = await compileCasePacket({
       provider,
@@ -234,6 +235,9 @@ describe("injection-resistant prompt framing", () => {
       maxAttempts: 2,
       clock: fixedClock,
       monotonicNow: monotonicCounter(),
+      sleeper: async (delayMs) => {
+        retryDelays.push(delayMs);
+      },
     });
 
     expect(result.caseGraph.status).toBe("draft");
@@ -249,6 +253,7 @@ describe("injection-resistant prompt framing", () => {
       "validation_failed",
       "accepted",
     ]);
+    expect(retryDelays).toEqual([]);
   });
 });
 
@@ -388,9 +393,11 @@ describe("bounded provider and repair behavior", () => {
         code: "temporary_transport_error",
         message: secretLikeMessage,
         retryable: true,
+        retryAfterMs: 2_500,
       },
       { type: "output", output: valid },
     ]);
+    const retryDelays: number[] = [];
 
     const result = await compileCasePacket({
       provider,
@@ -398,12 +405,79 @@ describe("bounded provider and repair behavior", () => {
       maxAttempts: 2,
       clock: fixedClock,
       monotonicNow: monotonicCounter(),
+      sleeper: async (delayMs) => {
+        retryDelays.push(delayMs);
+      },
     });
 
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[1].prompt.developerContext).toContain("provider_request_failed");
     expect(provider.requests[1].prompt.developerContext).not.toContain(secretLikeMessage);
     expect(result.observability.attempts[0].outcome).toBe("provider_failed");
+    expect(result.observability.attempts[0].validationIssueCodes).toContain("temporary_transport_error");
     expect(result.observability.attempts[1].outcome).toBe("accepted");
+    expect(retryDelays).toEqual([2_500]);
+  });
+
+  it("uses bounded exponential delays for repeated retryable provider failures", async () => {
+    const input = createInput();
+    const valid = createModelOutput(input);
+    const provider = new DeterministicCaseCompilerProvider([
+      {
+        type: "error",
+        code: "openai_connection_error",
+        message: "Connection unavailable",
+        retryable: true,
+      },
+      {
+        type: "error",
+        code: "openai_server_error",
+        message: "Server unavailable",
+        retryable: true,
+      },
+      { type: "output", output: valid },
+    ]);
+    const retryDelays: number[] = [];
+
+    const result = await compileCasePacket({
+      provider,
+      input,
+      maxAttempts: 3,
+      clock: fixedClock,
+      monotonicNow: monotonicCounter(),
+      sleeper: async (delayMs) => {
+        retryDelays.push(delayMs);
+      },
+    });
+
+    expect(result.observability.retryCount).toBe(2);
+    expect(retryDelays).toEqual([500, 1_000]);
+  });
+
+  it("does not delay or retry a non-retryable provider configuration error", async () => {
+    const input = createInput();
+    const provider = new DeterministicCaseCompilerProvider([
+      {
+        type: "error",
+        code: "openai_configuration_error",
+        message: "Sensitive configuration detail",
+        retryable: false,
+      },
+    ]);
+    const retryDelays: number[] = [];
+
+    await expect(compileCasePacket({
+      provider,
+      input,
+      maxAttempts: 3,
+      clock: fixedClock,
+      monotonicNow: monotonicCounter(),
+      sleeper: async (delayMs) => {
+        retryDelays.push(delayMs);
+      },
+    })).rejects.toBeInstanceOf(CaseCompilationError);
+
+    expect(provider.requests).toHaveLength(1);
+    expect(retryDelays).toEqual([]);
   });
 });

@@ -1,10 +1,12 @@
 import {
+  BASE_CASE_COMPILER_RETRY_DELAY_MS,
   CASE_COMPILER_MODEL,
   CASE_COMPILER_OUTPUT_SCHEMA_VERSION,
   CASE_COMPILER_PROMPT_VERSION,
   CASE_COMPILER_PROVIDER_PROTOCOL_VERSION,
   DEFAULT_CASE_COMPILER_ATTEMPTS,
   MAX_CASE_COMPILER_ATTEMPTS,
+  MAX_CASE_COMPILER_RETRY_DELAY_MS,
 } from "./constants";
 import { buildCaseCompilerPrompt, computeSourceContentHash, type CaseCompilerPromptContext } from "./prompt";
 import {
@@ -26,6 +28,11 @@ import {
 } from "./schemas";
 import { validateCaseCompilerCandidate } from "./validation";
 
+export type CaseCompilerSleeper = (
+  delayMs: number,
+  signal: AbortSignal | undefined,
+) => Promise<void>;
+
 export type CompileCasePacketOptions = Readonly<{
   provider: CaseCompilerProvider;
   input: unknown;
@@ -34,6 +41,7 @@ export type CompileCasePacketOptions = Readonly<{
   onStreamEvent?: (event: CaseCompilerStreamEvent) => void;
   clock?: () => Date;
   monotonicNow?: () => number;
+  sleeper?: CaseCompilerSleeper;
 }>;
 
 export type RepairCaseCompilationOptions = Readonly<{
@@ -79,6 +87,41 @@ function parseMaxAttempts(value: number | undefined): number {
     );
   }
   return attempts;
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("Case compilation was cancelled");
+}
+
+async function defaultSleeper(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) throw abortError(signal);
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal ? abortError(signal) : new Error("Case compilation was cancelled"));
+    };
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+function retryDelayMs(attempt: number, retryAfterMs: number | null): number {
+  const exponentialDelay = Math.min(
+    MAX_CASE_COMPILER_RETRY_DELAY_MS,
+    BASE_CASE_COMPILER_RETRY_DELAY_MS * (2 ** (attempt - 1)),
+  );
+  const requestedDelay = retryAfterMs !== null && Number.isFinite(retryAfterMs)
+    ? Math.max(0, retryAfterMs)
+    : 0;
+  return Math.min(
+    MAX_CASE_COMPILER_RETRY_DELAY_MS,
+    Math.ceil(Math.max(exponentialDelay, requestedDelay)),
+  );
 }
 
 function providerFailureIssue(code: string): CaseCompilerValidationIssue {
@@ -166,6 +209,7 @@ export async function compileCasePacket(options: CompileCasePacketOptions): Prom
   const maxAttempts = parseMaxAttempts(options.maxAttempts);
   const clock = options.clock ?? (() => new Date());
   const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  const sleeper = options.sleeper ?? defaultSleeper;
   const startedMonotonic = monotonicNow();
   const startedAt = clock().toISOString();
   const compiledAt = startedAt;
@@ -221,7 +265,7 @@ export async function compileCasePacket(options: CompileCasePacketOptions): Prom
         streamEventCount: 0,
         streamedCharacterCount: 0,
         usage: null,
-        validationIssueCodes: ["provider_request_failed"],
+        validationIssueCodes: ["provider_request_failed", code],
       });
       validationIssues = [providerFailureIssue(code)];
       rejectedOutput = undefined;
@@ -232,6 +276,24 @@ export async function compileCasePacket(options: CompileCasePacketOptions): Prom
           lastValidationReport,
           attempts,
           { cause: error },
+        );
+      }
+      try {
+        await sleeper(retryDelayMs(attempt, providerError.retryAfterMs), options.signal);
+      } catch (sleepError) {
+        if (options.signal?.aborted) {
+          throw new CaseCompilationError(
+            "Case compilation was cancelled",
+            lastValidationReport,
+            attempts,
+            { cause: sleepError },
+          );
+        }
+        throw new CaseCompilationError(
+          "Case compiler retry delay failed",
+          lastValidationReport,
+          attempts,
+          { cause: sleepError },
         );
       }
       continue;

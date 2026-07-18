@@ -15,7 +15,13 @@ export type DeterministicCaseCompilerOutputFactory = (
 
 export type DeterministicCaseCompilerStep =
   | Readonly<{ type: "output"; output: unknown | DeterministicCaseCompilerOutputFactory }>
-  | Readonly<{ type: "error"; code: string; message: string; retryable: boolean }>;
+  | Readonly<{
+      type: "error";
+      code: string;
+      message: string;
+      retryable: boolean;
+      retryAfterMs?: number | null;
+    }>;
 
 function approximateTokens(value: string): number {
   return Math.max(1, Math.ceil(value.length / 4));
@@ -48,7 +54,9 @@ export class DeterministicCaseCompilerProvider implements CaseCompilerProvider {
 
     if (step.type === "error") {
       request.onStreamEvent?.({ type: "response_failed", code: step.code });
-      throw new CaseCompilerProviderError(step.code, step.message, step.retryable);
+      throw new CaseCompilerProviderError(step.code, step.message, step.retryable, {
+        retryAfterMs: step.retryAfterMs ?? null,
+      });
     }
 
     const output =
