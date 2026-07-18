@@ -41,7 +41,56 @@ function isoLocalValue(value: string): string {
   return shifted.toISOString().slice(0, 16);
 }
 
+function contradictionEndpointKey(endpoint: CaseGraph["contradictions"][number]["left"]): string {
+  if (endpoint.kind === "fact") return `fact:${endpoint.factId}`;
+  if (endpoint.kind === "evidence") return `evidence:${endpoint.evidenceId}`;
+  if (endpoint.kind === "prior_statement") return `prior_statement:${endpoint.priorStatementId}`;
+  return `timeline_event:${endpoint.timelineEventId}`;
+}
+
+function contradictionEndpointOptions(graph: CaseGraph): Array<{
+  key: string;
+  label: string;
+  endpoint: CaseGraph["contradictions"][number]["left"];
+}> {
+  return [
+    ...graph.facts.map((fact) => ({
+      key: `fact:${fact.factId}`,
+      label: `Fact · ${fact.proposition}`,
+      endpoint: { kind: "fact" as const, factId: fact.factId },
+    })),
+    ...graph.evidence.map((evidence) => ({
+      key: `evidence:${evidence.evidenceId}`,
+      label: `Evidence · ${evidence.name}`,
+      endpoint: { kind: "evidence" as const, evidenceId: evidence.evidenceId },
+    })),
+    ...graph.witnesses.flatMap((witness) => witness.priorStatements.map((statement) => ({
+      key: `prior_statement:${statement.priorStatementId}`,
+      label: `Prior statement · ${witness.name} · ${statement.text}`,
+      endpoint: { kind: "prior_statement" as const, priorStatementId: statement.priorStatementId },
+    }))),
+    ...graph.timeline.map((timelineEvent) => ({
+      key: `timeline_event:${timelineEvent.timelineEventId}`,
+      label: `Timeline · ${timelineEvent.summary}`,
+      endpoint: { kind: "timeline_event" as const, timelineEventId: timelineEvent.timelineEventId },
+    })),
+  ];
+}
+
 export function CaseGraphReviewEditor({ graph, onChange }: Props) {
+  const endpointOptions = contradictionEndpointOptions(graph);
+
+  function updateContradiction(
+    contradictionId: string,
+    update: (contradiction: CaseGraph["contradictions"][number]) => CaseGraph["contradictions"][number],
+  ) {
+    onChange({
+      ...graph,
+      contradictions: graph.contradictions.map((contradiction) =>
+        contradiction.contradictionId === contradictionId ? update(contradiction) : contradiction),
+    });
+  }
+
   function updateWitnessKnowledge(
     witnessId: string,
     list: KnowledgeList,
@@ -195,6 +244,33 @@ export function CaseGraphReviewEditor({ graph, onChange }: Props) {
               <label>Forbidden topics<textarea rows={4} value={witness.knowledgeBoundary.forbiddenTopics.join("\n")} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, knowledgeBoundary: { ...item.knowledgeBoundary, forbiddenTopics: lines(event.target.value) } } : item) })} /></label>
             </div>
             {witness.priorStatements.length > 0 && <><p className={styles.subheading}>Prior statements</p>{witness.priorStatements.map((statement) => <label key={statement.priorStatementId}>{statement.kind} · {statement.priorStatementId}<textarea maxLength={5_000} rows={3} value={statement.text} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, priorStatements: item.priorStatements.map((prior) => prior.priorStatementId === statement.priorStatementId ? { ...prior, text: event.target.value } : prior) } : item) })} /></label>)}</>}
+          </fieldset>
+        ))}
+      </details>
+
+      <details className={styles.reviewDetails} open={graph.contradictions.length > 0}>
+        <summary>Contradictions and impeachment paths <span>{graph.contradictions.length}</span></summary>
+        {graph.contradictions.length === 0 ? (
+          <p className={styles.clearReport}>The compiler did not identify a grounded contradiction.</p>
+        ) : graph.contradictions.map((contradiction) => (
+          <fieldset className={styles.entityEditor} key={contradiction.contradictionId}>
+            <legend>{contradiction.contradictionId}</legend>
+            <div className={styles.editorGrid}>
+              <label className={styles.wideField}>Summary<textarea maxLength={2_000} rows={3} value={contradiction.summary} onChange={(event) => updateContradiction(contradiction.contradictionId, (item) => ({ ...item, summary: event.target.value }))} /></label>
+              <label>Severity<select value={contradiction.severity} onChange={(event) => updateContradiction(contradiction.contradictionId, (item) => ({ ...item, severity: event.target.value as typeof item.severity }))}><option value="minor">Minor</option><option value="material">Material</option><option value="decisive">Decisive</option></select></label>
+              <label>Left record<select value={contradictionEndpointKey(contradiction.left)} onChange={(event) => {
+                const endpoint = endpointOptions.find((option) => option.key === event.target.value)?.endpoint;
+                if (endpoint) updateContradiction(contradiction.contradictionId, (item) => ({ ...item, left: endpoint }));
+              }}>{endpointOptions.filter((option) => option.key !== contradictionEndpointKey(contradiction.right)).map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+              <label>Right record<select value={contradictionEndpointKey(contradiction.right)} onChange={(event) => {
+                const endpoint = endpointOptions.find((option) => option.key === event.target.value)?.endpoint;
+                if (endpoint) updateContradiction(contradiction.contradictionId, (item) => ({ ...item, right: endpoint }));
+              }}>{endpointOptions.filter((option) => option.key !== contradictionEndpointKey(contradiction.left)).map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+            </div>
+            <p className={styles.subheading}>Related witnesses</p>
+            <div className={styles.choiceGrid}>{graph.witnesses.map((witness) => <label className={styles.choice} key={witness.witnessId}><input checked={contradiction.witnessIds.includes(witness.witnessId)} onChange={(event) => updateContradiction(contradiction.contradictionId, (item) => ({ ...item, witnessIds: toggleId(item.witnessIds, witness.witnessId, event.target.checked) }))} type="checkbox" />{witness.name}</label>)}</div>
+            <p className={styles.subheading}>Related issues</p>
+            <div className={styles.choiceGrid}>{graph.issues.map((issue) => <label className={styles.choice} key={issue.issueId}><input checked={contradiction.relatedIssueIds.includes(issue.issueId)} onChange={(event) => updateContradiction(contradiction.contradictionId, (item) => ({ ...item, relatedIssueIds: toggleId(item.relatedIssueIds, issue.issueId, event.target.checked) }))} type="checkbox" />{issue.title}</label>)}</div>
           </fieldset>
         ))}
       </details>
