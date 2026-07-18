@@ -22,6 +22,10 @@ import {
   parseCaseServiceJson,
   verifyRegisterCaseDraftIntegrity,
 } from "./caseServiceBoundary";
+import {
+  CaseUploadCleanupRequestSchema,
+  CaseUploadCleanupResponseSchema,
+} from "./caseUploadCleanup";
 
 type RegisterDraftMutationArgs = {
   ownerId: string;
@@ -85,6 +89,16 @@ type CaseCompileReplayQueryArgs = {
   uploadId: string;
 };
 
+type CaseUploadCleanupMutationArgs = {
+  ownerId: string;
+  uploadId: string;
+  storageId: string;
+};
+
+type CaseUploadCleanupMutationResult = {
+  deleted: boolean;
+};
+
 const generateUploadUrlReference = makeFunctionReference<
   "mutation",
   Record<string, never>,
@@ -110,6 +124,11 @@ const lookupCaseCompileReplayReference = makeFunctionReference<
   CaseCompileReplayQueryArgs,
   CaseCompileReplayResponse
 >("caseCompileReplay:lookupCompiledDraft");
+const cleanupCaseUploadReference = makeFunctionReference<
+  "mutation",
+  CaseUploadCleanupMutationArgs,
+  CaseUploadCleanupMutationResult
+>("caseUploadCleanup:cleanupOrphanedStorage");
 
 const consumeCaseCompilePermit = httpAction(async (ctx, request) => {
   try {
@@ -128,6 +147,17 @@ const lookupCaseCompileReplay = httpAction(async (ctx, request) => {
     const body = await parseCaseServiceJson(request, CaseCompileReplayRequestSchema);
     const result = await ctx.runQuery(lookupCaseCompileReplayReference, body);
     return caseServiceJson(CaseCompileReplayResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const cleanupCaseUpload = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, CaseUploadCleanupRequestSchema);
+    const result = await ctx.runMutation(cleanupCaseUploadReference, body);
+    return caseServiceJson(CaseUploadCleanupResponseSchema.parse(result));
   } catch (error) {
     return caseServiceErrorResponse(error);
   }
@@ -215,6 +245,7 @@ const http = httpRouter();
 
 http.route({ path: "/service/case-compile-permit", method: "POST", handler: consumeCaseCompilePermit });
 http.route({ path: "/service/case-draft/lookup", method: "POST", handler: lookupCaseCompileReplay });
+http.route({ path: "/service/case-upload/cleanup", method: "POST", handler: cleanupCaseUpload });
 http.route({ path: "/service/case-upload-url", method: "POST", handler: generateUploadUrl });
 http.route({ path: "/service/case-draft/register", method: "POST", handler: registerDraft });
 http.route({ path: "/service/case-draft/publish", method: "POST", handler: publishDraft });

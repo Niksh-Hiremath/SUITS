@@ -356,6 +356,7 @@ export default defineSchema({
     .index("by_upload_record_id", ["uploadRecordId"])
     .index("by_upload_version", ["uploadId", "version"])
     .index("by_case_version", ["caseId", "caseVersion"])
+    .index("by_storage_id", ["storageId"])
     .index("by_owner", ["ownerId"]),
 
   caseCompileQuotas: defineTable({
