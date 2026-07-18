@@ -1,26 +1,48 @@
 import { parseCaseGraphV1, type CaseGraphV1 } from "../case-graph/schema";
-import type { ActorRole, TrialPhase, TrialSide } from "../trial-engine/schemas";
 import {
-  JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
-  JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
-  JudgeTrialPolicyViewSchema,
-  JuryTrialPolicyViewSchema,
+  JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
+  JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V2,
+  JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
+  JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V2,
+  JudgeTrialPolicyViewV1Schema,
+  JudgeTrialPolicyViewV2Schema,
+  JuryTrialPolicyViewV1Schema,
+  JuryTrialPolicyViewV2Schema,
   SettlementAuthorityRequestSchema,
   TrialPolicyActorBindingInputSchema,
-  TrialPolicySnapshotSchema,
-  TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION,
+  TrialPolicySnapshotV1Schema,
+  TrialPolicySnapshotV2Schema,
+  TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V1,
+  TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V2,
   type JudgeTrialPolicyView,
+  type JudgeTrialPolicyViewV1,
+  type JudgeTrialPolicyViewV2,
   type JuryTrialPolicyView,
+  type JuryTrialPolicyViewV1,
+  type JuryTrialPolicyViewV2,
   type SettlementAuthorityRequest,
   type SettlementOpenPhase,
   type SettlementPartyAuthorityRule,
   type TrialPolicyActorBinding,
   type TrialPolicyActorBindingInput,
+  type TrialPolicyActorRole,
   type TrialPolicyObjectionGround,
+  type TrialPolicySide,
   type TrialPolicySnapshot,
+  type TrialPolicySnapshotV1,
+  type TrialPolicySnapshotV2,
 } from "./schema";
 
-const TRIAL_SIDES = ["user", "opposing", "neutral"] as const satisfies readonly TrialSide[];
+export type TrialPolicyPhase =
+  | SettlementOpenPhase
+  | "closing"
+  | "jury_instructions"
+  | "deliberation"
+  | "verdict"
+  | "debrief"
+  | "complete";
+
+const TRIAL_SIDES = ["user", "opposing", "neutral"] as const satisfies readonly TrialPolicySide[];
 
 export const SETTLEMENT_PHASE_SEQUENCE = [
   "pretrial",
@@ -73,7 +95,7 @@ function compareStrings(left: string, right: string): number {
   return 0;
 }
 
-function isCounselRole(role: ActorRole): boolean {
+function isCounselRole(role: TrialPolicyActorRole): boolean {
   return role === "user_counsel" || role === "opposing_counsel";
 }
 
@@ -240,7 +262,7 @@ function actorIdsRepresentingAny(
 function sidesForParties(
   graph: CaseGraphV1,
   partyIds: readonly string[],
-): TrialSide[] {
+): TrialPolicySide[] {
   const included = new Set(partyIds);
   return TRIAL_SIDES.filter((side) =>
     graph.parties.some(
@@ -249,9 +271,9 @@ function sidesForParties(
   );
 }
 
-function proceduralSettlement(
-  policy: TrialPolicySnapshot["settlement"],
-): Omit<TrialPolicySnapshot["settlement"], "partyAuthorities"> {
+function proceduralSettlementV1(
+  policy: TrialPolicySnapshotV1["settlement"],
+): Omit<TrialPolicySnapshotV1["settlement"], "partyAuthorities"> {
   return {
     enabled: policy.enabled,
     currency: policy.currency,
@@ -263,9 +285,29 @@ function proceduralSettlement(
   };
 }
 
-export function createTrialPolicySnapshot(
+function proceduralSettlementV2(
+  policy: TrialPolicySnapshotV2["settlement"],
+): Omit<TrialPolicySnapshotV2["settlement"], "partyAuthorities"> {
+  return {
+    enabled: policy.enabled,
+    currency: policy.currency,
+    opensAtPhase: policy.opensAtPhase,
+    openPhases: [...policy.openPhases],
+    allowCounteroffers: policy.allowCounteroffers,
+    expiresAfterEventCount: policy.expiresAfterEventCount,
+    participantPartyIds: [...policy.participantPartyIds],
+  };
+}
+
+function derivePolicyContext(
   input: CreateTrialPolicySnapshotInput,
-): TrialPolicySnapshot {
+): {
+  graph: CaseGraphV1;
+  actors: TrialPolicyActorBinding[];
+  mappings: TrialPolicySnapshotV1["mappings"];
+  witnessActor: ReadonlyMap<string, string>;
+  openPhases: SettlementOpenPhase[];
+} {
   const graph = parseCaseGraphV1(input.graph);
   const actors = canonicalizeActorBindings(graph, input.actorBindings);
   const witnessActor = new Map(
@@ -323,27 +365,77 @@ export function createTrialPolicySnapshot(
     ? SETTLEMENT_PHASE_SEQUENCE.slice(openPhaseIndex)
     : [];
 
-  return TrialPolicySnapshotSchema.parse({
-    schemaVersion: TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION,
+  return { graph, actors, mappings, witnessActor, openPhases };
+}
+
+function deriveWitnessCallability(
+  graph: CaseGraphV1,
+  actors: readonly TrialPolicyActorBinding[],
+) {
+  return byId(
+    graph.witnesses.map((witness) => ({
+      witnessId: witness.witnessId,
+      alignedPartyId: witness.alignedPartyId,
+      callableByPartyIds: sortedUnique(witness.callableByPartyIds),
+      callableBySides: sidesForParties(graph, witness.callableByPartyIds),
+      callableByActorIds: actorIdsRepresentingAny(
+        actors,
+        witness.callableByPartyIds,
+      ),
+      recallPermitted: true,
+    })),
+    (rule) => rule.witnessId,
+  );
+}
+
+function deriveSettlement(
+  graph: CaseGraphV1,
+  openPhases: readonly SettlementOpenPhase[],
+) {
+  return {
+    enabled: graph.settlement.enabled,
+    currency: graph.settlement.currency,
+    opensAtPhase: graph.settlement.opensAtPhase,
+    openPhases: [...openPhases],
+    allowCounteroffers: graph.settlement.allowCounteroffers,
+    expiresAfterEventCount: graph.settlement.expiresAfterEventCount,
+    participantPartyIds: sortedUnique(
+      graph.settlement.participants.map((position) => position.partyId),
+    ),
+    partyAuthorities: byId(
+      graph.settlement.participants.map((position) => ({
+        partyId: position.partyId,
+        minimumAuthority: position.minimumAuthority,
+        maximumAuthority: position.maximumAuthority,
+        reservationValue: position.reservationValue,
+        targetValue: position.targetValue,
+        confidentialPriorities: [...position.confidentialPriorities].sort(
+          compareStrings,
+        ),
+        permittedNonMonetaryTerms: [
+          ...position.permittedNonMonetaryTerms,
+        ].sort(compareStrings),
+      })),
+      (authority) => authority.partyId,
+    ),
+  };
+}
+
+/** Rebuilds the exact trial-policy-snapshot.v1 contract committed at b0fb9d3. */
+export function createTrialPolicySnapshotV1(
+  input: CreateTrialPolicySnapshotInput,
+): TrialPolicySnapshotV1 {
+  const { graph, actors, mappings, witnessActor, openPhases } =
+    derivePolicyContext(input);
+
+  return TrialPolicySnapshotV1Schema.parse({
+    schemaVersion: TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V1,
     caseId: graph.caseId,
     caseVersion: graph.version,
     jurisdictionProfileId: graph.jurisdictionProfile.profileId,
     jurisdictionRulesVersion: graph.jurisdictionProfile.rulesVersion,
     mappings,
-    witnessCallability: byId(
-      graph.witnesses.map((witness) => ({
-        witnessId: witness.witnessId,
-        alignedPartyId: witness.alignedPartyId,
-        callableByPartyIds: sortedUnique(witness.callableByPartyIds),
-        callableBySides: sidesForParties(graph, witness.callableByPartyIds),
-        callableByActorIds: actorIdsRepresentingAny(
-          actors,
-          witness.callableByPartyIds,
-        ),
-        recallPermitted: true,
-      })),
-      (rule) => rule.witnessId,
-    ),
+    witnessCallability: deriveWitnessCallability(graph, actors),
     evidencePermissions: byId(
       graph.evidence.map((evidence) => ({
         evidenceId: evidence.evidenceId,
@@ -369,38 +461,89 @@ export function createTrialPolicySnapshot(
     permittedObjectionGrounds: sortedUnique(
       graph.jurisdictionProfile.permittedObjectionGrounds,
     ),
-    settlement: {
-      enabled: graph.settlement.enabled,
-      currency: graph.settlement.currency,
-      opensAtPhase: graph.settlement.opensAtPhase,
-      openPhases,
-      allowCounteroffers: graph.settlement.allowCounteroffers,
-      expiresAfterEventCount: graph.settlement.expiresAfterEventCount,
-      participantPartyIds: sortedUnique(
-        graph.settlement.participants.map((position) => position.partyId),
-      ),
-      partyAuthorities: byId(
-        graph.settlement.participants.map((position) => ({
-          partyId: position.partyId,
-          minimumAuthority: position.minimumAuthority,
-          maximumAuthority: position.maximumAuthority,
-          reservationValue: position.reservationValue,
-          targetValue: position.targetValue,
-          confidentialPriorities: [...position.confidentialPriorities].sort(
-            compareStrings,
-          ),
-          permittedNonMonetaryTerms: [
-            ...position.permittedNonMonetaryTerms,
-          ].sort(compareStrings),
-        })),
-        (authority) => authority.partyId,
-      ),
-    },
+    settlement: deriveSettlement(graph, openPhases),
   });
 }
 
+export function createTrialPolicySnapshotV2(
+  input: CreateTrialPolicySnapshotInput,
+): TrialPolicySnapshotV2 {
+  const { graph, actors, mappings, witnessActor, openPhases } =
+    derivePolicyContext(input);
+
+  return TrialPolicySnapshotV2Schema.parse({
+    schemaVersion: TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V2,
+    caseId: graph.caseId,
+    caseVersion: graph.version,
+    jurisdictionProfileId: graph.jurisdictionProfile.profileId,
+    jurisdictionRulesVersion: graph.jurisdictionProfile.rulesVersion,
+    mappings,
+    witnessCallability: deriveWitnessCallability(graph, actors),
+    witnessKnowledge: byId(
+      graph.witnesses.map((witness) => ({
+        witnessId: witness.witnessId,
+        knownFactIds: sortedUnique(
+          witness.knowledgeBoundary.knownFactIds,
+        ),
+        perceivedFactIds: sortedUnique(
+          witness.knowledgeBoundary.perceivedFactIds,
+        ),
+        seenEvidenceIds: sortedUnique(
+          witness.knowledgeBoundary.seenEvidenceIds,
+        ),
+      })),
+      (rule) => rule.witnessId,
+    ),
+    evidencePermissions: byId(
+      graph.evidence.map((evidence) => ({
+        evidenceId: evidence.evidenceId,
+        offerableByPartyIds: sortedUnique(evidence.offeredByPartyIds),
+        offerableBySides: sidesForParties(graph, evidence.offeredByPartyIds),
+        offerableByActorIds: actorIdsRepresentingAny(
+          actors,
+          evidence.offeredByPartyIds,
+        ),
+        custodianWitnessIds: sortedUnique(evidence.custodianWitnessIds),
+        authenticatingWitnessIds: sortedUnique(
+          evidence.authenticatingWitnessIds,
+        ),
+        authenticatingActorIds: sortedUnique(
+          evidence.authenticatingWitnessIds.flatMap((witnessId) => {
+            const actorId = witnessActor.get(witnessId);
+            return actorId ? [actorId] : [];
+          }),
+        ),
+        relatedFactIds: sortedUnique(evidence.relatedFactIds),
+      })),
+      (rule) => rule.evidenceId,
+    ),
+    permittedObjectionGrounds: sortedUnique(
+      graph.jurisdictionProfile.permittedObjectionGrounds,
+    ),
+    settlement: deriveSettlement(graph, openPhases),
+  });
+}
+
+export function createTrialPolicySnapshot(
+  input: CreateTrialPolicySnapshotInput,
+): TrialPolicySnapshot {
+  return createTrialPolicySnapshotV2(input);
+}
+
+export function parseTrialPolicySnapshotV1(
+  input: unknown,
+): TrialPolicySnapshotV1 {
+  return TrialPolicySnapshotV1Schema.parse(input);
+}
+
+export function parseTrialPolicySnapshotV2(
+  input: unknown,
+): TrialPolicySnapshotV2 {
+  return TrialPolicySnapshotV2Schema.parse(input);
+}
+
 export function parseTrialPolicySnapshot(input: unknown): TrialPolicySnapshot {
-  return TrialPolicySnapshotSchema.parse(input);
+  return parseTrialPolicySnapshotV2(input);
 }
 
 export function canActorCallWitness(
@@ -425,6 +568,48 @@ export function canActorRecallWitness(
   );
   return Boolean(
     rule?.recallPermitted && rule.callableByActorIds.includes(actorId),
+  );
+}
+
+/**
+ * Returns whether the pinned CaseGraph permits this witness to testify to the
+ * fact. Known facts include the stricter perceived-fact subset.
+ */
+export function canWitnessRevealFact(
+  snapshot: TrialPolicySnapshot,
+  witnessId: string,
+  factId: string,
+): boolean {
+  return (
+    snapshot.witnessKnowledge
+      .find((rule) => rule.witnessId === witnessId)
+      ?.knownFactIds.includes(factId) ?? false
+  );
+}
+
+/** Returns whether the witness may reference an exhibit they have seen. */
+export function canWitnessReferenceEvidence(
+  snapshot: TrialPolicySnapshot,
+  witnessId: string,
+  evidenceId: string,
+): boolean {
+  return (
+    snapshot.witnessKnowledge
+      .find((rule) => rule.witnessId === witnessId)
+      ?.seenEvidenceIds.includes(evidenceId) ?? false
+  );
+}
+
+/** Returns whether an exhibit is authoring-grounded to the requested fact. */
+export function canEvidenceRevealFact(
+  snapshot: TrialPolicySnapshot,
+  evidenceId: string,
+  factId: string,
+): boolean {
+  return (
+    snapshot.evidencePermissions
+      .find((rule) => rule.evidenceId === evidenceId)
+      ?.relatedFactIds.includes(factId) ?? false
   );
 }
 
@@ -478,7 +663,7 @@ export function canActorRaiseObjection(
 
 export function isSettlementOpenInPhase(
   snapshot: TrialPolicySnapshot,
-  phase: TrialPhase,
+  phase: TrialPolicyPhase,
 ): boolean {
   return (
     snapshot.settlement.enabled &&
@@ -493,19 +678,18 @@ function actorRepresentsSettlementParticipant(
   const actor = snapshot.mappings.actors.find(
     (binding) => binding.actorId === actorId,
   );
-  return Boolean(
-    actor &&
-      isCounselRole(actor.role) &&
-      actor.representedPartyIds.some((partyId) =>
-        snapshot.settlement.participantPartyIds.includes(partyId),
-      ),
+  if (!actor || !isCounselRole(actor.role)) return false;
+  return (
+    actor.representedPartyIds.filter((partyId) =>
+      snapshot.settlement.participantPartyIds.includes(partyId),
+    ).length === 1
   );
 }
 
 export function canActorProposeSettlement(
   snapshot: TrialPolicySnapshot,
   actorId: string,
-  phase: TrialPhase,
+  phase: TrialPolicyPhase,
 ): boolean {
   return (
     isSettlementOpenInPhase(snapshot, phase) &&
@@ -516,7 +700,7 @@ export function canActorProposeSettlement(
 export function canActorCounterSettlement(
   snapshot: TrialPolicySnapshot,
   actorId: string,
-  phase: TrialPhase,
+  phase: TrialPolicyPhase,
 ): boolean {
   return (
     snapshot.settlement.allowCounteroffers &&
@@ -602,12 +786,13 @@ export function canActorAuthorizeSettlement(
   );
 }
 
-export function buildJudgeTrialPolicyView(
-  snapshotInput: TrialPolicySnapshot,
-): JudgeTrialPolicyView {
-  const snapshot = parseTrialPolicySnapshot(snapshotInput);
-  return JudgeTrialPolicyViewSchema.parse({
-    schemaVersion: JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
+/** Builds the exact judge-trial-policy-view.v1 contract from policy v1. */
+export function buildJudgeTrialPolicyViewV1(
+  snapshotInput: TrialPolicySnapshotV1,
+): JudgeTrialPolicyViewV1 {
+  const snapshot = parseTrialPolicySnapshotV1(snapshotInput);
+  return JudgeTrialPolicyViewV1Schema.parse({
+    schemaVersion: JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
     sourcePolicySchemaVersion: snapshot.schemaVersion,
     caseId: snapshot.caseId,
     caseVersion: snapshot.caseVersion,
@@ -617,16 +802,17 @@ export function buildJudgeTrialPolicyView(
     witnessCallability: snapshot.witnessCallability,
     evidencePermissions: snapshot.evidencePermissions,
     permittedObjectionGrounds: snapshot.permittedObjectionGrounds,
-    settlement: proceduralSettlement(snapshot.settlement),
+    settlement: proceduralSettlementV1(snapshot.settlement),
   });
 }
 
-export function buildJuryTrialPolicyView(
-  snapshotInput: TrialPolicySnapshot,
-): JuryTrialPolicyView {
-  const snapshot = parseTrialPolicySnapshot(snapshotInput);
-  return JuryTrialPolicyViewSchema.parse({
-    schemaVersion: JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
+/** Builds the exact jury-trial-policy-view.v1 contract from policy v1. */
+export function buildJuryTrialPolicyViewV1(
+  snapshotInput: TrialPolicySnapshotV1,
+): JuryTrialPolicyViewV1 {
+  const snapshot = parseTrialPolicySnapshotV1(snapshotInput);
+  return JuryTrialPolicyViewV1Schema.parse({
+    schemaVersion: JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
     sourcePolicySchemaVersion: snapshot.schemaVersion,
     caseId: snapshot.caseId,
     caseVersion: snapshot.caseVersion,
@@ -636,10 +822,64 @@ export function buildJuryTrialPolicyView(
   });
 }
 
+export function buildJudgeTrialPolicyViewV2(
+  snapshotInput: TrialPolicySnapshotV2,
+): JudgeTrialPolicyViewV2 {
+  const snapshot = parseTrialPolicySnapshotV2(snapshotInput);
+  return JudgeTrialPolicyViewV2Schema.parse({
+    schemaVersion: JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V2,
+    sourcePolicySchemaVersion: snapshot.schemaVersion,
+    caseId: snapshot.caseId,
+    caseVersion: snapshot.caseVersion,
+    jurisdictionProfileId: snapshot.jurisdictionProfileId,
+    jurisdictionRulesVersion: snapshot.jurisdictionRulesVersion,
+    mappings: snapshot.mappings,
+    witnessCallability: snapshot.witnessCallability,
+    evidencePermissions: snapshot.evidencePermissions.map((rule) => ({
+      evidenceId: rule.evidenceId,
+      offerableByPartyIds: [...rule.offerableByPartyIds],
+      offerableBySides: [...rule.offerableBySides],
+      offerableByActorIds: [...rule.offerableByActorIds],
+      custodianWitnessIds: [...rule.custodianWitnessIds],
+      authenticatingWitnessIds: [...rule.authenticatingWitnessIds],
+      authenticatingActorIds: [...rule.authenticatingActorIds],
+    })),
+    permittedObjectionGrounds: snapshot.permittedObjectionGrounds,
+    settlement: proceduralSettlementV2(snapshot.settlement),
+  });
+}
+
+export function buildJudgeTrialPolicyView(
+  snapshotInput: TrialPolicySnapshot,
+): JudgeTrialPolicyView {
+  return buildJudgeTrialPolicyViewV2(snapshotInput);
+}
+
+export function buildJuryTrialPolicyViewV2(
+  snapshotInput: TrialPolicySnapshotV2,
+): JuryTrialPolicyViewV2 {
+  const snapshot = parseTrialPolicySnapshotV2(snapshotInput);
+  return JuryTrialPolicyViewV2Schema.parse({
+    schemaVersion: JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V2,
+    sourcePolicySchemaVersion: snapshot.schemaVersion,
+    caseId: snapshot.caseId,
+    caseVersion: snapshot.caseVersion,
+    jurisdictionProfileId: snapshot.jurisdictionProfileId,
+    jurisdictionRulesVersion: snapshot.jurisdictionRulesVersion,
+    permittedObjectionGrounds: snapshot.permittedObjectionGrounds,
+  });
+}
+
+export function buildJuryTrialPolicyView(
+  snapshotInput: TrialPolicySnapshot,
+): JuryTrialPolicyView {
+  return buildJuryTrialPolicyViewV2(snapshotInput);
+}
+
 export function partySideForPolicy(
   snapshot: TrialPolicySnapshot,
   partyId: string,
-): TrialSide | null {
+): TrialPolicySide | null {
   return (
     snapshot.mappings.parties.find((binding) => binding.partyId === partyId)
       ?.side ?? null
@@ -649,7 +889,7 @@ export function partySideForPolicy(
 export function actorSideForPolicy(
   snapshot: TrialPolicySnapshot,
   actorId: string,
-): TrialSide | null {
+): TrialPolicySide | null {
   return (
     snapshot.mappings.actors.find((binding) => binding.actorId === actorId)
       ?.side ?? null
@@ -658,7 +898,7 @@ export function actorSideForPolicy(
 
 export function partySideMapForPolicy(
   snapshot: TrialPolicySnapshot,
-): ReadonlyMap<string, TrialSide> {
+): ReadonlyMap<string, TrialPolicySide> {
   return new Map(
     snapshot.mappings.parties.map((binding) => [binding.partyId, binding.side]),
   );

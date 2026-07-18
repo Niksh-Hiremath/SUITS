@@ -8,7 +8,9 @@ import type { ActorRef } from "../trial-engine/schemas";
 import {
   actorSideForPolicy,
   buildJudgeTrialPolicyView,
+  buildJudgeTrialPolicyViewV1,
   buildJuryTrialPolicyView,
+  buildJuryTrialPolicyViewV1,
   canActorAuthenticateEvidence,
   canActorAuthorizeSettlement,
   canActorCallWitness,
@@ -17,19 +19,27 @@ import {
   canActorProposeSettlement,
   canActorRaiseObjection,
   canActorRecallWitness,
+  canEvidenceRevealFact,
+  canWitnessReferenceEvidence,
+  canWitnessRevealFact,
   createTrialPolicySnapshot,
+  createTrialPolicySnapshotV1,
   getSettlementAuthorityForActor,
   isObjectionGroundPermitted,
   isSettlementOfferExpired,
   isSettlementOpenInPhase,
   JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
+  JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
   JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION,
+  JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
   parseTrialPolicySnapshot,
   partySideForPolicy,
   settlementExpirySequence,
   TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION,
+  TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V1,
   TrialPolicyConfigurationError,
   TrialPolicySnapshotSchema,
+  TrialPolicySnapshotV1Schema,
   type TrialPolicyActorBindingInput,
   type TrialPolicySnapshot,
 } from "./index";
@@ -137,12 +147,58 @@ function expectPolicyError(
 }
 
 describe("TrialPolicySnapshot derivation", () => {
+  it("preserves the exact v1 policy and redacted-view contracts", () => {
+    const policyV1 = createTrialPolicySnapshotV1({
+      graph: createThreeWitnessCaseGraphV1Fixture(),
+      actorBindings: createActorBindings(),
+    });
+    const judgeV1 = buildJudgeTrialPolicyViewV1(policyV1);
+    const juryV1 = buildJuryTrialPolicyViewV1(policyV1);
+
+    expect(policyV1.schemaVersion).toBe(
+      TRIAL_POLICY_SNAPSHOT_SCHEMA_VERSION_V1,
+    );
+    expect("witnessKnowledge" in policyV1).toBe(false);
+    expect(
+      policyV1.evidencePermissions.every(
+        (rule) => !("relatedFactIds" in rule),
+      ),
+    ).toBe(true);
+    expect(judgeV1.schemaVersion).toBe(
+      JUDGE_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
+    );
+    expect(juryV1.schemaVersion).toBe(
+      JURY_TRIAL_POLICY_VIEW_SCHEMA_VERSION_V1,
+    );
+
+    const policyWithV2WitnessKnowledge = {
+      ...policyV1,
+      witnessKnowledge: [],
+    };
+    expect(
+      TrialPolicySnapshotV1Schema.safeParse(policyWithV2WitnessKnowledge)
+        .success,
+    ).toBe(false);
+
+    const policyWithV2Evidence = structuredClone(policyV1);
+    Object.assign(policyWithV2Evidence.evidencePermissions[0], {
+      relatedFactIds: [],
+    });
+    expect(TrialPolicySnapshotV1Schema.safeParse(policyWithV2Evidence).success)
+      .toBe(false);
+  });
+
   it("derives the versioned snapshot deterministically from set-like graph and mapping inputs", () => {
     const graph = createThreeWitnessCaseGraphV1Fixture();
     const reorderedGraph = structuredClone(graph);
     reorderedGraph.parties.reverse();
     reorderedGraph.witnesses.reverse();
     reorderedGraph.evidence.reverse();
+    for (const witness of reorderedGraph.witnesses) {
+      witness.knowledgeBoundary.knownFactIds.reverse();
+      witness.knowledgeBoundary.perceivedFactIds.reverse();
+      witness.knowledgeBoundary.seenEvidenceIds.reverse();
+    }
     reorderedGraph.settlement.participants.reverse();
     reorderedGraph.jurisdictionProfile.permittedObjectionGrounds.reverse();
 
@@ -290,6 +346,86 @@ describe("TrialPolicySnapshot derivation", () => {
 });
 
 describe("witness, evidence, and objection policy", () => {
+  it("pins private witness knowledge and permits only authorized revelations and references", () => {
+    const snapshot = createSnapshot();
+    const mayaKnowledge = snapshot.witnessKnowledge.find(
+      (rule) => rule.witnessId === "witness_maya_ortiz",
+    );
+
+    expect(mayaKnowledge).toEqual({
+      witnessId: "witness_maya_ortiz",
+      knownFactIds: [
+        "fact_draft_created",
+        "fact_manager_accessed_complaint",
+        "fact_rationale_revised",
+      ],
+      perceivedFactIds: [],
+      seenEvidenceIds: [
+        "evidence_draft_metadata",
+        "evidence_report_history",
+        "evidence_revision_history",
+      ],
+    });
+    expect(
+      canWitnessRevealFact(
+        snapshot,
+        "witness_maya_ortiz",
+        "fact_manager_accessed_complaint",
+      ),
+    ).toBe(true);
+    expect(
+      canWitnessRevealFact(
+        snapshot,
+        "witness_rina_shah",
+        "fact_manager_accessed_complaint",
+      ),
+    ).toBe(false);
+    expect(
+      canWitnessRevealFact(snapshot, "witness_missing", "fact_complaint_sent"),
+    ).toBe(false);
+    expect(
+      canWitnessReferenceEvidence(
+        snapshot,
+        "witness_maya_ortiz",
+        "evidence_revision_history",
+      ),
+    ).toBe(true);
+    expect(
+      canWitnessReferenceEvidence(
+        snapshot,
+        "witness_rina_shah",
+        "evidence_revision_history",
+      ),
+    ).toBe(false);
+    expect(
+      canWitnessReferenceEvidence(
+        snapshot,
+        "witness_maya_ortiz",
+        "evidence_missing",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects tampered witness knowledge rules", () => {
+    const missingKnownFact = structuredClone(createSnapshot());
+    const rinaKnowledge = missingKnownFact.witnessKnowledge.find(
+      (rule) => rule.witnessId === "witness_rina_shah",
+    );
+    if (!rinaKnowledge) throw new Error("Missing fixture witness knowledge");
+    rinaKnowledge.knownFactIds = ["fact_late_reports"];
+    expect(TrialPolicySnapshotSchema.safeParse(missingKnownFact).success).toBe(
+      false,
+    );
+
+    const duplicateWitness = structuredClone(createSnapshot());
+    duplicateWitness.witnessKnowledge.push(
+      structuredClone(duplicateWitness.witnessKnowledge[0]),
+    );
+    expect(TrialPolicySnapshotSchema.safeParse(duplicateWitness).success).toBe(
+      false,
+    );
+  });
+
   it("derives witness call and recall permissions through represented parties", () => {
     const graph = createThreeWitnessCaseGraphV1Fixture();
     const rina = graph.witnesses.find(
@@ -347,7 +483,21 @@ describe("witness, evidence, and objection policy", () => {
       custodianWitnessIds: ["witness_rina_shah"],
       authenticatingWitnessIds: ["witness_rina_shah"],
       authenticatingActorIds: [ACTORS.rina.actorId],
+      relatedFactIds: ["fact_complaint_sent"],
     });
+    expect(
+      canEvidenceRevealFact(snapshot, evidenceId, "fact_complaint_sent"),
+    ).toBe(true);
+    expect(
+      canEvidenceRevealFact(snapshot, evidenceId, "fact_rationale_revised"),
+    ).toBe(false);
+    expect(
+      canEvidenceRevealFact(
+        snapshot,
+        "evidence_missing",
+        "fact_complaint_sent",
+      ),
+    ).toBe(false);
     expect(
       canActorOfferEvidence(
         snapshot,
@@ -405,6 +555,49 @@ describe("witness, evidence, and objection policy", () => {
 });
 
 describe("settlement policy and confidentiality", () => {
+  it("rejects incoherent or non-exact private settlement authority rules", () => {
+    const duplicateAuthority = structuredClone(createSnapshot());
+    duplicateAuthority.settlement.partyAuthorities.push(
+      structuredClone(duplicateAuthority.settlement.partyAuthorities[0]),
+    );
+    expect(TrialPolicySnapshotSchema.safeParse(duplicateAuthority).success).toBe(
+      false,
+    );
+
+    const missingAuthority = structuredClone(createSnapshot());
+    missingAuthority.settlement.partyAuthorities.pop();
+    expect(TrialPolicySnapshotSchema.safeParse(missingAuthority).success).toBe(
+      false,
+    );
+
+    const incoherentRange = structuredClone(createSnapshot());
+    const authority = incoherentRange.settlement.partyAuthorities[0];
+    authority.maximumAuthority = authority.minimumAuthority - 1;
+    expect(TrialPolicySnapshotSchema.safeParse(incoherentRange).success).toBe(
+      false,
+    );
+
+    const missingParticipant = structuredClone(createSnapshot());
+    missingParticipant.settlement.participantPartyIds = [
+      missingParticipant.settlement.participantPartyIds[0],
+    ];
+    expect(TrialPolicySnapshotSchema.safeParse(missingParticipant).success).toBe(
+      false,
+    );
+
+    const unknownParticipant = structuredClone(createSnapshot());
+    const replacedPartyId = unknownParticipant.settlement.participantPartyIds[0];
+    unknownParticipant.settlement.participantPartyIds[0] = "party_unknown";
+    const replacedAuthority = unknownParticipant.settlement.partyAuthorities.find(
+      (candidate) => candidate.partyId === replacedPartyId,
+    );
+    if (!replacedAuthority) throw new Error("Missing authority fixture");
+    replacedAuthority.partyId = "party_unknown";
+    expect(TrialPolicySnapshotSchema.safeParse(unknownParticipant).success).toBe(
+      false,
+    );
+  });
+
   it("opens settlement only at and after the configured phase", () => {
     const graph = createThreeWitnessCaseGraphV1Fixture();
     graph.settlement.opensAtPhase = "case_in_chief";
@@ -559,6 +752,11 @@ describe("settlement policy and confidentiality", () => {
       "targetValue",
       "confidentialPriorities",
       "permittedNonMonetaryTerms",
+      "witnessKnowledge",
+      "knownFactIds",
+      "perceivedFactIds",
+      "seenEvidenceIds",
+      "relatedFactIds",
     ];
 
     expect(judgeView.schemaVersion).toBe(
@@ -571,7 +769,11 @@ describe("settlement policy and confidentiality", () => {
     }
     expect(judgeJson).not.toContain("A neutral reference");
     expect(judgeJson).not.toContain("No admission of liability");
+    expect(judgeJson).not.toContain("fact_manager_accessed_complaint");
+    expect(juryJson).not.toContain("fact_manager_accessed_complaint");
     expect(juryJson).not.toContain('"settlement"');
+    expect("witnessKnowledge" in judgeView).toBe(false);
+    expect("witnessKnowledge" in juryView).toBe(false);
     expect(Object.keys(judgeView.settlement)).toEqual([
       "enabled",
       "currency",
