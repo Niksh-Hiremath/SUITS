@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:live:case-compiler": "node --env-file-if-exists=.env.local --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/server/case-compiler/case-compiler.live.test.ts --reporter=verbose",
     "eval": "vitest run src/evals",
     "eval:gate3": "npx convex run autonomous:runGate3 '{\"runs\":5,\"promptVersion\":\"jury-review.v1\"}'"
   },
