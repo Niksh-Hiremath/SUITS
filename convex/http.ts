@@ -10,10 +10,6 @@ import type { CaseGraphV1 } from "../src/domain/case-graph";
 
 import { httpAction } from "./_generated/server";
 import {
-  CaseCompilePermitRequestSchema,
-  CaseCompilePermitResponseSchema,
-} from "./caseCompileQuota";
-import {
   CaseCompileReplayRequestSchema,
   CaseCompileReplayResponseSchema,
   type CaseCompileReplayResponse,
@@ -100,15 +96,6 @@ type PublishDraftMutationResult = {
   caseGraph: CaseGraphV1;
 };
 
-type CaseCompilePermitMutationArgs = {
-  clientKeyHash: string;
-};
-
-type CaseCompilePermitMutationResult = {
-  allowed: boolean;
-  retryAfterSeconds: number;
-};
-
 type CaseCompileReplayQueryArgs = {
   ownerId: string;
   uploadId: string;
@@ -146,11 +133,6 @@ const publishDraftReference = makeFunctionReference<
   PublishDraftMutationArgs,
   PublishDraftMutationResult
 >("caseDrafts:publishCompiledDraft");
-const consumeCaseCompilePermitReference = makeFunctionReference<
-  "mutation",
-  CaseCompilePermitMutationArgs,
-  CaseCompilePermitMutationResult
->("caseCompileQuota:consumePermit");
 const acquireCaseCompileClaimReference = makeFunctionReference<
   "mutation",
   AcquireCaseCompileClaimRequest,
@@ -181,17 +163,6 @@ const listOwnedCasesReference = makeFunctionReference<
   { ownerId: string },
   OwnedCaseListResponse
 >("publishedCases:listOwnedCases");
-
-const consumeCaseCompilePermit = httpAction(async (ctx, request) => {
-  try {
-    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
-    const body = await parseCaseServiceJson(request, CaseCompilePermitRequestSchema);
-    const result = await ctx.runMutation(consumeCaseCompilePermitReference, body);
-    return caseServiceJson(CaseCompilePermitResponseSchema.parse(result));
-  } catch (error) {
-    return caseServiceErrorResponse(error);
-  }
-});
 
 const acquireCaseCompileClaim = httpAction(async (ctx, request) => {
   try {
@@ -343,7 +314,6 @@ const listOwnedCases = httpAction(async (ctx, request) => {
 
 const http = httpRouter();
 
-http.route({ path: "/service/case-compile-permit", method: "POST", handler: consumeCaseCompilePermit });
 http.route({ path: "/service/case-compile-claim/acquire", method: "POST", handler: acquireCaseCompileClaim });
 http.route({ path: "/service/case-compile-claim/heartbeat", method: "POST", handler: heartbeatCaseCompileClaim });
 http.route({ path: "/service/case-compile-claim/release", method: "POST", handler: releaseCaseCompileClaim });

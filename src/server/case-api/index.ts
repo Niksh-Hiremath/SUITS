@@ -1,4 +1,5 @@
 export * from "./convex-service";
+export * from "./compile-workflow";
 export * from "./bounded-body";
 export * from "./idempotency";
 export * from "./origin";
