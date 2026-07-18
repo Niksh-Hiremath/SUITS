@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   readCaseServiceSecret,
+  readCaseSessionSecret,
   resolveCaseOwnerSession,
   verifyCaseOwnerSession,
 } from "./session";
@@ -54,5 +55,7 @@ describe("signed anonymous case ownership", () => {
     expect(() => readCaseServiceSecret({ SUITS_CONVEX_SERVICE_SECRET: "too-short" })).toThrow(
       "SUITS_CONVEX_SERVICE_SECRET",
     );
+    expect(() => readCaseSessionSecret({})).toThrow("SUITS_SESSION_SECRET");
+    expect(readCaseSessionSecret({ SUITS_SESSION_SECRET: SECRET })).toBe(SECRET);
   });
 });

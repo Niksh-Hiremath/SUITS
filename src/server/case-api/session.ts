@@ -24,6 +24,14 @@ export function readCaseServiceSecret(source: EnvironmentSource = process.env): 
   return secret;
 }
 
+export function readCaseSessionSecret(source: EnvironmentSource = process.env): string {
+  const secret = source.SUITS_SESSION_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error("SUITS_SESSION_SECRET must contain at least 32 characters");
+  }
+  return secret;
+}
+
 function signatureFor(sessionId: string, secret: string): string {
   return createHmac("sha256", secret)
     .update(`suits-owner-session:${SESSION_VERSION}:${sessionId}`)
@@ -53,7 +61,7 @@ function parseCookie(value: string | undefined, secret: string): string | null {
 
 export function verifyCaseOwnerSession(
   cookieValue: string | undefined,
-  secret = readCaseServiceSecret(),
+  secret = readCaseSessionSecret(),
 ): VerifiedCaseOwnerSession | null {
   const sessionId = parseCookie(cookieValue, secret);
   if (sessionId === null) return null;
@@ -71,7 +79,7 @@ export function resolveCaseOwnerSession(
     createSessionId?: () => string;
   }> = {},
 ): CaseOwnerSession {
-  const secret = options.secret ?? readCaseServiceSecret();
+  const secret = options.secret ?? readCaseSessionSecret();
   const existingSessionId = verifyCaseOwnerSession(cookieValue, secret)?.ownerId.slice("owner:".length) ?? null;
   const sessionId = existingSessionId ?? (options.createSessionId ?? randomUUID)();
   if (!UUID_PATTERN.test(sessionId)) throw new Error("Case owner session IDs must be UUIDv4 values");
