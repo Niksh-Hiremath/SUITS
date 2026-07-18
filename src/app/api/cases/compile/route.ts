@@ -53,6 +53,13 @@ const DraftRegistrationResponseSchema = z
   })
   .strict();
 
+const CaseCompilePermitResponseSchema = z
+  .object({
+    allowed: z.boolean(),
+    retryAfterSeconds: z.number().int().min(0).max(600),
+  })
+  .strict();
+
 function jsonError(
   status: number,
   code: string,
@@ -155,7 +162,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       "Establish a secure case session before compiling a packet.",
     );
   }
-  const rateLimit = caseCompileRateLimiter.check(caseCompilationClientKey(request.headers));
+  const clientKeyHash = caseCompilationClientKey(request.headers);
+  const rateLimit = caseCompileRateLimiter.check(clientKeyHash);
   if (!rateLimit.allowed) {
     return jsonError(
       429,
@@ -220,6 +228,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         422,
         "CASE_PACKET_COMPILER_LIMIT_EXCEEDED",
         "The extracted packet is too large for one grounded compilation. Split it into a smaller packet and retry.",
+      );
+    }
+    const permit = await callConvexCaseService({
+      path: "/service/case-compile-permit",
+      body: { clientKeyHash },
+      responseSchema: CaseCompilePermitResponseSchema,
+      signal: request.signal,
+    });
+    if (!permit.allowed) {
+      return jsonError(
+        429,
+        "CASE_COMPILATION_RATE_LIMITED",
+        "Too many case compilation attempts. Wait a few minutes and try again.",
+        { "Retry-After": String(permit.retryAfterSeconds) },
       );
     }
     const { uploadUrl } = await callConvexCaseService({
