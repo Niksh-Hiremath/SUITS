@@ -51,6 +51,35 @@ function leaseToken(index: number): string {
 }
 
 describe("case compile claim generation quota", () => {
+  it("serializes simultaneous acquisitions to one winner and one free busy response", async () => {
+    const backend = convexTest({ schema, modules });
+    const [first, second] = await Promise.all([
+      backend.mutation(acquireReference, {
+        ...IDENTITY,
+        leaseToken: leaseToken(1),
+      }),
+      backend.mutation(acquireReference, {
+        ...IDENTITY,
+        leaseToken: leaseToken(2),
+      }),
+    ]);
+
+    expect([first.outcome, second.outcome].sort()).toEqual(["acquired", "busy"]);
+    expect(await backend.run(async (ctx) => {
+      const [claim, quota] = await Promise.all([
+        ctx.db.query("caseCompileClaims").withIndex("by_upload_id", (index) =>
+          index.eq("uploadId", IDENTITY.uploadId)).unique(),
+        ctx.db.query("caseCompileQuotas").withIndex("by_client_key_hash", (index) =>
+          index.eq("clientKeyHash", IDENTITY.clientKeyHash)).unique(),
+      ]);
+      return {
+        generation: claim?.generation,
+        status: claim?.status,
+        chargedAttempts: quota?.attemptedAt.length,
+      };
+    })).toEqual({ generation: 1, status: "leased", chargedAttempts: 1 });
+  });
+
   it("charges each billable generation while busy competitors remain free", async () => {
     const backend = convexTest({ schema, modules });
     let acquired = await backend.mutation(acquireReference, {

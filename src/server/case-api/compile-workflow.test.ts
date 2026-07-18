@@ -437,6 +437,32 @@ describe("case compile singleflight workflow", () => {
     expect(harness.release).not.toHaveBeenCalled();
   });
 
+  it("cleans safely after a fenced release even when replay reconciliation is unavailable", async () => {
+    let lookup = 0;
+    const harness = createHarness({
+      lookupCompleted: async () => {
+        lookup += 1;
+        if (lookup === 1) return null;
+        throw new Error("replay service unavailable");
+      },
+      register: async () => {
+        throw new Error("registration response unavailable");
+      },
+    });
+
+    const result = await run(harness.dependencies);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      recovery: {
+        reconciliation: "failed",
+        cleanup: "completed",
+        release: "completed",
+      },
+    });
+    expect(harness.cleanup).toHaveBeenCalledWith(expect.objectContaining({ storage: STORED }));
+  });
+
   it("cleans uploaded storage and terminally releases a definite registration failure", async () => {
     const harness = createHarness({
       register: async () => {

@@ -640,7 +640,7 @@ export async function runCaseCompileWorkflow<
     if (stored !== null) {
       const cleanupIsSafe =
         registrationOutcome === "definite_not_committed" ||
-        (reconciliation === "miss" && release === "completed");
+        release === "completed";
       if (cleanupIsSafe) {
         try {
           await dependencies.cleanup({ identity, source, storage: stored.value });
