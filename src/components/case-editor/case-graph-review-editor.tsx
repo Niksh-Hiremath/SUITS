@@ -9,7 +9,12 @@ type Props = Readonly<{
   onChange: (graph: CaseGraph) => void;
 }>;
 
-type KnowledgeList = "knownFactIds" | "unknownFactIds" | "seenEvidenceIds";
+export type KnowledgeList =
+  | "knownFactIds"
+  | "perceivedFactIds"
+  | "unknownFactIds"
+  | "seenEvidenceIds"
+  | "availablePriorStatementIds";
 
 const OBJECTION_GROUNDS = [
   "relevance",
@@ -23,15 +28,156 @@ const OBJECTION_GROUNDS = [
   "privilege",
 ] as const;
 
-function lines(value: string): string[] {
+export function parseTopicLines(value: string): string[] {
   return value
     .split("\n")
-    .map((item) => item.trim())
+    .map((item) => item.trim().slice(0, 500))
     .filter((item, index, values) => item.length > 0 && values.indexOf(item) === index);
 }
 
 function toggleId(values: readonly string[], id: string, checked: boolean): string[] {
   return checked ? [...new Set([...values, id])] : values.filter((value) => value !== id);
+}
+
+export function updateWitnessKnowledgeReference(
+  graph: CaseGraph,
+  witnessId: string,
+  list: KnowledgeList,
+  entityId: string,
+  checked: boolean,
+): CaseGraph {
+  const referenceExists = list === "seenEvidenceIds"
+    ? graph.evidence.some((evidence) => evidence.evidenceId === entityId)
+    : list === "availablePriorStatementIds"
+      ? graph.witnesses.some((witness) => witness.witnessId === witnessId
+        && witness.priorStatements.some((statement) => statement.priorStatementId === entityId))
+      : graph.facts.some((fact) => fact.factId === entityId);
+  if (!referenceExists) return graph;
+
+  return {
+    ...graph,
+    witnesses: graph.witnesses.map((witness) => {
+      if (witness.witnessId !== witnessId) return witness;
+      const boundary = witness.knowledgeBoundary;
+
+      if (list === "knownFactIds") {
+        return {
+          ...witness,
+          knowledgeBoundary: {
+            ...boundary,
+            knownFactIds: toggleId(boundary.knownFactIds, entityId, checked),
+            perceivedFactIds: checked
+              ? boundary.perceivedFactIds
+              : boundary.perceivedFactIds.filter((id) => id !== entityId),
+            unknownFactIds: checked
+              ? boundary.unknownFactIds.filter((id) => id !== entityId)
+              : boundary.unknownFactIds,
+          },
+        };
+      }
+
+      if (list === "perceivedFactIds") {
+        return {
+          ...witness,
+          knowledgeBoundary: {
+            ...boundary,
+            knownFactIds: checked
+              ? toggleId(boundary.knownFactIds, entityId, true)
+              : boundary.knownFactIds,
+            perceivedFactIds: toggleId(boundary.perceivedFactIds, entityId, checked),
+            unknownFactIds: checked
+              ? boundary.unknownFactIds.filter((id) => id !== entityId)
+              : boundary.unknownFactIds,
+          },
+        };
+      }
+
+      if (list === "unknownFactIds") {
+        return {
+          ...witness,
+          knowledgeBoundary: {
+            ...boundary,
+            unknownFactIds: toggleId(boundary.unknownFactIds, entityId, checked),
+            knownFactIds: checked
+              ? boundary.knownFactIds.filter((id) => id !== entityId)
+              : boundary.knownFactIds,
+            perceivedFactIds: checked
+              ? boundary.perceivedFactIds.filter((id) => id !== entityId)
+              : boundary.perceivedFactIds,
+          },
+        };
+      }
+
+      return {
+        ...witness,
+        knowledgeBoundary: {
+          ...boundary,
+          [list]: toggleId(boundary[list], entityId, checked),
+        },
+      };
+    }),
+  };
+}
+
+export function updateWitnessCallableParty(
+  graph: CaseGraph,
+  witnessId: string,
+  partyId: string,
+  checked: boolean,
+): CaseGraph {
+  if (!graph.parties.some((party) => party.partyId === partyId)) return graph;
+
+  return {
+    ...graph,
+    witnesses: graph.witnesses.map((witness) => witness.witnessId === witnessId
+      ? {
+          ...witness,
+          callableByPartyIds: toggleId(witness.callableByPartyIds, partyId, checked),
+        }
+      : witness),
+  };
+}
+
+export function updateWitnessPermittedTopics(
+  graph: CaseGraph,
+  witnessId: string,
+  value: string,
+): CaseGraph {
+  return {
+    ...graph,
+    witnesses: graph.witnesses.map((witness) => witness.witnessId === witnessId
+      ? {
+          ...witness,
+          knowledgeBoundary: {
+            ...witness.knowledgeBoundary,
+            allowedTopics: parseTopicLines(value),
+          },
+        }
+      : witness),
+  };
+}
+
+export function updateWitnessPriorStatementText(
+  graph: CaseGraph,
+  witnessId: string,
+  priorStatementId: string,
+  text: string,
+): CaseGraph {
+  const nextText = text.slice(0, 5_000);
+  if (nextText.trim().length === 0) return graph;
+
+  return {
+    ...graph,
+    witnesses: graph.witnesses.map((witness) => witness.witnessId === witnessId
+      ? {
+          ...witness,
+          priorStatements: witness.priorStatements.map((statement) =>
+            statement.priorStatementId === priorStatementId
+              ? { ...statement, text: nextText }
+              : statement),
+        }
+      : witness),
+  };
 }
 
 function isoLocalValue(value: string): string {
@@ -97,50 +243,7 @@ export function CaseGraphReviewEditor({ graph, onChange }: Props) {
     entityId: string,
     checked: boolean,
   ) {
-    onChange({
-      ...graph,
-      witnesses: graph.witnesses.map((witness) => {
-        if (witness.witnessId !== witnessId) return witness;
-        const boundary = witness.knowledgeBoundary;
-        if (list === "knownFactIds") {
-          return {
-            ...witness,
-            knowledgeBoundary: {
-              ...boundary,
-              knownFactIds: toggleId(boundary.knownFactIds, entityId, checked),
-              perceivedFactIds: checked
-                ? boundary.perceivedFactIds
-                : boundary.perceivedFactIds.filter((id) => id !== entityId),
-              unknownFactIds: checked
-                ? boundary.unknownFactIds.filter((id) => id !== entityId)
-                : boundary.unknownFactIds,
-            },
-          };
-        }
-        if (list === "unknownFactIds") {
-          return {
-            ...witness,
-            knowledgeBoundary: {
-              ...boundary,
-              unknownFactIds: toggleId(boundary.unknownFactIds, entityId, checked),
-              knownFactIds: checked
-                ? boundary.knownFactIds.filter((id) => id !== entityId)
-                : boundary.knownFactIds,
-              perceivedFactIds: checked
-                ? boundary.perceivedFactIds.filter((id) => id !== entityId)
-                : boundary.perceivedFactIds,
-            },
-          };
-        }
-        return {
-          ...witness,
-          knowledgeBoundary: {
-            ...boundary,
-            seenEvidenceIds: toggleId(boundary.seenEvidenceIds, entityId, checked),
-          },
-        };
-      }),
-    });
+    onChange(updateWitnessKnowledgeReference(graph, witnessId, list, entityId, checked));
   }
 
   return (
@@ -225,25 +328,115 @@ export function CaseGraphReviewEditor({ graph, onChange }: Props) {
               <label>Role<input maxLength={500} value={witness.role} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, role: event.target.value } : item) })} /></label>
               <label className={styles.wideField}>Summary<textarea maxLength={2_000} rows={3} value={witness.summary} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, summary: event.target.value } : item) })} /></label>
             </div>
-            <p className={styles.subheading}>Known and unknown facts</p>
-            <div className={styles.knowledgeTable}>
+            <p className={styles.subheading} id={`${witness.witnessId}-callable-parties`}>Parties permitted to call this witness</p>
+            <div aria-labelledby={`${witness.witnessId}-callable-parties`} className={styles.choiceGrid} role="group">
+              {graph.parties.map((party) => (
+                <label className={styles.choice} key={party.partyId}>
+                  <input
+                    aria-label={`${witness.name}: callable by ${party.name}`}
+                    checked={witness.callableByPartyIds.includes(party.partyId)}
+                    onChange={(event) => onChange(updateWitnessCallableParty(
+                      graph,
+                      witness.witnessId,
+                      party.partyId,
+                      event.target.checked,
+                    ))}
+                    type="checkbox"
+                  />
+                  {party.name}
+                </label>
+              ))}
+            </div>
+            <p className={styles.subheading} id={`${witness.witnessId}-fact-boundaries`}>Fact knowledge and perception</p>
+            <div aria-labelledby={`${witness.witnessId}-fact-boundaries`} className={styles.knowledgeTable} role="group">
               {graph.facts.map((fact) => (
                 <div key={fact.factId}>
                   <span title={fact.proposition}>{fact.factId}</span>
-                  <label className={styles.choice}><input checked={witness.knowledgeBoundary.knownFactIds.includes(fact.factId)} onChange={(event) => updateWitnessKnowledge(witness.witnessId, "knownFactIds", fact.factId, event.target.checked)} type="checkbox" />Known</label>
-                  <label className={styles.choice}><input checked={witness.knowledgeBoundary.unknownFactIds.includes(fact.factId)} onChange={(event) => updateWitnessKnowledge(witness.witnessId, "unknownFactIds", fact.factId, event.target.checked)} type="checkbox" />Unknown</label>
+                  <label className={styles.choice}>
+                    <input
+                      aria-label={`${witness.name}: knows ${fact.proposition}`}
+                      checked={witness.knowledgeBoundary.knownFactIds.includes(fact.factId)}
+                      onChange={(event) => updateWitnessKnowledge(witness.witnessId, "knownFactIds", fact.factId, event.target.checked)}
+                      type="checkbox"
+                    />
+                    Known
+                  </label>
+                  <label className={styles.choice}>
+                    <input
+                      aria-label={`${witness.name}: personally perceived ${fact.proposition}`}
+                      checked={witness.knowledgeBoundary.perceivedFactIds.includes(fact.factId)}
+                      onChange={(event) => updateWitnessKnowledge(witness.witnessId, "perceivedFactIds", fact.factId, event.target.checked)}
+                      type="checkbox"
+                    />
+                    Perceived
+                  </label>
+                  <label className={styles.choice}>
+                    <input
+                      aria-label={`${witness.name}: must not know ${fact.proposition}`}
+                      checked={witness.knowledgeBoundary.unknownFactIds.includes(fact.factId)}
+                      onChange={(event) => updateWitnessKnowledge(witness.witnessId, "unknownFactIds", fact.factId, event.target.checked)}
+                      type="checkbox"
+                    />
+                    Unknown
+                  </label>
                 </div>
               ))}
             </div>
-            <p className={styles.subheading}>Seen evidence</p>
-            <div className={styles.choiceGrid}>
-              {graph.evidence.map((evidence) => <label className={styles.choice} key={evidence.evidenceId}><input checked={witness.knowledgeBoundary.seenEvidenceIds.includes(evidence.evidenceId)} onChange={(event) => updateWitnessKnowledge(witness.witnessId, "seenEvidenceIds", evidence.evidenceId, event.target.checked)} type="checkbox" />{evidence.name}</label>)}
+            <p className={styles.subheading} id={`${witness.witnessId}-seen-evidence`}>Evidence this witness has seen</p>
+            <div aria-labelledby={`${witness.witnessId}-seen-evidence`} className={styles.choiceGrid} role="group">
+              {graph.evidence.map((evidence) => (
+                <label className={styles.choice} key={evidence.evidenceId}>
+                  <input
+                    aria-label={`${witness.name}: has seen ${evidence.name}`}
+                    checked={witness.knowledgeBoundary.seenEvidenceIds.includes(evidence.evidenceId)}
+                    onChange={(event) => updateWitnessKnowledge(witness.witnessId, "seenEvidenceIds", evidence.evidenceId, event.target.checked)}
+                    type="checkbox"
+                  />
+                  {evidence.name}
+                </label>
+              ))}
             </div>
             <div className={styles.editorGrid}>
-              <label>Allowed topics<textarea rows={4} value={witness.knowledgeBoundary.allowedTopics.join("\n")} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, knowledgeBoundary: { ...item.knowledgeBoundary, allowedTopics: lines(event.target.value) } } : item) })} /></label>
-              <label>Forbidden topics<textarea rows={4} value={witness.knowledgeBoundary.forbiddenTopics.join("\n")} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, knowledgeBoundary: { ...item.knowledgeBoundary, forbiddenTopics: lines(event.target.value) } } : item) })} /></label>
+              <label>Permitted topics (one per line)<textarea aria-label={`${witness.name}: permitted topics`} rows={4} value={witness.knowledgeBoundary.allowedTopics.join("\n")} onChange={(event) => onChange(updateWitnessPermittedTopics(graph, witness.witnessId, event.target.value))} /></label>
+              <label>Forbidden topics (one per line)<textarea aria-label={`${witness.name}: forbidden topics`} rows={4} value={witness.knowledgeBoundary.forbiddenTopics.join("\n")} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, knowledgeBoundary: { ...item.knowledgeBoundary, forbiddenTopics: parseTopicLines(event.target.value) } } : item) })} /></label>
             </div>
-            {witness.priorStatements.length > 0 && <><p className={styles.subheading}>Prior statements</p>{witness.priorStatements.map((statement) => <label key={statement.priorStatementId}>{statement.kind} · {statement.priorStatementId}<textarea maxLength={5_000} rows={3} value={statement.text} onChange={(event) => onChange({ ...graph, witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, priorStatements: item.priorStatements.map((prior) => prior.priorStatementId === statement.priorStatementId ? { ...prior, text: event.target.value } : prior) } : item) })} /></label>)}</>}
+            {witness.priorStatements.length > 0 && <>
+              <p className={styles.subheading}>Prior statements and witness availability</p>
+              {witness.priorStatements.map((statement) => (
+                <div className={styles.priorStatementEditor} key={statement.priorStatementId}>
+                  <label>
+                    {statement.kind} · {statement.priorStatementId}
+                    <textarea
+                      aria-label={`${witness.name}: text of ${statement.priorStatementId}`}
+                      maxLength={5_000}
+                      required
+                      rows={3}
+                      value={statement.text}
+                      onChange={(event) => onChange(updateWitnessPriorStatementText(
+                        graph,
+                        witness.witnessId,
+                        statement.priorStatementId,
+                        event.target.value,
+                      ))}
+                    />
+                  </label>
+                  <label className={styles.choice}>
+                    <input
+                      aria-label={`${witness.name}: may use ${statement.priorStatementId}`}
+                      checked={witness.knowledgeBoundary.availablePriorStatementIds.includes(statement.priorStatementId)}
+                      onChange={(event) => updateWitnessKnowledge(
+                        witness.witnessId,
+                        "availablePriorStatementIds",
+                        statement.priorStatementId,
+                        event.target.checked,
+                      )}
+                      type="checkbox"
+                    />
+                    Available to this witness during testimony
+                  </label>
+                </div>
+              ))}
+            </>}
           </fieldset>
         ))}
       </details>
