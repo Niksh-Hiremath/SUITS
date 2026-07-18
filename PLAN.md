@@ -493,7 +493,7 @@ Deliverables:
 - [x] opposing strategy state;
 - [x] negotiation state and private offers;
 - [x] pause/resume/replay in Convex;
-- [ ] migration away from hardcoded golden roleplay as normal runtime.
+- [x] migration away from hardcoded golden roleplay as normal runtime.
 
 Gate:
 
@@ -741,7 +741,7 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Milestone 0 complete.
 - [x] Milestone 1 complete.
 - [x] Milestone 2 complete.
-- [ ] Milestone 3 complete.
+- [x] Milestone 3 complete.
 - [ ] Milestone 4 complete.
 - [ ] Milestone 5 complete.
 - [ ] Milestone 6 complete.
@@ -784,6 +784,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. Convex CLI authentication was already valid; no new login was required.
   - Commit: `348ac0c` (`feat: generalize multi-witness trial engine`).
 
+- 2026-07-19 03:21 IST — Milestone 3 V3 hearing-runtime cutover complete
+  - Changed: replaced the normal `/hearing` call graph with an owner-bound Next.js BFF and secret-protected Convex V3 hearing facade; added deterministic actor derivation, seeded/private published graph resolution, redacted role-scoped projections, dynamic witness controls, server-projected capabilities, case-library launch/resume links, stable command retry identities, and recovery from partial multi-append commands. The legacy Asha/Vertex golden witness, opposing-counsel, verdict, cloud-voice, and mutable trial APIs remain preserved only as historical code outside the new hearing call graph. Court Records links were removed from the V3 hearing until that surface receives an owner-bound V3 projection.
+  - Verified: the bounded V3 cutover suite passed 34 tests, including strict browser DTO rejection, private-graph owner isolation, hidden-knowledge redaction, exact command replay, and a simulated failure after `CALL_WITNESS` that recovered with one call and one oath. A linked Convex development sync completed without a new login. A real secret-protected cloud smoke created `trial_cd5405e1ae2d44a78b56cab9140c1c9d`, advanced sequence/version 3 to 8, committed a witness question and answer, replayed the exact request without changing the head, and reloaded the identical durable head. The full repository gate passed 456 tests with two explicit live-only skips, three evals, lint with four generated-file warnings and no errors, both TypeScript surfaces, and a production build that generated 17/17 pages.
+  - Remaining: Milestone 4 must replace the temporary case-agnostic deterministic witness/verdict/debrief proposal adapter with streamed, strict, role-isolated GPT-5.6 calls and live multi-witness proof. The visible typed courtroom control remains an explicitly interim development surface until the local-speech/voice-first milestones; the legacy `/records` page must not be advertised as V3 Court Records until it is migrated.
+  - Blocked: none for Milestone 3.
+  - Commits: V3 facade/UI cutover series `8641028` through `b43bb0c`; this PLAN gate entry is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -809,6 +816,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Active V3 replay cannot authenticate arbitrary historical event IDs without an integrity field. New events therefore use the canonical `event:<actionId>` identity and an immediately preceding causation link; V2-to-V3 migration deterministically remaps legacy event IDs, causation, and event citations before replay validation.
 - Evidence authentication required a bounded pre-admission context: witnesses could not cite an unadmitted exhibit when their view exposed admitted exhibits only. `ASK_QUESTION.presentedEvidenceIds` now records the exact seen, non-excluded exhibits shown for identification, and `knowledge-view.v2` exposes only that bounded set to the active witness.
 - A full CaseGraph ID/version pair was insufficient to authenticate private witness and settlement material after hydration. Active V3 state now pins a canonical full-graph SHA-256 separately from the legacy source-content digest and rejects any hydrated graph whose complete canonical content differs.
+- Browser Convex identity cannot safely stand in for the existing signed anonymous owner cookie: the browser uses an unauthenticated `ConvexProvider`, while private case ownership is `owner:<uuid>`. The V3 hearing therefore reuses the signed HttpOnly cookie through a same-origin Next.js BFF and a server-only Convex service secret; the browser never submits owner, graph, actor, or trusted action metadata.
+- One high-level hearing command can span several atomic Convex mutations. A lost response after the first append can leave a valid intermediate state such as `awaiting_oath`; recovery therefore requires retaining the exact request ID, timestamp, expected head, and intent until confirmation. The client reloads the canonical head without clearing input and retries the same idempotency key, while an integration test proves a partial call resumes without duplicate events.
+- The legacy `/records` route still reads unauthenticated mutable legacy trial tables. The V3 hearing no longer links to it; owner-bound V3 Court Records and full event pagination remain later deliverables rather than being misrepresented as complete.
 
 ## 15. Decisions
 
@@ -833,6 +843,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat presenting an exhibit for identification as distinct from offering it into evidence. Any examining counsel may identify a non-excluded case exhibit that the pinned witness has seen; only policy-authorized counsel may offer it, and admission revalidates every active authenticating testimony ID.
 - Keep settlement V3 bilateral until per-recipient decisions and all-required acceptance semantics are modeled. A V3 offer therefore has exactly one recipient party, while frozen historical schemas remain unchanged.
 - Make public Convex trial append owner-derived and player-counsel-only. Judge, AI, deterministic, speech-system, and recovery actions use a separate trusted internal boundary; callers cannot forge canonical actors, trial ownership, graph publication, projection versions, or snapshot cadence.
+- Bind each V3 browser hearing to the deterministic server-selected counsel for its chosen side. Do not accept browser-selected actor IDs, even for another counsel on the same side, because party-scoped KnowledgeViews and private settlement authority differ.
+- Route V3 hearing starts, commands, and reloads through the signed owner-cookie Next.js BFF and secret-protected Convex HTTP service. Expose only strict high-level player intents and a redacted `HearingRuntimeView`; canonical state JSON, raw event payloads, policy snapshots, hidden facts, private strategy, and trusted append are server-only.
+- Retain a pending start/command request unchanged until the durable response is confirmed. On transport or stale-state failure, reload the owner-bound projection, preserve the user's input, and offer an exact-key retry so a partially applied multi-event command can finish idempotently.
 
 ## 16. Verification Evidence
 
@@ -904,6 +917,18 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run eval` — exit 0; one file and three legacy eval tests passed.
   - `npm run build` — exit 0; Next.js 16.2.10 compiled/typechecked and generated all 16 pages. This verifies the checkpoint build, not the still-pending V3 hearing-runtime cutover.
   - `git diff --check` — exit 0.
+
+- 2026-07-19 02:13–03:21 IST — Milestone 3 V3 runtime completion gate
+  - `npx vitest run src/domain/hearing-runtime src/domain/hearing-journey.test.ts src/server/hearing-api/http.test.ts src/app/hearing/page.source.test.ts src/app/api/hearings/route.test.ts convex/hearingRuntime.integration.test.ts` — exit 0; nine files and 34 tests passed. Coverage includes strict no-owner/no-graph/no-actor browser contracts, redacted role projections, relative counsel labels, server-projected call/recall/action capabilities, exact V3 trial IDs, owner-cookie BFF edges, bounded legacy-call-graph rejection, seeded/private start, cross-owner denial, multi-witness orchestration, exact replay, resume, and partial-command recovery.
+  - `convex/hearingRuntime.integration.test.ts` partial-command case — manually committed only the first `CALL_WITNESS` event, observed `awaiting_oath`, then retried the identical high-level request; the runtime reached direct examination with exactly one `CALL_WITNESS` and one `SWEAR_WITNESS` event.
+  - `npx convex dev --once` — exit 0 at 03:02 and again after recovery hardening at 03:17; development deployment `cheery-bandicoot-36` accepted the V3 hearing functions and `trialProjections.by_owner` index. Existing Convex CLI authentication was valid; no login or production deployment occurred.
+  - Secret-protected PowerShell cloud smoke against `/service/hearings/start`, `/service/hearings/command`, and `/service/hearings/read` — exit 0; created `trial_cd5405e1ae2d44a78b56cab9140c1c9d` for an ephemeral owner, called `witness_rina_shah`, committed question/answer events, advanced sequence/version from 3 to 8, produced two transcript turns, replayed the exact question command with an unchanged head, and reloaded the same version/event ID. No secret value was printed.
+  - `npm run lint` — exit 0; four generated Convex unused-disable warnings and no errors.
+  - `npm run typecheck -- --pretty false` and `npx tsc -p convex/tsconfig.json --noEmit` — exit 0.
+  - `npm test` — exit 0; 71 files passed, two live-only files skipped; 456 tests passed and two skipped.
+  - `npm run eval` — exit 0; one file and three legacy eval tests passed.
+  - `npm run build` — exit 0; Next.js 16.2.10 compiled/typechecked, completed static generation 17/17, and listed the three owner-bound V3 hearing API routes plus `/hearing` and all case launch surfaces.
+  - `git diff --check` — exit 0 before the scoped implementation commits.
 
 ## 17. Blocked external prerequisites
 
