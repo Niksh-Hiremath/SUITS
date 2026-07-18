@@ -15,9 +15,12 @@ import {
   CASE_OWNER_COOKIE_NAME,
   ConvexCaseServiceError,
   buildCaseCompilationReviewReport,
+  caseCompilationClientKey,
+  caseCompileRateLimiter,
   callConvexCaseService,
   resolveCaseOwnerSession,
   resolveCaseUploadMimeType,
+  validateConvexStorageUploadUrl,
 } from "@/server/case-api";
 import {
   DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
@@ -47,10 +50,15 @@ const DraftRegistrationResponseSchema = z
   })
   .strict();
 
-function jsonError(status: number, code: string, message: string): NextResponse {
+function jsonError(
+  status: number,
+  code: string,
+  message: string,
+  headers: Record<string, string> = {},
+): NextResponse {
   return NextResponse.json(
     { error: { code, message } },
-    { status, headers: { "Cache-Control": "no-store" } },
+    { status, headers: { "Cache-Control": "no-store", ...headers } },
   );
 }
 
@@ -75,12 +83,27 @@ function ingestionErrorResponse(error: Error): NextResponse | null {
   return jsonError(422, error.message, "The case packet could not be safely extracted.");
 }
 
-async function storePacket(uploadUrl: string, bytes: Uint8Array, mimeType: string): Promise<string> {
-  const response = await fetch(uploadUrl, {
+async function storePacket(
+  uploadUrl: string,
+  bytes: Uint8Array,
+  mimeType: string,
+  signal: AbortSignal,
+): Promise<string> {
+  let trustedUploadUrl: string;
+  try {
+    trustedUploadUrl = validateConvexStorageUploadUrl(uploadUrl);
+  } catch (error) {
+    throw new ConvexCaseServiceError("CASE_STORAGE_URL_INVALID", 502, { cause: error });
+  }
+  const response = await fetch(trustedUploadUrl, {
     method: "POST",
     headers: { "Content-Type": mimeType },
     body: new Blob([Uint8Array.from(bytes)], { type: mimeType }),
     cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
+    signal,
   });
   if (!response.ok) throw new ConvexCaseServiceError("CASE_STORAGE_UPLOAD_FAILED", 503);
   let body: unknown;
@@ -103,6 +126,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     declaredLength > MAX_CASE_UPLOAD_SIZE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES
   ) {
     return jsonError(413, "UPLOAD_SIZE_EXCEEDED", "The case packet exceeds the 20 MB upload limit.");
+  }
+  const rateLimit = caseCompileRateLimiter.check(caseCompilationClientKey(request.headers));
+  if (!rateLimit.allowed) {
+    return jsonError(
+      429,
+      "CASE_COMPILATION_RATE_LIMITED",
+      "Too many case compilation attempts. Wait a few minutes and try again.",
+      { "Retry-After": String(rateLimit.retryAfterSeconds) },
+    );
   }
 
   try {
@@ -130,6 +162,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
       DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
     );
+    const ownerSession = resolveCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
+    const { uploadUrl } = await callConvexCaseService({
+      path: "/service/case-upload-url",
+      body: {},
+      responseSchema: UploadUrlResponseSchema,
+      signal: request.signal,
+    });
 
     const environment = readServerEnv();
     const provider = new OpenAICaseCompilerProvider(new OpenAI({ apiKey: environment.OPENAI_API_KEY }));
@@ -138,15 +177,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       input: { caseId, sourceSegments: ingestion.segments },
       signal: request.signal,
     });
-    const ownerSession = resolveCaseOwnerSession(request.cookies.get(CASE_OWNER_COOKIE_NAME)?.value);
-
-    const { uploadUrl } = await callConvexCaseService({
-      path: "/service/case-upload-url",
-      body: {},
-      responseSchema: UploadUrlResponseSchema,
-      signal: request.signal,
-    });
-    const storageId = await storePacket(uploadUrl, bytes, mimeType);
+    const storageId = await storePacket(uploadUrl, bytes, mimeType, request.signal);
     const registration = await callConvexCaseService({
       path: "/service/case-draft/register",
       body: {
@@ -195,10 +226,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return response;
   } catch (error) {
     if (error instanceof CaseCompilationError) {
+      const providerFailed = error.attempts.length > 0 &&
+        error.attempts.every((attempt) => attempt.outcome === "provider_failed");
       console.error("case_compile_rejected", {
         attemptCount: error.attempts.length,
+        providerFailed,
         validationStatus: error.validationReport?.status ?? null,
       });
+      if (providerFailed) {
+        return jsonError(
+          502,
+          "CASE_COMPILER_PROVIDER_FAILED",
+          "The case compiler is temporarily unavailable. The packet was not saved; please retry.",
+        );
+      }
       return jsonError(
         422,
         "CASE_COMPILATION_REJECTED",
