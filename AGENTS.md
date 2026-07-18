@@ -12,6 +12,7 @@ The application is an educational simulation. It must not present itself as lega
 2. `PLAN.md` is the current product and execution contract. Maintain it as a living plan while working.
 3. Never reduce the Definition of Done, acceptance gates, or non-negotiable invariants merely to finish sooner. Scope may change only when a genuine technical constraint is documented under `PLAN.md > Decisions` and the replacement still satisfies the product outcome.
 4. Do not declare the goal complete based on code inspection alone. Completion requires the verification evidence specified in `PLAN.md`.
+5. Be sure to commit and push changes are they are done. Keep the commit messages small and crisp. Make small commits.
 
 ## 3. Existing repository and migration posture
 
