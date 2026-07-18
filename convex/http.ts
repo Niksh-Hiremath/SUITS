@@ -1,5 +1,5 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
-import type { z } from "zod";
+import { z } from "zod";
 
 import {
   CasePublishResponseSchema,
@@ -7,6 +7,12 @@ import {
   type OwnedCaseListResponse,
 } from "../src/domain/case-api";
 import type { CaseGraphV1 } from "../src/domain/case-graph";
+import {
+  HearingPlayerCommandSchema,
+  HearingRuntimeViewV1Schema,
+  StartHearingRequestSchema,
+  type HearingRuntimeViewV1,
+} from "../src/domain/hearing-runtime";
 
 import { httpAction } from "./_generated/server";
 import {
@@ -17,6 +23,7 @@ import {
 import {
   PublishCaseDraftRequestSchema,
   RegisterCaseDraftRequestSchema,
+  CaseServiceOwnerIdSchema,
   CaseServiceUploadUrlRequestSchema,
   authorizeCaseServiceRequest,
   caseServiceErrorResponse,
@@ -163,6 +170,42 @@ const listOwnedCasesReference = makeFunctionReference<
   { ownerId: string },
   OwnedCaseListResponse
 >("publishedCases:listOwnedCases");
+const startHearingReference = makeFunctionReference<
+  "action",
+  { ownerId: string; requestJson: string },
+  HearingRuntimeViewV1
+>("hearingRuntime:start");
+const commandHearingReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; commandJson: string },
+  HearingRuntimeViewV1
+>("hearingRuntime:command");
+const readHearingReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; controlledActorId?: string },
+  HearingRuntimeViewV1
+>("hearingRuntime:read");
+
+const HearingServiceStartRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    request: StartHearingRequestSchema,
+  })
+  .strict();
+const HearingServiceCommandRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    command: HearingPlayerCommandSchema,
+  })
+  .strict();
+const HearingServiceReadRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    controlledActorId: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
 
 const acquireCaseCompileClaim = httpAction(async (ctx, request) => {
   try {
@@ -312,6 +355,46 @@ const listOwnedCases = httpAction(async (ctx, request) => {
   }
 });
 
+const startHearing = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, HearingServiceStartRequestSchema);
+    const result = await ctx.runAction(startHearingReference, {
+      ownerId: body.ownerId,
+      requestJson: JSON.stringify(body.request),
+    });
+    return caseServiceJson(HearingRuntimeViewV1Schema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const commandHearing = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, HearingServiceCommandRequestSchema);
+    const result = await ctx.runAction(commandHearingReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      commandJson: JSON.stringify(body.command),
+    });
+    return caseServiceJson(HearingRuntimeViewV1Schema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const readHearing = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, HearingServiceReadRequestSchema);
+    const result = await ctx.runAction(readHearingReference, body);
+    return caseServiceJson(HearingRuntimeViewV1Schema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const http = httpRouter();
 
 http.route({ path: "/service/case-compile-claim/acquire", method: "POST", handler: acquireCaseCompileClaim });
@@ -323,5 +406,8 @@ http.route({ path: "/service/case-upload-url", method: "POST", handler: generate
 http.route({ path: "/service/case-draft/register", method: "POST", handler: registerDraft });
 http.route({ path: "/service/case-draft/publish", method: "POST", handler: publishDraft });
 http.route({ path: "/service/cases/owned/list", method: "POST", handler: listOwnedCases });
+http.route({ path: "/service/hearings/start", method: "POST", handler: startHearing });
+http.route({ path: "/service/hearings/command", method: "POST", handler: commandHearing });
+http.route({ path: "/service/hearings/read", method: "POST", handler: readHearing });
 
 export default http;
