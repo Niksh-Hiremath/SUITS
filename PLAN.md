@@ -791,6 +791,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none for Milestone 3.
   - Commits: V3 facade/UI cutover series `8641028` through `b43bb0c`; this PLAN gate entry is committed separately.
 
+- 2026-07-19 03:51 IST — Milestone 4 courtroom-intelligence contract checkpoint
+  - Changed: audited every active deterministic proposal seam and the reusable streamed Terra compiler; added strict provider-neutral witness request/output contracts, exact pending-response/head binding checks, segment-level fact/evidence/prior-statement grounding, allowlisted semantic performance commands, server-owned boundary responses, and redacted model-call/attempt trace contracts. No raw prompt, KnowledgeView, output, provider message, hidden fact, or owner identity is permitted in a trace.
+  - Verified: 14 focused courtroom-AI tests pass, including strict unknown-key rejection, OpenAI Structured Output conversion with an object root, cross-witness and unscoped-citation rejection, stale/cancelled response rejection, bounded output, safe refusal materialization, Luna/Terra task routing, repair-attempt accounting, timing/usage checks, and raw-sensitive-field rejection. Scoped lint and the full root TypeScript check pass.
+  - Remaining: implement the streamed Luna provider, prompt boundary, one-repair orchestration, durable owner-bound attempt storage, and secret-only Convex prepare/commit split; then cut over witness responses before adding opposing strategy/examination, judge decisions, settlement, jury verdict, and Terra coaching.
+  - Blocked: none. The local OpenAI key has not yet been used for a Luna courtroom smoke, so entitlement and live latency remain unverified rather than presumed. Convex CLI authentication remains valid and needs no user login.
+  - Commits: `05ca446`, `d162fb6`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -819,6 +826,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Browser Convex identity cannot safely stand in for the existing signed anonymous owner cookie: the browser uses an unauthenticated `ConvexProvider`, while private case ownership is `owner:<uuid>`. The V3 hearing therefore reuses the signed HttpOnly cookie through a same-origin Next.js BFF and a server-only Convex service secret; the browser never submits owner, graph, actor, or trusted action metadata.
 - One high-level hearing command can span several atomic Convex mutations. A lost response after the first append can leave a valid intermediate state such as `awaiting_oath`; recovery therefore requires retaining the exact request ID, timestamp, expected head, and intent until confirmation. The client reloads the canonical head without clearing input and retries the same idempotency key, while an integration test proves a partial call resumes without duplicate events.
 - The legacy `/records` route still reads unauthenticated mutable legacy trial tables. The V3 hearing no longer links to it; owner-bound V3 Court Records and full event pagination remain later deliverables rather than being misrepresented as complete.
+- OpenAI's strict Zod helper rejects a discriminated union at the schema root (`Root schema must have type: 'object'`). Runtime call contracts therefore use a strict object root and place any discriminated proposal union inside a required property; the witness contract has a focused conversion test so this provider constraint cannot regress silently.
+- The active Convex hearing action can validate and persist model output but cannot relay incremental Responses API deltas through the current Convex HTTP-to-Next JSON chain or bind browser disconnects directly to the provider `AbortSignal`. Live model orchestration therefore belongs in the Next.js server, with Convex exposing secret-only prepare and commit boundaries around its canonical state.
 
 ## 15. Decisions
 
@@ -846,6 +855,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Bind each V3 browser hearing to the deterministic server-selected counsel for its chosen side. Do not accept browser-selected actor IDs, even for another counsel on the same side, because party-scoped KnowledgeViews and private settlement authority differ.
 - Route V3 hearing starts, commands, and reloads through the signed owner-cookie Next.js BFF and secret-protected Convex HTTP service. Expose only strict high-level player intents and a redacted `HearingRuntimeView`; canonical state JSON, raw event payloads, policy snapshots, hidden facts, private strategy, and trusted append are server-only.
 - Retain a pending start/command request unchanged until the durable response is confirmed. On transport or stale-state failure, reload the owner-bound projection, preserve the user's input, and offer an exact-key retry so a partially applied multi-event command can finish idempotently.
+- Represent witness dialogue as bounded, phrase-sized grounded segments. Flatten only a fully validated proposal into the canonical `ANSWER_QUESTION` action; prior-statement IDs and semantic performance remain audit/rendering metadata, while the engine receives only its existing text/fact/evidence payload.
+- Use fixed server-owned language for insufficient-knowledge, outside-scope, cannot-recall, and unclear-question dispositions. The model selects the disposition and performance only, preventing a nominal refusal from becoming a free-text leakage channel.
+- Run interactive courtroom intelligence in the Next.js server with `gpt-5.6-luna`, then revalidate a fresh Convex head before trusted append. Keep `gpt-5.6-terra` reserved for case compilation and final coaching, and never substitute authored dialogue when a live provider output is invalid, cancelled, or stale.
 
 ## 16. Verification Evidence
 
@@ -929,6 +941,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run eval` — exit 0; one file and three legacy eval tests passed.
   - `npm run build` — exit 0; Next.js 16.2.10 compiled/typechecked, completed static generation 17/17, and listed the three owner-bound V3 hearing API routes plus `/hearing` and all case launch surfaces.
   - `git diff --check` — exit 0 before the scoped implementation commits.
+
+- 2026-07-19 03:39–03:51 IST — Milestone 4 contract checkpoint
+  - `npm exec -- vitest run src/domain/courtroom-ai` — exit 0; two files and 14 tests passed.
+  - `npm exec -- eslint src/domain/courtroom-ai` — exit 0 with no warnings or errors.
+  - `npm run typecheck` — exit 0.
+  - `git push origin main` after `05ca446` and `d162fb6` — exit 0; both scoped contract commits are present on `origin/main`.
+  - OpenAI Luna live runtime check — not run at this checkpoint; it remains an explicit Milestone 4 gate, not a pass.
 
 ## 17. Blocked external prerequisites
 
