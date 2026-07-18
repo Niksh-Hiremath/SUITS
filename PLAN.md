@@ -29,12 +29,12 @@ The migration must preserve useful reliability and observability while replacing
 
 ### Baseline actions
 
-- [ ] Record `git status`, current branch, current commit, Node/npm/Python/CUDA versions.
-- [ ] If the working tree is safe and the tag does not exist, tag the pre-build commit locally as `hermes-hackathon-v1`; do not push automatically.
-- [ ] Run and record: `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, `npm run build`.
-- [ ] Save baseline failures without hiding them.
-- [ ] Inventory the actual app routes, Convex functions, domain modules, tests, and generated files.
-- [ ] Add the observed baseline to `Progress` and `Verification Evidence` at the end of this plan.
+- [x] Record `git status`, current branch, current commit, Node/npm/Python/CUDA versions.
+- [x] If the working tree is safe and the tag does not exist, tag the pre-build commit locally as `hermes-hackathon-v1`; do not push automatically. The tag already existed at the correct final Hermes runtime commit and was intentionally not moved.
+- [x] Run and record: `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, `npm run build`.
+- [x] Save baseline failures without hiding them.
+- [x] Inventory the actual app routes, Convex functions, domain modules, tests, and generated files.
+- [x] Add the observed baseline to `Progress` and `Verification Evidence` at the end of this plan.
 
 ---
 
@@ -439,15 +439,15 @@ The model may emit semantic fields only. Map them through a renderer-owned allow
 
 Deliverables:
 
-- [ ] baseline evidence recorded;
-- [ ] legacy behavior mapped;
-- [ ] existing files/tests classified as preserve, migrate, or retire;
-- [ ] local pre-build tag created when safe;
-- [ ] documentation directories created.
+- [x] baseline evidence recorded;
+- [x] legacy behavior mapped;
+- [x] existing files/tests classified as preserve, migrate, or retire;
+- [x] local pre-build tag verified at the correct legacy boundary and left unchanged;
+- [x] documentation directories created.
 
 Gate:
 
-- [ ] Existing app can be built or all baseline blockers are reproduced and documented.
+- [x] Existing app can be built or all baseline blockers are reproduced and documented. Compilation and TypeScript pass; static prerender is blocked by the absent `NEXT_PUBLIC_CONVEX_URL`, reproduced after network access was available.
 
 ### Milestone 1 — Event-sourced domain core
 
@@ -737,8 +737,8 @@ Update after each meaningful checkpoint using dated entries:
   - Commit:
 ```
 
-- [ ] Baseline recorded.
-- [ ] Milestone 0 complete.
+- [x] Baseline recorded.
+- [x] Milestone 0 complete.
 - [ ] Milestone 1 complete.
 - [ ] Milestone 2 complete.
 - [ ] Milestone 3 complete.
@@ -749,11 +749,26 @@ Update after each meaningful checkpoint using dated entries:
 - [ ] Milestone 8 complete.
 - [ ] Milestone 9 complete.
 
+- 2026-07-18 17:09 IST — Milestone 0 baseline and preservation gate
+  - Changed: recorded the environment, repository map, git boundary, legacy behavior, preserve/migrate/retire classification, baseline blockers, and exact verification evidence; created `docs/build-week/BASELINE.md`.
+  - Verified: clean `main` at `92c00e3`, existing legacy tag at `2fec9bc`, npm clean install, lint exit 0, strict typecheck, 60 unit tests, three eval tests, Python/uv, RTX 5070, and CUDA 13.3. The build compiled and typechecked before reproducing the missing Convex URL prerender blocker.
+  - Remaining: safely link and inventory the existing Convex deployment, then begin the additive event-sourced domain/migration work.
+  - Blocked: baseline production prerender requires a valid `NEXT_PUBLIC_CONVEX_URL`; live GPT/model entitlement and local speech model readiness remain unverified rather than presumed.
+  - Commit: `docs: record SUITS 2.0 baseline`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
 
-- None yet.
+- The clean repository is on `main` at `92c00e3ccca51ae6c4734fe621de68ce81d839b0`, exactly aligned with `origin/main`. The existing lightweight `hermes-hackathon-v1` tag points to `2fec9bc87cfda70a7b8cb46b966b65699cfe5c20`, the final legacy runtime commit. HEAD only adds the SUITS 2.0 contract/config documentation, so moving the tag would weaken provenance.
+- The current tracked app has three routes (`/`, `/hearing`, `/records`), nine domain modules with tests, ten Convex implementation modules, five generated Convex files, and an empty `public/` directory. There are no API routes, case editor, reusable courtroom components, speech service, Playwright tests, or current `docs/` tree at baseline.
+- Convex has nine tables, 23 public functions, and one internal function. Persistence is a mutable trial snapshot plus append-style turns/traces, not a material `TrialEvent` stream. There is no authorization, ownership, upload metadata, migration runner, replay log, witness-specific data model, objection state, or settlement state.
+- The current browser sends complete microphone blobs through Convex to ElevenLabs and downloads whole MP3 responses. Visible production textareas remain. This violates the required local-audio boundary and production voice-only contract.
+- `convex/participatory.ts` calls a three-step Court Director model chain but discards the accepted specialist dialogue in favor of `answerGoldenWitness`. Opposing counsel is fully authored, and the final GPT verdict is overwritten by `assessGoldenVerdict`. Runtime code still defaults to the forbidden `gpt-5.4-mini` even though `.env.example` names Luna and Terra.
+- The legacy autonomous eval writes a Harbor Lantern/Northstar transcript into an Asha/Vertex trial and can still pass because overlapping IDs satisfy shallow assertions. This makes the old five-run gate unsuitable as SUITS 2.0 proof.
+- `next.config.ts` uses `output: "export"`. The required server routes and secret-only OpenAI integration require migrating away from the static-export posture.
+- The local environment exposes an RTX 5070 with 12,227 MiB VRAM, driver 610.62, CUDA 13.3, Node 24.17.0, npm 11.17.0, Python 3.12.10, and uv 0.11.25. Python and uv are installed correctly; earlier execution failures were caused by the previous Codex workspace sandbox, not missing software.
+- The baseline `.env` contains `OPENAI_API_KEY` by name but no Convex URL/deployment configuration. This proves only local key presence; it does not prove model entitlement, deployment-side secrets, or a linked Convex database.
 
 ## 15. Decisions
 
@@ -762,12 +777,30 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep Convex as canonical durable state while moving live streaming orchestration to server routes and the local speech companion.
 - Use local STT/TTS and GPT-5.6 text reasoning; raw audio does not go to OpenAI.
 - Keep an internal transcript and developer-only typed control, while removing visible production text input.
+- Preserve the existing `hermes-hackathon-v1` tag at `2fec9bc`; do not recreate, force, or move it.
+- Preserve legacy proof in git history rather than restoring deleted phase-one documents as if they were current product documentation. Cite the tagged files from the Build Week delta where useful.
+- Treat the existing Convex tables as legacy data that may exist in a linked deployment. Add new optional/versioned structures and idempotent backfills before tightening required fields; never assume a fresh database.
+- Separate product analytics from material courtroom events. Keep `productEvents` for analytics and introduce a dedicated append-only trial event store.
+- The user subsequently authorized small milestone commits and pushes. Push only green, scoped commits on the active branch; never force-push, rewrite history, or push secrets/tags implicitly.
 
 ## 16. Verification Evidence
 
 For every gate, record exact commands, exit status, relevant metrics, artifact paths, screenshots/video paths, and external skips. Do not write “works” without evidence.
 
-- None yet.
+- 2026-07-18 16:40–17:09 IST — Milestone 0 baseline
+  - `git status --short --branch` — exit 0; clean `main...origin/main` at `92c00e3`.
+  - `git tag --list` and `git describe --tags --always --long HEAD` — existing `hermes-hackathon-v1` at `2fec9bc`; current contract commit is one commit later.
+  - `node --version` / `npm --version` — exit 0; `v24.17.0` / `11.17.0`.
+  - `python --version` / `uv --version` — exit 0 under Full access; `Python 3.12.10` / `uv 0.11.25`.
+  - `nvidia-smi --query-gpu=name,driver_version,memory.total,compute_cap --format=csv,noheader` — exit 0; `NVIDIA GeForce RTX 5070, 610.62, 12227 MiB, 12.0`.
+  - `nvcc --version` — exit 0; CUDA compilation tools 13.3 (`V13.3.33`).
+  - `npm ci` — exit 0 after network/cache access was allowed; 405 packages installed, 406 audited, two moderate vulnerabilities reported, and three dependency install scripts reported as pending npm allow-script review.
+  - `npm run lint` — exit 0 with five warnings: four generated Convex unused-disable warnings and one missing React hook dependency in `src/app/hearing/page.tsx`.
+  - `npm run typecheck` — exit 0.
+  - `npm test` — exit 0; 12 test files and 60 tests passed.
+  - `npm run eval` — exit 0; one eval file and three tests passed.
+  - `npm run build` — first sandboxed run failed fetching Google fonts. The network-enabled rerun compiled and typechecked successfully, then exited 1 while prerendering `/_not-found` because `NEXT_PUBLIC_CONVEX_URL` is not configured. This is a reproduced configuration blocker, not recorded as a passing build.
+  - Repository, Convex, and git-history audits — completed read-only by the primary agent plus three independent subagent audits; detailed inventory is recorded in `docs/build-week/BASELINE.md`.
 
 ## 17. Blocked external prerequisites
 
