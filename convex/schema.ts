@@ -396,7 +396,64 @@ export default defineSchema({
     .index("by_upload_id", ["uploadId"])
     .index("by_case_id", ["caseId"])
     .index("by_owner", ["ownerId"])
+    .index("by_content_digest_created_at", ["contentDigest", "createdAt"])
+    .index("by_content_digest_updated_at", ["contentDigest", "updatedAt"])
     .index("by_status_lease_expiry", ["status", "leaseExpiresAt"]),
+
+  caseStorageReconcileLocks: defineTable({
+    singletonKey: v.string(),
+    activeSweepId: v.string(),
+    generation: v.number(),
+    updatedAt: v.number(),
+  }).index("by_singleton_key", ["singletonKey"]),
+
+  caseStorageReconcileSweeps: defineTable({
+    sweepId: v.string(),
+    generation: v.number(),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("fenced"),
+    ),
+    mode: v.union(v.literal("dry_run"), v.literal("delete")),
+    cutoff: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    pages: v.number(),
+    scanned: v.number(),
+    eligible: v.number(),
+    deleted: v.number(),
+    dryRunRetained: v.number(),
+    missing: v.number(),
+    retainedTooYoung: v.number(),
+    retainedReferenced: v.number(),
+    retainedUnsupported: v.number(),
+    retainedUnrecognizedDigest: v.number(),
+    retainedNoClaim: v.number(),
+    startedAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_sweep_id", ["sweepId"])
+    .index("by_status_updated_at", ["status", "updatedAt"]),
+
+  caseStorageDeletionAudits: defineTable({
+    auditId: v.string(),
+    sweepId: v.string(),
+    generation: v.number(),
+    storageId: v.id("_storage"),
+    storageCreatedAt: v.number(),
+    storageSha256: v.string(),
+    contentDigest: v.string(),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    claimId: v.string(),
+    claimCreatedAt: v.number(),
+    claimUpdatedAt: v.number(),
+    deletedAt: v.number(),
+  })
+    .index("by_audit_id", ["auditId"])
+    .index("by_sweep", ["sweepId"])
+    .index("by_storage_id", ["storageId"]),
 
   trialEvents: defineTable({
     eventId: v.string(),
