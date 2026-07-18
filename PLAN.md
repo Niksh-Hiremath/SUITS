@@ -447,23 +447,23 @@ Deliverables:
 
 Gate:
 
-- [x] Existing app can be built or all baseline blockers are reproduced and documented. Compilation and TypeScript pass; static prerender is blocked by the absent `NEXT_PUBLIC_CONVEX_URL`, reproduced after network access was available.
+- [x] Existing app can be built or all baseline blockers are reproduced and documented. The absent `NEXT_PUBLIC_CONVEX_URL` baseline blocker was reproduced, then resolved by linking the existing Convex development deployment; the fresh Milestone 1 production build passes.
 
 ### Milestone 1 — Event-sourced domain core
 
 Deliverables:
 
-- [ ] versioned CaseGraph, TrialAction, TrialEvent, TrialState, KnowledgeView schemas;
-- [ ] pure reducer and validator;
-- [ ] fact/evidence/testimony/settlement lifecycles;
-- [ ] idempotency and stale-state protection;
-- [ ] migration path from existing trial tables/data;
-- [ ] replay tool and invariant tests.
+- [x] versioned CaseGraph, TrialAction, TrialEvent, TrialState, KnowledgeView schemas;
+- [x] pure reducer and validator;
+- [x] fact/evidence/testimony/settlement lifecycles;
+- [x] idempotency and stale-state protection;
+- [x] migration path from existing trial tables/data;
+- [x] replay tool and invariant tests.
 
 Gate:
 
-- [ ] Unit tests prove illegal phase changes, unknown evidence use, automatic fact admission, stricken-record leakage, witness knowledge leakage, and duplicate events are rejected.
-- [ ] A seeded case replays to identical state twice.
+- [x] Unit tests prove illegal phase changes, unknown evidence use, automatic fact admission, stricken-record leakage, witness knowledge leakage, and duplicate events are rejected.
+- [x] A seeded case replays to identical state twice.
 
 ### Milestone 2 — Case upload and GPT-5.6 compiler
 
@@ -739,7 +739,7 @@ Update after each meaningful checkpoint using dated entries:
 
 - [x] Baseline recorded.
 - [x] Milestone 0 complete.
-- [ ] Milestone 1 complete.
+- [x] Milestone 1 complete.
 - [ ] Milestone 2 complete.
 - [ ] Milestone 3 complete.
 - [ ] Milestone 4 complete.
@@ -756,6 +756,20 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: baseline production prerender requires a valid `NEXT_PUBLIC_CONVEX_URL`; live GPT/model entitlement and local speech model readiness remain unverified rather than presumed.
   - Commit: `docs: record SUITS 2.0 baseline`.
 
+- 2026-07-18 17:55 IST — Milestone 1 domain/persistence checkpoint
+  - Changed: added and pushed the strict CaseGraph v1 contract with a three-witness fixture; added additive Convex CaseGraph/source/upload, append-only trial-event, receipt, projection, snapshot, and migration-checkpoint storage; linked the repository to the existing `SUITS` Convex project and refreshed generated API types. The pure TrialAction/TrialEvent/TrialState engine and role-isolated KnowledgeView are in local gate verification.
+  - Verified: 44 CaseGraph tests; scoped CaseGraph and Convex lint/typechecks; exact 45-event enum synchronization across domain, Convex validator, and schema; existing project inventory; successful cloud development schema/function sync with all additive indexes accepted; nine KnowledgeView isolation tests and repository typecheck.
+  - Remaining: finish and independently review reducer/invariant/replay tests, record the migration inventory without mutating legacy data, rerun the full Milestone 1 gate, then mark the milestone complete. Completed in the 18:05 entry below.
+  - Blocked: none for Convex linkage. Live GPT-5.6 entitlement and local speech readiness remain later-milestone verification items.
+  - Commits: `023a9fe`, `7a9a43a`, `ecf93eb`.
+
+- 2026-07-18 18:05 IST — Milestone 1 event-sourced domain gate complete
+  - Changed: completed the 45-action strict TrialAction/TrialEvent/TrialState contract, pure validator/reducer/commit/replay path, explicit fact/evidence/testimony/settlement/response/interruption lifecycles, deterministic event IDs, stale-version and actor binding, role-specific KnowledgeViews, jury-considerable filtering, and conservative legacy migration/checkpoint execution.
+  - Verified: 14 focused engine tests and nine knowledge-isolation tests cover every Milestone 1 gate; a seeded three-witness stream replayed to byte-identical state twice; full lint/typecheck/test/eval/build and Convex TypeScript checks passed; the development migration inventoried all nine legacy tables, inserted one private legacy CaseGraph, and an identical retry was a no-op with `replayed: true`.
+  - Remaining: begin Milestone 2 upload/storage/extraction, strict Terra compiler, injection boundary, review/edit/publish UI, and two additional seeded cases.
+  - Blocked: none for Milestone 1.
+  - Commits: `63de85b`, `d1c0857`; this PLAN completion entry is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -769,6 +783,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - `next.config.ts` uses `output: "export"`. The required server routes and secret-only OpenAI integration require migrating away from the static-export posture.
 - The local environment exposes an RTX 5070 with 12,227 MiB VRAM, driver 610.62, CUDA 13.3, Node 24.17.0, npm 11.17.0, Python 3.12.10, and uv 0.11.25. Python and uv are installed correctly; earlier execution failures were caused by the previous Codex workspace sandbox, not missing software.
 - The baseline `.env` contains `OPENAI_API_KEY` by name but no Convex URL/deployment configuration. This proves only local key presence; it does not prove model entitlement, deployment-side secrets, or a linked Convex database.
+- Convex CLI login exposed one existing non-demo project, `SUITS` (`suits-749d2`), under team `niksh-hiremath`. Linking provisioned the personal development deployment `cheery-bandicoot-36` and populated ignored `.env.local` Convex client/deployment keys; no new project or production deployment was created.
+- The linked development deployment retains all nine legacy tables and accepted eight additive SUITS 2.0 tables plus their indexes. Deployment environment names still include legacy ElevenLabs variables and `OPENAI_MODEL`; their values were not read or printed, and later milestones must replace the canonical voice/model paths without treating those settings as current architecture.
+- Bounded inventory confirmed 1 public case, 1 private case, 17 trials, 57 turns, 38 traces, 24 jury votes, 8 debriefs, 0 eval runs, and 16 product events. The conservative backfill inserted one private `case-graph.legacy.v1` record and preserved all legacy rows; the same batch ID replayed without another insert.
 
 ## 15. Decisions
 
@@ -782,6 +799,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat the existing Convex tables as legacy data that may exist in a linked deployment. Add new optional/versioned structures and idempotent backfills before tightening required fields; never assume a fresh database.
 - Separate product analytics from material courtroom events. Keep `productEvents` for analytics and introduce a dedicated append-only trial event store.
 - The user subsequently authorized small milestone commits and pushes. Push only green, scoped commits on the active branch; never force-push, rewrite history, or push secrets/tags implicitly.
+- Link only the existing Convex `SUITS` project and use a personal cloud development deployment for schema/function verification. Keep `.env.local` ignored and never print its values. Run conservative legacy backfills only after read-only inventory and command review; the first CaseGraph batch satisfied those conditions and was executed idempotently on development.
+- Do not fabricate event histories for mutable legacy trials. Preserve their tables and bounded inventory checkpoints, backfill their CaseGraph, and start append-only SUITS 2.0 streams through an explicit version-0 `START_TRIAL` event when a legacy trial is resumed or upgraded.
 
 ## 16. Verification Evidence
 
@@ -801,6 +820,29 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run eval` — exit 0; one eval file and three tests passed.
   - `npm run build` — first sandboxed run failed fetching Google fonts. The network-enabled rerun compiled and typechecked successfully, then exited 1 while prerendering `/_not-found` because `NEXT_PUBLIC_CONVEX_URL` is not configured. This is a reproduced configuration blocker, not recorded as a passing build.
   - Repository, Convex, and git-history audits — completed read-only by the primary agent plus three independent subagent audits; detailed inventory is recorded in `docs/build-week/BASELINE.md`.
+
+- 2026-07-18 17:28–17:55 IST — Milestone 1 partial evidence
+  - `npm exec -- vitest run src/domain/case-graph/schema.test.ts` — exit 0; one file, 44 tests passed.
+  - `npm exec -- eslint src/domain/case-graph` and `npm run typecheck -- --pretty false` — exit 0 before the CaseGraph commit.
+  - `npm exec -- tsc -p convex/tsconfig.json --noEmit` and `npm exec -- eslint convex/schema.ts convex/trialEvents.ts convex/migrations.ts` — exit 0.
+  - Canonical event comparison — 45 domain, Convex input, and Convex table literals in identical order.
+  - Convex management API project inventory — read-only; exactly one existing project, `SUITS` (`suits-749d2`). No token or environment-variable values were emitted.
+  - `npx convex dev --configure existing --team niksh-hiremath --project suits-749d2 --dev-deployment cloud --once --typecheck enable --tail-logs disable` — exit 0; linked/provisioned development deployment `cheery-bandicoot-36`, generated `.env.local`, accepted all additive tables/indexes, and reported functions ready at 17:54:34 IST. This was a development sync, not a production deploy or data migration.
+  - `npx convex data --limit 1` — exit 0; confirmed the nine legacy and eight additive table names without printing record contents.
+  - `npm exec -- vitest run src/domain/knowledge/knowledge.test.ts` — exit 0; one file, nine isolation/lifecycle tests passed after adding a hidden-fact dynamic-scope regression.
+  - `npm exec -- eslint src/domain/knowledge` and `npm run typecheck -- --pretty false` — exit 0.
+
+- 2026-07-18 17:58–18:05 IST — Milestone 1 completion gate
+  - Read-only bounded inline inventory — exit 0; counts were `cases=1`, `privateCases=1`, `trials=17`, `turns=57`, `traces=38`, `juryVotes=24`, `debriefs=8`, `evalRuns=0`, and `productEvents=16`; all eight additive tables were initially empty and no row contents were printed.
+  - `migrations:backfillLegacyCaseGraphsPage` with migration `suits2-casegraph-v1-20260718` and batch `suits2-casegraph-v1-batch-001` — first run processed 1 and inserted 1 private legacy CaseGraph; identical second run reported `replayed: true`, totals unchanged at one graph and one checkpoint.
+  - `migrations:inventoryLegacyPage` — exit 0 for all nine bounded legacy-table pages; durable checkpoints match the read-only counts and report `isDone: true` without changing source rows.
+  - `npm exec -- vitest run src/domain/trial-engine/engine.test.ts` — exit 0; one file, 14 tests passed after response-actor, repeat-interruption, and settlement-counterparty hardening.
+  - `npm run lint` — exit 0 with the same five pre-existing warnings and no errors.
+  - `npm run typecheck` — exit 0.
+  - `npm test` — exit 0; 15 files and 127 tests passed.
+  - `npm run eval` — exit 0; one file and three legacy eval tests passed.
+  - `npm run build` — exit 0; optimized Next.js build compiled, typechecked, and prerendered all four routes with linked `.env.local` Convex configuration.
+  - `npm exec -- tsc -p convex/tsconfig.json --noEmit` — exit 0.
 
 ## 17. Blocked external prerequisites
 
