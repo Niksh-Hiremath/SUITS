@@ -129,6 +129,7 @@ describe("safe binary extraction adapter boundary", () => {
     ["application/pdf", "packet.pdf", 3],
     ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "packet.docx", null],
   ] as const)("extracts %s only through a matching bounded adapter", async (mimeType, originalName, pageNumber) => {
+    const controller = new AbortController();
     const extract = vi.fn(async (): Promise<ExtractedDocument> => ({
       adapterId: "fake-document-v1",
       mimeType,
@@ -146,10 +147,14 @@ describe("safe binary extraction adapter boundary", () => {
         originalName,
         mimeType,
         bytes: new Uint8Array([1, 2, 3, 4]),
+        signal: controller.signal,
       },
       [adapter],
     );
     expect(extract).toHaveBeenCalledOnce();
+    expect(extract).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
     expect(result.extractionAdapterId).toBe("fake-document-v1");
     expect(result.segments[0]?.locator.kind).toBe(pageNumber ? "page" : "text");
   });

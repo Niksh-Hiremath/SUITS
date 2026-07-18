@@ -6,6 +6,10 @@ import {
   DOCX_EXTRACTION_ADAPTER,
   DOCX_EXTRACTION_ADAPTER_ID,
   DOCX_MIME_TYPE,
+  MAX_DOCX_ZIP_ENTRY_COUNT,
+  MAX_DOCX_ZIP_ENTRY_UNCOMPRESSED_BYTES,
+  MAX_DOCX_ZIP_TOTAL_UNCOMPRESSED_BYTES,
+  MAX_PDF_PAGE_COUNT,
   PDF_EXTRACTION_ADAPTER,
   PDF_EXTRACTION_ADAPTER_ID,
   ingestCaseUpload,
@@ -66,7 +70,15 @@ function escapeXml(text: string): string {
     .replace(/'/gu, "&apos;");
 }
 
-async function createDocx(paragraphs: readonly string[]): Promise<Uint8Array> {
+type DocxFixtureOptions = {
+  compression?: "DEFLATE" | "STORE";
+  extraEntryCount?: number;
+};
+
+async function createDocx(
+  paragraphs: readonly string[],
+  options: DocxFixtureOptions = {},
+): Promise<Uint8Array> {
   const zip = new JSZip();
   zip.file(
     "[Content_Types].xml",
@@ -97,7 +109,40 @@ async function createDocx(paragraphs: readonly string[]): Promise<Uint8Array> {
   <w:body>${body}<w:sectPr/></w:body>
 </w:document>`,
   );
-  return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  for (let index = 0; index < (options.extraEntryCount ?? 0); index += 1) {
+    zip.file(`custom/entry-${index}.txt`, `fixture-${index}`);
+  }
+  return zip.generateAsync({
+    type: "uint8array",
+    compression: options.compression ?? "DEFLATE",
+  });
+}
+
+function rewriteDeclaredZipEntrySizes(bytes: Uint8Array, uncompressedSize: number): Uint8Array {
+  const copy = Uint8Array.from(bytes);
+  const view = new DataView(copy.buffer, copy.byteOffset, copy.byteLength);
+  let endOffset = -1;
+  for (let offset = view.byteLength - 22; offset >= 0; offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endOffset = offset;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new Error("Generated ZIP is missing its end record");
+  const totalEntries = view.getUint16(endOffset + 10, true);
+  let cursor = view.getUint32(endOffset + 16, true);
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (view.getUint32(cursor, true) !== 0x02014b50) {
+      throw new Error("Generated ZIP is missing a central-directory entry");
+    }
+    view.setUint32(cursor + 24, uncompressedSize, true);
+    cursor +=
+      46 +
+      view.getUint16(cursor + 28, true) +
+      view.getUint16(cursor + 30, true) +
+      view.getUint16(cursor + 32, true);
+  }
+  return copy;
 }
 
 describe("production document extraction adapters", () => {
@@ -189,7 +234,7 @@ describe("production document extraction adapters", () => {
         mimeType: DOCX_MIME_TYPE,
         maximumCharacters: 100,
       }),
-    ).rejects.toThrow("UPLOAD_DOCX_EXTRACTION_FAILED");
+    ).rejects.toThrow("UPLOAD_DOCX_ZIP_INVALID");
     await expect(
       PDF_EXTRACTION_ADAPTER.extract({
         bytes: new Uint8Array([1]),
@@ -208,5 +253,113 @@ describe("production document extraction adapters", () => {
         maximumCharacters: 12,
       }),
     ).rejects.toThrow("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
+  });
+
+  it("rejects a PDF above the page cap before page text extraction", async () => {
+    const bytes = createPdf(
+      Array.from({ length: MAX_PDF_PAGE_COUNT + 1 }, (_, index) => `Bounded page ${index + 1}`),
+    );
+    await expect(
+      PDF_EXTRACTION_ADAPTER.extract({
+        bytes,
+        originalName: "too-many-pages.pdf",
+        mimeType: "application/pdf",
+        maximumCharacters: 2_000_000,
+      }),
+    ).rejects.toThrow("UPLOAD_PDF_PAGE_LIMIT_EXCEEDED");
+  });
+
+  it("rejects DOCX entry-count, entry-size, and compression-ratio bombs before Mammoth", async () => {
+    const tooManyEntries = await createDocx(["Small valid body."], {
+      extraEntryCount: MAX_DOCX_ZIP_ENTRY_COUNT + 1,
+    });
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: tooManyEntries,
+        originalName: "too-many-entries.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+      }),
+    ).rejects.toThrow("UPLOAD_DOCX_ZIP_ENTRY_LIMIT_EXCEEDED");
+
+    const oversizedEntry = await createDocx(
+      ["A".repeat(MAX_DOCX_ZIP_ENTRY_UNCOMPRESSED_BYTES + 1)],
+      { compression: "STORE" },
+    );
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: oversizedEntry,
+        originalName: "oversized-entry.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+      }),
+    ).rejects.toThrow("UPLOAD_DOCX_ZIP_ENTRY_SIZE_EXCEEDED");
+
+    const highRatioEntry = await createDocx(["Repeated evidence. ".repeat(40_000)]);
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: highRatioEntry,
+        originalName: "high-ratio.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+      }),
+    ).rejects.toThrow("UPLOAD_DOCX_ZIP_COMPRESSION_RATIO_EXCEEDED");
+
+    const smallArchive = await createDocx(["Small declared-total fixture."], {
+      extraEntryCount: 4,
+    });
+    const oversizedTotal = rewriteDeclaredZipEntrySizes(
+      smallArchive,
+      Math.floor(MAX_DOCX_ZIP_ENTRY_UNCOMPRESSED_BYTES * 0.75),
+    );
+    expect(MAX_DOCX_ZIP_TOTAL_UNCOMPRESSED_BYTES).toBeGreaterThan(
+      MAX_DOCX_ZIP_ENTRY_UNCOMPRESSED_BYTES,
+    );
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: oversizedTotal,
+        originalName: "oversized-total.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+      }),
+    ).rejects.toThrow("UPLOAD_DOCX_ZIP_TOTAL_SIZE_EXCEEDED");
+  });
+
+  it("supports external cancellation and enforces bounded extraction deadlines", async () => {
+    const controller = new AbortController();
+    controller.abort("test cancellation");
+    const docx = await createDocx(["Cancellation fixture."]);
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: docx,
+        originalName: "cancelled.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("UPLOAD_EXTRACTION_CANCELLED");
+
+    const pdf = createPdf(
+      Array.from({ length: 100 }, (_, index) => `Deadline page ${index + 1}`),
+    );
+    await expect(
+      PDF_EXTRACTION_ADAPTER.extract({
+        bytes: pdf,
+        originalName: "deadline.pdf",
+        mimeType: "application/pdf",
+        maximumCharacters: 2_000_000,
+        timeoutMilliseconds: 1,
+      }),
+    ).rejects.toThrow("UPLOAD_PDF_EXTRACTION_TIMEOUT");
+
+    await expect(
+      DOCX_EXTRACTION_ADAPTER.extract({
+        bytes: docx,
+        originalName: "deadline.docx",
+        mimeType: DOCX_MIME_TYPE,
+        maximumCharacters: 2_000_000,
+        timeoutMilliseconds: 1,
+      }),
+    ).rejects.toThrow("UPLOAD_DOCX_EXTRACTION_TIMEOUT");
   });
 });
