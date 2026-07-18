@@ -18,6 +18,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import {
   CASE_COMPILATION_AUDIT_SCHEMA_VERSION,
+  CaseCompilationAuditSchema,
   CaseServiceOwnerIdSchema,
   PublishCaseDraftRequestSchema,
   RegisterCaseDraftRequestSchema,
@@ -29,14 +30,6 @@ import { storedSha256Matches } from "./storageIntegrity";
 
 const CASE_SOURCE_SCHEMA_VERSION = "case-source.v1";
 const MAX_CASE_GRAPH_RECORD_BYTES = 900_000;
-
-const CaseCompilationAuditSchema = z
-  .object({
-    schemaVersion: z.literal(CASE_COMPILATION_AUDIT_SCHEMA_VERSION),
-    validationReport: RegisterCaseDraftRequestSchema.shape.validationReport,
-    observability: RegisterCaseDraftRequestSchema.shape.observability,
-  })
-  .strict();
 
 const promptInjectionFlag = v.object({
   patternId: v.union(
@@ -376,6 +369,7 @@ export const registerCompiledDraft = internalMutation({
       lifecycle: "draft",
       visibility: "private",
       ownerId: request.ownerId,
+      uploadId: request.uploadId,
       title: request.caseGraph.title,
       graphJson,
       graphSchemaVersion: request.caseGraph.schemaVersion,
@@ -397,6 +391,7 @@ export const registerCompiledDraft = internalMutation({
 function publicationMatches(
   record: Doc<"caseGraphs">,
   ownerId: string,
+  uploadId: string,
   graph: CaseGraphV1,
   graphJson: string,
 ): boolean {
@@ -405,6 +400,8 @@ function publicationMatches(
     record.lifecycle === "published" &&
     record.visibility === "private" &&
     record.ownerId === ownerId &&
+    (record.uploadId === undefined || record.uploadId === uploadId) &&
+    record.createdBy === "user" &&
     record.title === graph.title &&
     record.graphJson === graphJson &&
     record.graphSchemaVersion === graph.schemaVersion &&
@@ -483,12 +480,18 @@ export const publishCompiledDraft = internalMutation({
       if (
         existingPublications.length !== 1 ||
         !existing ||
-        !publicationMatches(existing, request.ownerId, publication.caseGraph, graphJson) ||
+        !publicationMatches(existing, request.ownerId, request.uploadId, publication.caseGraph, graphJson) ||
         existing.compilerMetadataJson !== publishedCompilerMetadataJson
       ) {
         throw new Error("CASE_PUBLISH_CONFLICT");
       }
-      return { caseId: request.caseGraph.caseId, version: 2, published: true, replayed: true };
+      return {
+        caseId: request.caseGraph.caseId,
+        version: 2,
+        published: true,
+        replayed: true,
+        caseGraph: publication.caseGraph,
+      };
     }
 
     const latest = await ctx.db
@@ -507,6 +510,7 @@ export const publishCompiledDraft = internalMutation({
       lifecycle: "published",
       visibility: "private",
       ownerId: request.ownerId,
+      uploadId: request.uploadId,
       title: publication.caseGraph.title,
       graphJson,
       graphSchemaVersion: publication.caseGraph.schemaVersion,
@@ -515,6 +519,12 @@ export const publishCompiledDraft = internalMutation({
       createdBy: "user",
       createdAt: Date.now(),
     });
-    return { caseId: request.caseGraph.caseId, version: 2, published: true, replayed: false };
+    return {
+      caseId: request.caseGraph.caseId,
+      version: 2,
+      published: true,
+      replayed: false,
+      caseGraph: publication.caseGraph,
+    };
   },
 });

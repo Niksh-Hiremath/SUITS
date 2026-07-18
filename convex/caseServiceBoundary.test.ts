@@ -285,7 +285,7 @@ describe("Convex case service boundary", () => {
     );
   });
 
-  it("rebuilds identical annotations and publication audit for an exact unannotated replay", () => {
+  it("rebuilds identical annotations and publication audit for an exact unannotated replay", async () => {
     const draft = createThreeWitnessCaseGraphV1Fixture();
     draft.status = "draft";
     const reviewed = structuredClone(draft);
@@ -298,7 +298,12 @@ describe("Convex case service boundary", () => {
     const replay = annotateHumanReview(draft, reviewed, publicationGraphId);
     expect(replay).toEqual(first);
 
-    const compilationAudit = { schemaVersion: "case-compilation-audit.v1", marker: "immutable" };
+    const registration = await validRegistration();
+    const compilationAudit = {
+      schemaVersion: "case-compilation-audit.v1" as const,
+      validationReport: registration.validationReport,
+      observability: registration.observability,
+    };
     const firstMetadata = serializePublishedCompilerMetadata(compilationAudit, first.audit);
     const replayMetadata = serializePublishedCompilerMetadata(compilationAudit, replay.audit);
     expect(replayMetadata).toBe(firstMetadata);

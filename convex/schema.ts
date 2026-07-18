@@ -291,6 +291,7 @@ export default defineSchema({
     ),
     visibility: v.union(v.literal("private"), v.literal("seeded_public")),
     ownerId: v.optional(v.string()),
+    uploadId: v.optional(v.string()),
     title: v.string(),
     graphJson: v.string(),
     graphSchemaVersion: v.string(),
@@ -306,6 +307,7 @@ export default defineSchema({
     .index("by_graph_id", ["graphId"])
     .index("by_case_version", ["caseId", "version"])
     .index("by_owner", ["ownerId"])
+    .index("by_owner_lifecycle", ["ownerId", "lifecycle"])
     .index("by_lifecycle", ["lifecycle"]),
 
   caseSources: defineTable({

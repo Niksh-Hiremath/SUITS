@@ -15,6 +15,7 @@ import type { CaseGraph } from "@/domain/case-graph";
 
 import { CaseGraphReviewEditor } from "./case-graph-review-editor";
 import { CaseSourceReview } from "./case-source-review";
+import { publicationTargetIsCurrent } from "./case-workbench-lifecycle";
 import styles from "./case-workbench.module.css";
 
 type WorkbenchStage = "select" | "loading" | "compiling" | "review" | "publishing" | "published" | "error";
@@ -55,8 +56,18 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [published, setPublished] = useState<CasePublishResponse | null>(null);
   const compileRequestId = useRef<string | null>(null);
+  const workGeneration = useRef(0);
+  const publishController = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    workGeneration.current += 1;
+    publishController.current?.abort();
+  }, []);
 
   useEffect(() => {
+    workGeneration.current += 1;
+    publishController.current?.abort();
+    publishController.current = null;
     if (initialDraftUploadId === null || !UPLOAD_ID_PATTERN.test(initialDraftUploadId)) return;
     const controller = new AbortController();
     void (async () => {
@@ -69,7 +80,18 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
         const result = CaseCompileResponseSchema.safeParse(await response.json());
         if (!result.success) throw new Error("The server returned an invalid case draft.");
         setCompiled(result.data);
-        setStage("review");
+        if (result.data.caseGraph.status === "published") {
+          setPublished({
+            caseId: result.data.caseGraph.caseId,
+            version: 2,
+            published: true,
+            replayed: true,
+            caseGraph: result.data.caseGraph,
+          });
+          setStage("published");
+        } else {
+          setStage("review");
+        }
       } catch (caught) {
         if (controller.signal.aborted) return;
         setError(caught instanceof Error ? caught.message : "Draft restoration failed.");
@@ -99,6 +121,9 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
       return;
     }
 
+    workGeneration.current += 1;
+    publishController.current?.abort();
+    publishController.current = null;
     setError(null);
     setStage("compiling");
     const requestId = compileRequestId.current ?? crypto.randomUUID();
@@ -124,7 +149,18 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
       if (!result.success) throw new Error("The server returned an invalid compiled case.");
       setCompiled(result.data);
       replaceDraftLocation(result.data.upload.uploadId);
-      setStage("review");
+      if (result.data.caseGraph.status === "published") {
+        setPublished({
+          caseId: result.data.caseGraph.caseId,
+          version: 2,
+          published: true,
+          replayed: true,
+          caseGraph: result.data.caseGraph,
+        });
+        setStage("published");
+      } else {
+        setStage("review");
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Case compilation failed.");
       setStage("error");
@@ -132,11 +168,20 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
   }
 
   function updateGraph(update: (graph: CaseGraph) => CaseGraph) {
+    if (stage === "publishing") return;
     setCompiled((current) => current ? { ...current, caseGraph: update(current.caseGraph) } : current);
   }
 
   async function publishCase() {
     if (!compiled) return;
+    const target = {
+      generation: workGeneration.current,
+      uploadId: compiled.upload.uploadId,
+      caseId: compiled.caseGraph.caseId,
+    };
+    publishController.current?.abort();
+    const controller = new AbortController();
+    publishController.current = controller;
     setError(null);
     setStage("publishing");
     try {
@@ -144,23 +189,35 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          uploadId: compiled.upload.uploadId,
+          uploadId: target.uploadId,
           caseGraph: { ...compiled.caseGraph, status: "published" },
         }),
+        credentials: "same-origin",
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const result = CasePublishResponseSchema.safeParse(await response.json());
       if (!result.success) throw new Error("The server returned an invalid publication result.");
+      if (!publicationTargetIsCurrent(target, workGeneration.current, compiled)) return;
       setPublished(result.data);
-      replaceDraftLocation(null);
+      setCompiled((current) => publicationTargetIsCurrent(target, workGeneration.current, current)
+        ? { ...current, caseGraph: result.data.caseGraph }
+        : current);
+      replaceDraftLocation(target.uploadId);
       setStage("published");
     } catch (caught) {
+      if (controller.signal.aborted || target.generation !== workGeneration.current) return;
       setError(caught instanceof Error ? caught.message : "Publishing failed.");
       setStage("error");
+    } finally {
+      if (publishController.current === controller) publishController.current = null;
     }
   }
 
   function reset() {
+    workGeneration.current += 1;
+    publishController.current?.abort();
+    publishController.current = null;
     setStage("select");
     setSelectedFile(null);
     setCompiled(null);
@@ -255,37 +312,44 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
               <p>Correct the framing below. Hidden facts and witness boundaries remain structurally isolated.</p>
             </header>
 
-            <label>
-              Case title
-              <input
-                maxLength={300}
-                onChange={(event) => updateGraph((graph) => ({ ...graph, title: event.target.value }))}
-                value={compiled.caseGraph.title}
-              />
-            </label>
-            <label>
-              Neutral summary
-              <textarea
-                maxLength={5_000}
-                onChange={(event) => updateGraph((graph) => ({ ...graph, summary: event.target.value }))}
-                rows={5}
-                value={compiled.caseGraph.summary}
-              />
-            </label>
-            <label>
-              Educational disclaimer · policy locked
-              <textarea
-                maxLength={1_000}
-                readOnly
-                rows={3}
-                value={compiled.caseGraph.educationalDisclaimer}
-              />
-            </label>
+            <fieldset className={styles.reviewControls} disabled={stage === "publishing"}>
+              <legend className={styles.srOnly}>Editable case content</legend>
+              <label>
+                Case title
+                <input
+                  maxLength={300}
+                  onChange={(event) => updateGraph((graph) => ({ ...graph, title: event.target.value }))}
+                  value={compiled.caseGraph.title}
+                />
+              </label>
+              <label>
+                Neutral summary
+                <textarea
+                  maxLength={5_000}
+                  onChange={(event) => updateGraph((graph) => ({ ...graph, summary: event.target.value }))}
+                  rows={5}
+                  value={compiled.caseGraph.summary}
+                />
+              </label>
+              <label>
+                Educational disclaimer · policy locked
+                <textarea
+                  maxLength={1_000}
+                  readOnly
+                  rows={3}
+                  value={compiled.caseGraph.educationalDisclaimer}
+                />
+              </label>
 
-            <CaseGraphReviewEditor
-              graph={compiled.caseGraph}
-              onChange={(caseGraph) => setCompiled((current) => current ? { ...current, caseGraph } : current)}
-            />
+              <CaseGraphReviewEditor
+                graph={compiled.caseGraph}
+                onChange={(caseGraph) => {
+                  if (stage !== "publishing") {
+                    setCompiled((current) => current ? { ...current, caseGraph } : current);
+                  }
+                }}
+              />
+            </fieldset>
 
             <CaseSourceReview caseGraph={compiled.caseGraph} />
 
@@ -294,7 +358,14 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
               <button className={styles.primaryButton} disabled={stage === "publishing"} onClick={publishCase} type="button">
                 {stage === "publishing" ? "Publishing…" : "Approve & publish case"}
               </button>
-              <button className={styles.secondaryButton} onClick={reset} type="button">Discard draft</button>
+              {stage === "publishing" ? (
+                <span aria-disabled="true" className={`${styles.secondaryButton} ${styles.disabledAction}`}>
+                  Save & close review
+                </span>
+              ) : (
+                <Link className={styles.secondaryButton} href="/cases">Save & close review</Link>
+              )}
+              <span>The owner-bound workspace lists this case for the lifetime of the anonymous session.</span>
             </div>
           </div>
 
@@ -343,9 +414,10 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
           <h2>{compiled?.caseGraph.title}</h2>
           <p>Version {published.version} is ready for a fictional educational hearing.</p>
           <div className={styles.actions}>
-            <Link className={styles.primaryButton} href="/cases">Return to case library</Link>
+            <Link className={styles.primaryButton} href="/cases">View case library</Link>
             <button className={styles.secondaryButton} onClick={reset} type="button">Compile another case</button>
           </div>
+          <CaseSourceReview caseGraph={published.caseGraph} />
         </section>
       )}
     </div>

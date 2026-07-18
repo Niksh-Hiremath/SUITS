@@ -77,7 +77,9 @@ export default async function SeededCasePage({ params }: PageProps) {
         </article>
         <p className={styles.disclaimer}>{caseGraph.educationalDisclaimer}</p>
         <div className={styles.actions}>
-          <Link className={styles.primary} href={`/courtroom/?caseId=${encodeURIComponent(caseGraph.caseId)}`}>Prepare this hearing</Link>
+          <span className={`${styles.primary} ${styles.disabledPrimary}`} aria-disabled="true">
+            Trial room opens in the next milestone
+          </span>
           <Link className={styles.secondary} href="/cases/new/">Compile another packet</Link>
         </div>
       </section>

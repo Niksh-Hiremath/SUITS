@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { CasePublishResponseSchema } from "@/domain/case-api";
 import { CaseGraphV1Schema } from "@/domain/case-graph";
 import {
   CASE_OWNER_COOKIE_NAME,
@@ -32,15 +33,6 @@ const PublishRequestSchema = z
       });
     }
   });
-
-const PublishResponseSchema = z
-  .object({
-    caseId: z.string().regex(COMPILED_CASE_ID_PATTERN),
-    version: z.literal(2),
-    published: z.literal(true),
-    replayed: z.boolean(),
-  })
-  .strict();
 
 function jsonError(status: number, code: string, message: string): NextResponse {
   return NextResponse.json(
@@ -98,11 +90,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         uploadId: parsed.uploadId,
         caseGraph: parsed.caseGraph,
       },
-      responseSchema: PublishResponseSchema,
+      responseSchema: CasePublishResponseSchema,
       timeoutMs: 120_000,
       signal: request.signal,
     });
-    if (result.caseId !== parsed.caseGraph.caseId) {
+    if (result.caseId !== parsed.caseGraph.caseId || result.caseGraph.caseId !== parsed.caseGraph.caseId) {
       throw new ConvexCaseServiceError("CASE_PUBLISH_RESPONSE_MISMATCH", 502);
     }
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });

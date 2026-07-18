@@ -3,6 +3,7 @@ import Link from "next/link";
 import { listSeededCases } from "@/domain/seeded-cases";
 
 import styles from "./case-library.module.css";
+import { OwnedCaseLibrary } from "./owned-case-library";
 
 export const metadata = {
   title: "Fictional case library — SUITS",
@@ -54,6 +55,8 @@ export default function CasesPage() {
           </Link>
         ))}
       </section>
+
+      <OwnedCaseLibrary />
     </main>
   );
 }

@@ -1,5 +1,12 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
 
+import {
+  CasePublishResponseSchema,
+  OwnedCaseListResponseSchema,
+  type OwnedCaseListResponse,
+} from "../src/domain/case-api";
+import type { CaseGraphV1 } from "../src/domain/case-graph";
+
 import { httpAction } from "./_generated/server";
 import {
   CaseCompilePermitRequestSchema,
@@ -26,6 +33,7 @@ import {
   CaseUploadCleanupRequestSchema,
   CaseUploadCleanupResponseSchema,
 } from "./caseUploadCleanup";
+import { OwnedCaseListRequestSchema } from "./publishedCases";
 
 type RegisterDraftMutationArgs = {
   ownerId: string;
@@ -73,6 +81,7 @@ type PublishDraftMutationResult = {
   version: number;
   published: boolean;
   replayed: boolean;
+  caseGraph: CaseGraphV1;
 };
 
 type CaseCompilePermitMutationArgs = {
@@ -129,6 +138,11 @@ const cleanupCaseUploadReference = makeFunctionReference<
   CaseUploadCleanupMutationArgs,
   CaseUploadCleanupMutationResult
 >("caseUploadCleanup:cleanupOrphanedStorage");
+const listOwnedCasesReference = makeFunctionReference<
+  "query",
+  { ownerId: string },
+  OwnedCaseListResponse
+>("publishedCases:listOwnedCases");
 
 const consumeCaseCompilePermit = httpAction(async (ctx, request) => {
   try {
@@ -228,14 +242,26 @@ const publishDraft = httpAction(async (ctx, request) => {
       caseGraphJson: JSON.stringify(body.caseGraph),
     });
     return caseServiceJson(
-      {
+      CasePublishResponseSchema.parse({
         caseId: result.caseId,
         version: result.version,
         published: result.published,
         replayed: result.replayed,
-      },
+        caseGraph: result.caseGraph,
+      }),
       result.replayed ? 200 : 201,
     );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const listOwnedCases = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, OwnedCaseListRequestSchema);
+    const result = await ctx.runQuery(listOwnedCasesReference, body);
+    return caseServiceJson(OwnedCaseListResponseSchema.parse(result));
   } catch (error) {
     return caseServiceErrorResponse(error);
   }
@@ -249,5 +275,6 @@ http.route({ path: "/service/case-upload/cleanup", method: "POST", handler: clea
 http.route({ path: "/service/case-upload-url", method: "POST", handler: generateUploadUrl });
 http.route({ path: "/service/case-draft/register", method: "POST", handler: registerDraft });
 http.route({ path: "/service/case-draft/publish", method: "POST", handler: publishDraft });
+http.route({ path: "/service/cases/owned/list", method: "POST", handler: listOwnedCases });
 
 export default http;

@@ -5,6 +5,7 @@ import { createThreeWitnessCaseGraphV1Fixture } from "../case-graph";
 import {
   CaseApiErrorResponseSchema,
   CaseCompileResponseSchema,
+  OwnedCaseListResponseSchema,
   CasePublishResponseSchema,
 } from "./schema";
 
@@ -30,14 +31,35 @@ describe("browser case API contracts", () => {
         },
       }).caseGraph.caseId,
     ).toBe(graph.caseId);
+    const publishedGraph = {
+      ...graph,
+      caseId: `case:${"b".repeat(48)}`,
+      status: "published" as const,
+    };
     expect(
       CasePublishResponseSchema.parse({
-        caseId: `case:${"b".repeat(48)}`,
+        caseId: publishedGraph.caseId,
         version: 2,
         published: true,
         replayed: false,
+        caseGraph: publishedGraph,
       }).published,
     ).toBe(true);
+    expect(
+      OwnedCaseListResponseSchema.parse({
+        cases: [{
+          uploadId: `upload:${"a".repeat(48)}`,
+          caseId: publishedGraph.caseId,
+          title: publishedGraph.title,
+          summary: publishedGraph.summary,
+          witnessCount: publishedGraph.witnesses.length,
+          evidenceCount: publishedGraph.evidence.length,
+          status: "published",
+          recordVersion: 2,
+          updatedAt: 1,
+        }],
+      }).cases,
+    ).toHaveLength(1);
   });
 
   it("rejects malformed success and error payloads", () => {

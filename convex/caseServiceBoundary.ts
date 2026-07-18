@@ -10,6 +10,8 @@ import {
 } from "../src/domain/case-graph";
 import {
   CaseCompilerObservabilitySchema,
+  CaseCompilerPersistedObservabilitySchema,
+  CaseCompilerPersistedValidationReportSchema,
   CaseCompilerValidationReportSchema,
 } from "../src/server/case-compiler/schemas";
 import {
@@ -263,39 +265,90 @@ export function caseGraphProvenanceSnapshot(graph: CaseGraphV1): string {
   });
 }
 
-export type HumanReviewEntityType =
-  | "case"
-  | "jurisdiction_profile"
-  | "party"
-  | "issue"
-  | "timeline_event"
-  | "fact"
-  | "evidence"
-  | "witness"
-  | "prior_statement"
-  | "contradiction"
-  | "settlement"
-  | "jury_instruction";
+export const HumanReviewEntityTypeSchema = z.enum([
+  "case",
+  "jurisdiction_profile",
+  "party",
+  "issue",
+  "timeline_event",
+  "fact",
+  "evidence",
+  "witness",
+  "prior_statement",
+  "contradiction",
+  "settlement",
+  "jury_instruction",
+]);
 
-export type HumanReviewChange = Readonly<{
-  path: string;
-  entityType: HumanReviewEntityType;
-  entityId: string;
-  changedFields: readonly string[];
-  provenanceId: string | null;
-}>;
+export const HumanReviewChangeSchema = z
+  .object({
+    path: z.string().trim().min(1).max(500),
+    entityType: HumanReviewEntityTypeSchema,
+    entityId: CaseGraphEntityIdSchema,
+    changedFields: z.array(z.string().trim().min(1).max(128)).min(1).max(64),
+    provenanceId: CaseGraphEntityIdSchema.nullable(),
+  })
+  .strict();
 
-export type HumanReviewAudit = Readonly<{
-  schemaVersion: typeof CASE_HUMAN_REVIEW_AUDIT_SCHEMA_VERSION;
-  publicationGraphId: string;
-  draftVersion: 1;
-  publishedVersion: 2;
-  totalChangeCount: number;
-  annotatedEntityCount: number;
-  recordedChangeCount: number;
-  truncated: boolean;
-  changes: readonly HumanReviewChange[];
-}>;
+export const HumanReviewAuditSchema = z
+  .object({
+    schemaVersion: z.literal(CASE_HUMAN_REVIEW_AUDIT_SCHEMA_VERSION),
+    publicationGraphId: CaseGraphEntityIdSchema,
+    draftVersion: z.literal(1),
+    publishedVersion: z.literal(2),
+    totalChangeCount: z.number().int().nonnegative(),
+    annotatedEntityCount: z.number().int().nonnegative(),
+    recordedChangeCount: z.number().int().nonnegative().max(MAX_RECORDED_HUMAN_REVIEW_CHANGES),
+    truncated: z.boolean(),
+    changes: z.array(HumanReviewChangeSchema).max(MAX_RECORDED_HUMAN_REVIEW_CHANGES),
+  })
+  .strict()
+  .superRefine((audit, ctx) => {
+    const recordedAnnotated = audit.changes.filter((change) => change.provenanceId !== null).length;
+    const provenanceIds = audit.changes.flatMap((change) => change.provenanceId ? [change.provenanceId] : []);
+    if (audit.recordedChangeCount !== audit.changes.length) {
+      ctx.addIssue({ code: "custom", path: ["recordedChangeCount"], message: "Recorded review count mismatch" });
+    }
+    if (
+      audit.recordedChangeCount > audit.totalChangeCount ||
+      audit.annotatedEntityCount > audit.totalChangeCount ||
+      recordedAnnotated > audit.annotatedEntityCount
+    ) {
+      ctx.addIssue({ code: "custom", path: ["totalChangeCount"], message: "Invalid review audit counts" });
+    }
+    if (
+      (!audit.truncated && (
+        audit.totalChangeCount !== audit.recordedChangeCount ||
+        audit.annotatedEntityCount !== recordedAnnotated
+      )) ||
+      (audit.truncated && audit.totalChangeCount <= audit.recordedChangeCount)
+    ) {
+      ctx.addIssue({ code: "custom", path: ["truncated"], message: "Invalid review truncation metadata" });
+    }
+    if (new Set(provenanceIds).size !== provenanceIds.length) {
+      ctx.addIssue({ code: "custom", path: ["changes"], message: "Duplicate review provenance ID" });
+    }
+  });
+
+export const CaseCompilationAuditSchema = z
+  .object({
+    schemaVersion: z.literal(CASE_COMPILATION_AUDIT_SCHEMA_VERSION),
+    validationReport: CaseCompilerPersistedValidationReportSchema,
+    observability: CaseCompilerPersistedObservabilitySchema,
+  })
+  .strict();
+
+export const CasePublicationAuditSchema = z
+  .object({
+    schemaVersion: z.literal(CASE_PUBLICATION_AUDIT_SCHEMA_VERSION),
+    compilation: CaseCompilationAuditSchema,
+    humanReview: HumanReviewAuditSchema,
+  })
+  .strict();
+
+export type HumanReviewEntityType = z.infer<typeof HumanReviewEntityTypeSchema>;
+export type HumanReviewChange = z.infer<typeof HumanReviewChangeSchema>;
+export type HumanReviewAudit = z.infer<typeof HumanReviewAuditSchema>;
 
 export type HumanReviewAnnotation = Readonly<{
   caseGraph: CaseGraphV1;
@@ -603,11 +656,11 @@ export function serializePublishedCompilerMetadata(
   compilationAudit: unknown,
   humanReview: HumanReviewAudit,
 ): string {
-  return JSON.stringify({
+  return JSON.stringify(CasePublicationAuditSchema.parse({
     schemaVersion: CASE_PUBLICATION_AUDIT_SCHEMA_VERSION,
     compilation: compilationAudit,
     humanReview,
-  });
+  }));
 }
 
 async function secretsMatch(received: string, expected: string): Promise<boolean> {
@@ -735,6 +788,7 @@ const INTERNAL_ERROR_STATUS = new Map<string, number>([
   ["CASE_PUBLISH_CONFLICT", 409],
   ["CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED", 409],
   ["CASE_PUBLISH_PROVENANCE_TAMPERED", 409],
+  ["CASE_OWNED_CASE_CONFLICT", 409],
   ["CASE_UPLOAD_CONFLICT", 409],
   ["CASE_UPLOAD_DIGEST_MISMATCH", 422],
   ["CASE_UPLOAD_MIME_TYPE_MISMATCH", 422],

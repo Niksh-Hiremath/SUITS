@@ -63,6 +63,8 @@
 .catalogHeader span { color: rgba(23, 24, 21, 0.52); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; }
 
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.privateCatalog { margin-top: 3.5rem; }
+.privateLibraryError { margin: 3rem 0 0; padding: 0.75rem 1rem; color: var(--muted); border-left: 3px solid var(--gold); }
 .card { min-height: 390px; display: flex; flex-direction: column; padding: 28px; color: var(--ink); border-right: 1px solid var(--line); background: rgba(255, 253, 247, 0.55); text-decoration: none; }
 .card:last-child { border-right: 0; }
 .card:hover { background: var(--paper-strong); }
@@ -92,6 +94,7 @@
 .primary,
 .secondary { display: inline-flex; min-height: 46px; align-items: center; padding: 0 18px; border-radius: 3px; font-weight: 900; text-decoration: none; }
 .primary { color: #fff; background: var(--wine); }
+.disabledPrimary { cursor: not-allowed; opacity: 0.64; }
 .secondary { color: var(--ink); border: 1px solid var(--line); }
 
 @media (max-width: 900px) {

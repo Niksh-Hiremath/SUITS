@@ -22,6 +22,7 @@ import type * as events from "../events.js";
 import type * as http from "../http.js";
 import type * as migrations from "../migrations.js";
 import type * as participatory from "../participatory.js";
+import type * as publishedCases from "../publishedCases.js";
 import type * as storageIntegrity from "../storageIntegrity.js";
 import type * as traces from "../traces.js";
 import type * as trialEvents from "../trialEvents.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   migrations: typeof migrations;
   participatory: typeof participatory;
+  publishedCases: typeof publishedCases;
   storageIntegrity: typeof storageIntegrity;
   traces: typeof traces;
   trialEvents: typeof trialEvents;

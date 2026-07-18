@@ -1,14 +1,17 @@
 import { v } from "convex/values";
 import { z } from "zod";
 
-import { CaseGraphV1Schema } from "../src/domain/case-graph";
+import {
+  CaseGraphV1Schema,
+  type CaseGraphV1,
+  type Provenance,
+} from "../src/domain/case-graph";
 import {
   MAX_CASE_COMPILER_SOURCE_SEGMENTS,
 } from "../src/server/case-compiler/constants";
 import {
-  CaseCompilationResultSchema,
-  CaseCompilerObservabilitySchema,
-  CaseCompilerValidationReportSchema,
+  CaseCompilerPersistedObservabilitySchema,
+  CaseCompilerPersistedValidationReportSchema,
 } from "../src/server/case-compiler/schemas";
 import {
   CaseIngestionEntityIdSchema,
@@ -21,15 +24,19 @@ import {
 } from "../src/server/case-ingestion/schema";
 import { internalQuery } from "./_generated/server";
 import {
-  CASE_COMPILATION_AUDIT_SCHEMA_VERSION,
+  CaseCompilationAuditSchema,
+  CasePublicationAuditSchema,
   CaseServiceOwnerIdSchema,
+  annotateHumanReview,
+  deriveDraftGraphId,
+  derivePublishedGraphId,
 } from "./caseServiceBoundary";
 
-const CaseCompilationAuditSchema = z
+const PersistedCaseCompilationResultSchema = z
   .object({
-    schemaVersion: z.literal(CASE_COMPILATION_AUDIT_SCHEMA_VERSION),
-    validationReport: CaseCompilerValidationReportSchema,
-    observability: CaseCompilerObservabilitySchema,
+    caseGraph: CaseGraphV1Schema,
+    validationReport: CaseCompilerPersistedValidationReportSchema,
+    observability: CaseCompilerPersistedObservabilitySchema,
   })
   .strict();
 
@@ -56,7 +63,7 @@ export const CaseCompileReplayResponseSchema = z.discriminatedUnion("found", [
     .object({
       found: z.literal(true),
       caseGraph: CaseGraphV1Schema,
-      validationReport: CaseCompilerValidationReportSchema,
+      validationReport: CaseCompilerPersistedValidationReportSchema,
       injectionFlags: z.array(PromptInjectionFlagSchema).max(MAX_PROMPT_INJECTION_FLAGS),
       upload: CaseCompileReplayUploadSchema,
     })
@@ -79,11 +86,13 @@ export type CaseCompileReplayUploadRecord = Readonly<{
 }>;
 
 export type CaseCompileReplayGraphRecord = Readonly<{
+  graphId: string;
   caseId: string;
   version: number;
   lifecycle: string;
   visibility: string;
   ownerId?: string;
+  uploadId?: string;
   title: string;
   graphJson: string;
   graphSchemaVersion: string;
@@ -109,16 +118,58 @@ function parsePersistedJson<T>(schema: z.ZodType<T>, value: string | undefined):
   }
 }
 
+function provenanceCollections(graph: CaseGraphV1): Provenance[][] {
+  return [
+    graph.jurisdictionProfile.provenance,
+    ...graph.parties.map((item) => item.provenance),
+    ...graph.issues.map((item) => item.provenance),
+    ...graph.timeline.map((item) => item.provenance),
+    ...graph.facts.map((item) => item.provenance),
+    ...graph.evidence.map((item) => item.provenance),
+    ...graph.witnesses.flatMap((item) => [
+      item.provenance,
+      ...item.priorStatements.map((statement) => statement.provenance),
+    ]),
+    ...graph.contradictions.map((item) => item.provenance),
+    graph.settlement.provenance,
+    ...graph.juryInstructions.map((item) => item.provenance),
+  ];
+}
+
+function stripServerReviewProvenance(
+  draft: CaseGraphV1,
+  published: CaseGraphV1,
+  publicationGraphId: string,
+): CaseGraphV1 {
+  const publicationToken = /^graph:published:([a-f0-9]{64})$/u.exec(publicationGraphId)?.[1];
+  if (!publicationToken) return replayConflict();
+  const reviewIdPattern = new RegExp(
+    `^prov:review:${publicationToken.slice(0, 16)}:[0-9]{4}$`,
+    "u",
+  );
+  const draftProvenanceIds = new Set(
+    provenanceCollections(draft).flat().map((item) => item.provenanceId),
+  );
+  const reviewed = structuredClone(published);
+  for (const collection of provenanceCollections(reviewed)) {
+    const retained = collection.filter((item) =>
+      draftProvenanceIds.has(item.provenanceId) || !reviewIdPattern.test(item.provenanceId),
+    );
+    collection.splice(0, collection.length, ...retained);
+  }
+  return CaseGraphV1Schema.parse(reviewed);
+}
+
 /**
- * Reconstructs only the data that the compile route originally returned. An
- * owner mismatch is deliberately indistinguishable from a missing upload and
- * is resolved before any private draft payload is parsed.
+ * Reconstructs the latest owner-visible CaseGraph while retaining the original
+ * compilation report. An owner mismatch is deliberately indistinguishable from
+ * a missing upload and is resolved before any private graph payload is parsed.
  */
-export function reconstructCaseCompileReplay(
+export async function reconstructCaseCompileReplay(
   requestValue: unknown,
   upload: CaseCompileReplayUploadRecord | null,
-  draftRecords: readonly CaseCompileReplayGraphRecord[],
-): CaseCompileReplayResponse {
+  graphRecords: readonly CaseCompileReplayGraphRecord[],
+): Promise<CaseCompileReplayResponse> {
   const request = CaseCompileReplayRequestSchema.parse(requestValue);
   if (!upload || upload.ownerId !== request.ownerId) return replayMiss();
   if (
@@ -130,8 +181,18 @@ export function reconstructCaseCompileReplay(
     return replayConflict();
   }
 
-  const draft = draftRecords[0];
-  if (draftRecords.length !== 1 || !draft) return replayConflict();
+  const drafts = graphRecords.filter((record) => record.version === 1);
+  const publications = graphRecords.filter((record) => record.version === 2);
+  const draft = drafts[0];
+  const publication = publications[0];
+  if (
+    drafts.length !== 1 ||
+    !draft ||
+    publications.length > 1 ||
+    graphRecords.length !== drafts.length + publications.length
+  ) {
+    return replayConflict();
+  }
   if (
     draft.ownerId !== request.ownerId ||
     draft.caseId !== upload.caseId ||
@@ -142,15 +203,22 @@ export function reconstructCaseCompileReplay(
   ) {
     return replayConflict();
   }
+  const expectedDraftGraphId = await deriveDraftGraphId(request.uploadId);
+  if (
+    draft.graphId !== expectedDraftGraphId ||
+    (draft.uploadId !== undefined && draft.uploadId !== request.uploadId)
+  ) {
+    return replayConflict();
+  }
 
-  const caseGraph = parsePersistedJson(CaseGraphV1Schema, draft.graphJson);
+  const draftGraph = parsePersistedJson(CaseGraphV1Schema, draft.graphJson);
   const audit = parsePersistedJson(CaseCompilationAuditSchema, draft.compilerMetadataJson);
   const uploadMetadata = parsePersistedJson(
     CaseUploadVersionMetadataSchema,
     upload.metadataJson,
   );
-  const compilation = CaseCompilationResultSchema.parse({
-    caseGraph,
+  const compilation = PersistedCaseCompilationResultSchema.parse({
+    caseGraph: draftGraph,
     validationReport: audit.validationReport,
     observability: audit.observability,
   });
@@ -173,9 +241,63 @@ export function reconstructCaseCompileReplay(
     return replayConflict();
   }
 
+  let visibleGraph = compilation.caseGraph;
+  if (publication) {
+    const expectedPublishedGraphId = await derivePublishedGraphId(request.ownerId, request.uploadId);
+    if (
+      publication.graphId !== expectedPublishedGraphId ||
+      publication.ownerId !== request.ownerId ||
+      publication.caseId !== upload.caseId ||
+      publication.version !== 2 ||
+      publication.lifecycle !== "published" ||
+      publication.visibility !== "private" ||
+      publication.createdBy !== "user" ||
+      (publication.uploadId !== undefined && publication.uploadId !== request.uploadId)
+    ) {
+      return replayConflict();
+    }
+    const publishedGraph = parsePersistedJson(CaseGraphV1Schema, publication.graphJson);
+    const publicationAudit = parsePersistedJson(
+      CasePublicationAuditSchema,
+      publication.compilerMetadataJson,
+    );
+    if (
+      publishedGraph.caseId !== compilation.caseGraph.caseId ||
+      publishedGraph.status !== "published" ||
+      publishedGraph.title !== publication.title ||
+      publishedGraph.schemaVersion !== publication.graphSchemaVersion ||
+      publishedGraph.version !== compilation.caseGraph.version ||
+      publishedGraph.educationalDisclaimer !== compilation.caseGraph.educationalDisclaimer ||
+      JSON.stringify(publishedGraph.sourceSegments) !== JSON.stringify(compilation.caseGraph.sourceSegments) ||
+      JSON.stringify(publishedGraph.compilerMetadata) !== JSON.stringify(compilation.caseGraph.compilerMetadata) ||
+      publication.sourceDigest !== draft.sourceDigest ||
+      publicationAudit.humanReview.publicationGraphId !== publication.graphId ||
+      JSON.stringify(publicationAudit.compilation) !== JSON.stringify(audit)
+    ) {
+      return replayConflict();
+    }
+    let rebuiltPublication;
+    try {
+      rebuiltPublication = annotateHumanReview(
+        compilation.caseGraph,
+        stripServerReviewProvenance(compilation.caseGraph, publishedGraph, publication.graphId),
+        publication.graphId,
+      );
+    } catch {
+      return replayConflict();
+    }
+    if (
+      JSON.stringify(rebuiltPublication.caseGraph) !== publication.graphJson ||
+      JSON.stringify(rebuiltPublication.audit) !== JSON.stringify(publicationAudit.humanReview)
+    ) {
+      return replayConflict();
+    }
+    visibleGraph = publishedGraph;
+  }
+
   return CaseCompileReplayResponseSchema.parse({
     found: true,
-    caseGraph: compilation.caseGraph,
+    caseGraph: visibleGraph,
     validationReport: compilation.validationReport,
     injectionFlags: uploadMetadata.injectionFlags,
     upload: {
@@ -203,12 +325,10 @@ export const lookupCompiledDraft = internalQuery({
 
     // Do not query or parse a private graph until ownership is established.
     if (!upload || upload.ownerId !== request.ownerId) return replayMiss();
-    const draftRecords = await ctx.db
+    const graphRecords = await ctx.db
       .query("caseGraphs")
-      .withIndex("by_case_version", (index) =>
-        index.eq("caseId", upload.caseId).eq("version", 1),
-      )
-      .take(2);
-    return reconstructCaseCompileReplay(request, upload, draftRecords);
+      .withIndex("by_case_version", (index) => index.eq("caseId", upload.caseId))
+      .take(3);
+    return reconstructCaseCompileReplay(request, upload, graphRecords);
   },
 });
