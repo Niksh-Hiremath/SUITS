@@ -30,4 +30,21 @@ describe("bounded request bodies", () => {
     );
     await expect(readBoundedRequestBody({ body: chunkedBody("data") }, 0)).rejects.toBeInstanceOf(RangeError);
   });
+
+  it("cancels a stalled body when the request is aborted", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("request disconnected", "AbortError");
+    const pending = readBoundedRequestBody({ body, signal: controller.signal }, 20);
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(cancelled).toBe(true);
+  });
 });

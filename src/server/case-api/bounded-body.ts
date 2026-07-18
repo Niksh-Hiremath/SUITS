@@ -7,6 +7,7 @@ export class RequestBodyLimitError extends Error {
 
 type BodySource = Readonly<{
   body: ReadableStream<Uint8Array> | null;
+  signal?: AbortSignal;
 }>;
 
 export async function readBoundedRequestBody(
@@ -19,11 +20,17 @@ export async function readBoundedRequestBody(
   if (request.body === null) throw new RequestBodyLimitError("REQUEST_BODY_EMPTY");
 
   const reader = request.body.getReader();
+  const cancelForAbort = () => {
+    void reader.cancel(request.signal?.reason ?? "request aborted");
+  };
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let totalBytes = 0;
   try {
+    request.signal?.throwIfAborted();
+    request.signal?.addEventListener("abort", cancelForAbort, { once: true });
     while (true) {
       const result = await reader.read();
+      request.signal?.throwIfAborted();
       if (result.done) break;
       if (result.value.byteLength === 0) continue;
       totalBytes += result.value.byteLength;
@@ -34,6 +41,7 @@ export async function readBoundedRequestBody(
       chunks.push(Uint8Array.from(result.value));
     }
   } finally {
+    request.signal?.removeEventListener("abort", cancelForAbort);
     reader.releaseLock();
   }
 
