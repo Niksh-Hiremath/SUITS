@@ -95,6 +95,7 @@ export function initializeTrialFromEvent(eventInput: unknown): TrialState {
     startedAt: event.occurredAt,
     updatedAt: event.occurredAt,
     userSide: event.payload.userSide,
+    policySnapshot: event.payload.policySnapshot,
     actors,
     facts,
     evidence,

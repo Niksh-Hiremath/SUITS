@@ -1,7 +1,18 @@
 import {
+  canActorCallWitness,
+  canActorCounterSettlement,
+  canActorOfferEvidence,
+  canActorProposeSettlement,
+  canActorRaiseObjection,
+  canActorRecallWitness,
+  isSettlementOfferExpired,
+  settlementExpirySequence,
+} from "../trial-policy";
+import {
   TrialActionSchema,
   TrialStateSchema,
   type TrialAction,
+  type TrialActionByType,
   type TrialActionType,
   type TrialPhase,
   type TrialState,
@@ -83,6 +94,78 @@ function invalid(code: TrialEngineErrorCode, message: string, path?: string): Ac
   return { ok: false, issue: { code, message, path } };
 }
 
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightIds = new Set(right);
+  return left.every((id) => rightIds.has(id));
+}
+
+function validateStartTrialPolicy(
+  action: TrialActionByType<"START_TRIAL">,
+): ActionValidationResult | null {
+  const { payload } = action;
+  const policy = payload.policySnapshot;
+  if (policy.caseId !== payload.caseId || policy.caseVersion !== payload.caseVersion) {
+    return invalid(
+      "INVALID_ACTION",
+      "START_TRIAL policy does not match the pinned case identity",
+      "payload.policySnapshot",
+    );
+  }
+
+  const policyActors = new Map(
+    policy.mappings.actors.map((binding) => [binding.actorId, binding]),
+  );
+  if (policyActors.size !== payload.actors.length) {
+    return invalid(
+      "INVALID_ACTION",
+      "START_TRIAL policy actor roster is incomplete",
+      "payload.policySnapshot.mappings.actors",
+    );
+  }
+  for (const actor of payload.actors) {
+    const binding = policyActors.get(actor.actorId);
+    if (
+      !binding ||
+      binding.role !== actor.role ||
+      binding.side !== actor.side ||
+      binding.witnessId !== actor.witnessId
+    ) {
+      return invalid(
+        "INVALID_ACTION",
+        `START_TRIAL policy actor binding does not match ${actor.actorId}`,
+        "payload.policySnapshot.mappings.actors",
+      );
+    }
+  }
+
+  if (
+    !sameIds(
+      policy.witnessCallability.map((rule) => rule.witnessId),
+      payload.witnessIds,
+    )
+  ) {
+    return invalid(
+      "INVALID_ACTION",
+      "START_TRIAL policy witness roster does not match the case payload",
+      "payload.policySnapshot.witnessCallability",
+    );
+  }
+  if (
+    !sameIds(
+      policy.evidencePermissions.map((rule) => rule.evidenceId),
+      payload.initialEvidence.map((evidence) => evidence.evidenceId),
+    )
+  ) {
+    return invalid(
+      "INVALID_ACTION",
+      "START_TRIAL policy evidence roster does not match the case payload",
+      "payload.policySnapshot.evidencePermissions",
+    );
+  }
+  return null;
+}
+
 function ensureActive(state: TrialState, action: TrialAction): ActionValidationResult | null {
   const permittedWhileInactive = new Set<TrialActionType>([
     "RESUME_TRIAL",
@@ -142,6 +225,15 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (state.activeWitnessId !== null) return invalid("WITNESS_NOT_AVAILABLE", "Release the active witness before calling another");
       if (action.actor.side !== action.payload.calledBySide) {
         return invalid("ACTOR_NOT_PERMITTED", "Counsel may call a witness only for their own side");
+      }
+      const policyAllows = action.type === "CALL_WITNESS"
+        ? canActorCallWitness(state.policySnapshot, action.actor.actorId, action.payload.witnessId)
+        : canActorRecallWitness(state.policySnapshot, action.actor.actorId, action.payload.witnessId);
+      if (!policyAllows) {
+        return invalid(
+          "ACTOR_NOT_PERMITTED",
+          `${action.actor.actorId} is not authorized to ${action.type === "CALL_WITNESS" ? "call" : "recall"} ${action.payload.witnessId}`,
+        );
       }
       return null;
     }
@@ -203,6 +295,17 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
     case "OBJECT": {
       if (state.activeQuestionId !== action.payload.questionId) return invalid("INVALID_OBJECTION_STATUS", "Objection must target the active question");
       if (state.objections[action.payload.objectionId]) return invalid("DUPLICATE_ENTITY_ID", `Duplicate objection ${action.payload.objectionId}`);
+      if (!canActorRaiseObjection(
+        state.policySnapshot,
+        action.actor.actorId,
+        action.payload.ground,
+      )) {
+        return invalid(
+          "ACTOR_NOT_PERMITTED",
+          `Objection ground ${action.payload.ground} is not permitted by the pinned trial policy`,
+          "payload.ground",
+        );
+      }
       if (action.payload.interruptedResponseId && !state.pendingResponses[action.payload.interruptedResponseId]) {
         return invalid("UNKNOWN_RESPONSE", `Unknown interrupted response ${action.payload.interruptedResponseId}`);
       }
@@ -232,6 +335,16 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
         return invalid("INVALID_EVIDENCE_STATUS", `Evidence ${evidence.evidenceId} cannot be offered from ${evidence.status}`);
       }
       if (action.actor.side !== action.payload.offeredBySide) return invalid("ACTOR_NOT_PERMITTED", "Counsel may offer evidence only for their side");
+      if (!canActorOfferEvidence(
+        state.policySnapshot,
+        action.actor.actorId,
+        action.payload.evidenceId,
+      )) {
+        return invalid(
+          "ACTOR_NOT_PERMITTED",
+          `${action.actor.actorId} is not authorized to offer ${action.payload.evidenceId}`,
+        );
+      }
       for (const testimonyId of action.payload.foundationTestimonyIds) {
         if (!state.testimony[testimonyId]) return invalid("UNKNOWN_TESTIMONY", `Unknown foundation testimony ${testimonyId}`);
       }
@@ -347,10 +460,46 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
         : invalid("TRIAL_NOT_ACTIVE", "Only a paused trial or recess may resume");
     case "PROPOSE_SETTLEMENT":
     case "COUNTER_SETTLEMENT": {
-      if (!["pretrial", "opening", "case_in_chief", "recess", "pre_closing"].includes(state.phase)) {
+      if (!state.policySnapshot.settlement.enabled) {
+        return invalid("INVALID_SETTLEMENT_STATUS", "Settlement is disabled by the pinned trial policy");
+      }
+      const policyAllows = action.type === "PROPOSE_SETTLEMENT"
+        ? canActorProposeSettlement(state.policySnapshot, action.actor.actorId, state.phase)
+        : canActorCounterSettlement(state.policySnapshot, action.actor.actorId, state.phase);
+      if (!state.policySnapshot.settlement.openPhases.includes(
+        state.phase as (typeof state.policySnapshot.settlement.openPhases)[number],
+      )) {
         return invalid("WRONG_PHASE", "Settlement is closed in the current phase");
       }
-      if (action.payload.expiresAtSequence <= state.lastSequence) return invalid("INVALID_SETTLEMENT_STATUS", "Settlement offer must expire in the future");
+      if (!policyAllows) {
+        return invalid(
+          "INVALID_SETTLEMENT_STATUS",
+          action.type === "COUNTER_SETTLEMENT"
+            ? "Counteroffers are disabled or the actor lacks settlement authority"
+            : "The actor lacks settlement authority",
+        );
+      }
+      const expectedExpiry = settlementExpirySequence(
+        state.policySnapshot,
+        state.lastSequence + 1,
+      );
+      if (action.payload.expiresAtSequence !== expectedExpiry) {
+        return invalid(
+          "INVALID_SETTLEMENT_STATUS",
+          `Settlement offer must expire at configured sequence ${expectedExpiry}`,
+          "payload.expiresAtSequence",
+        );
+      }
+      if (
+        action.payload.terms.currency !== null &&
+        action.payload.terms.currency !== state.policySnapshot.settlement.currency
+      ) {
+        return invalid(
+          "INVALID_SETTLEMENT_STATUS",
+          `Settlement currency must be ${state.policySnapshot.settlement.currency}`,
+          "payload.terms.currency",
+        );
+      }
       if (state.settlementOffers[action.payload.offerId]) return invalid("DUPLICATE_ENTITY_ID", `Offer ${action.payload.offerId} already exists`);
       if (action.type === "COUNTER_SETTLEMENT") {
         const parent = action.payload.parentOfferId ? state.settlementOffers[action.payload.parentOfferId] : undefined;
@@ -378,7 +527,16 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (action.type === "WITHDRAW_SETTLEMENT" && offer.proposedBySide !== action.actor.side) {
         return invalid("ACTOR_NOT_PERMITTED", "Only the proposing side may withdraw an offer");
       }
-      if (action.type === "EXPIRE_SETTLEMENT" && state.lastSequence < offer.expiresAtSequence) {
+      if (
+        action.type !== "EXPIRE_SETTLEMENT" &&
+        isSettlementOfferExpired(offer.expiresAtSequence, state.lastSequence + 1)
+      ) {
+        return invalid("INVALID_SETTLEMENT_STATUS", "Offer has expired");
+      }
+      if (
+        action.type === "EXPIRE_SETTLEMENT" &&
+        !isSettlementOfferExpired(offer.expiresAtSequence, state.lastSequence + 1)
+      ) {
         return invalid("INVALID_SETTLEMENT_STATUS", "Offer has not reached its expiry sequence");
       }
       return null;
@@ -428,6 +586,8 @@ export function validateAction(stateInput: TrialState | null, actionInput: unkno
       ...action.payload.initialEvidence.map((evidence) => `evidence:${evidence.evidenceId}`),
     ];
     if (new Set(ids).size !== ids.length) return invalid("DUPLICATE_ENTITY_ID", "START_TRIAL contains duplicate entity IDs");
+    const policyIssue = validateStartTrialPolicy(action);
+    if (policyIssue) return policyIssue;
     return { ok: true, action };
   }
 

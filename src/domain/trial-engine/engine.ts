@@ -1,5 +1,9 @@
 import type { CaseGraph } from "../case-graph";
 import {
+  createTrialPolicySnapshot,
+  type TrialPolicyActorBindingInput,
+} from "../trial-policy";
+import {
   EMPTY_CITATIONS,
   TRIAL_ACTION_SCHEMA_VERSION,
   TRIAL_EVENT_SCHEMA_VERSION,
@@ -124,6 +128,7 @@ export type StartTrialActionInput = {
   requestedAt: string;
   graph: CaseGraph;
   actors: ActorRef[];
+  actorBindings: readonly TrialPolicyActorBindingInput[];
   userSide?: "user" | "opposing";
   source?: EventSource;
   modelMetadata?: ModelMetadata | null;
@@ -132,6 +137,10 @@ export type StartTrialActionInput = {
 export function createStartTrialAction(input: StartTrialActionInput): TrialAction {
   const systemActor = input.actors.find((actor) => actor.role === "system");
   if (!systemActor) throw new Error("START_TRIAL requires a system actor in the roster");
+  const policySnapshot = createTrialPolicySnapshot({
+    graph: input.graph,
+    actorBindings: input.actorBindings,
+  });
   return assertValidAction(null, {
     schemaVersion: TRIAL_ACTION_SCHEMA_VERSION,
     actionId: input.actionId,
@@ -164,6 +173,7 @@ export function createStartTrialAction(input: StartTrialActionInput): TrialActio
         name: evidence.name,
         status: evidence.initialStatus,
       })),
+      policySnapshot,
       userSide: input.userSide ?? "user",
     },
   });

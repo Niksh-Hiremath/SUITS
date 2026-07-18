@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createThreeWitnessCaseGraphV1Fixture } from "../case-graph";
+import type { TrialPolicyActorBindingInput } from "../trial-policy";
 import {
   TRIAL_ACTION_SCHEMA_VERSION,
   TrialActionSchema,
@@ -78,9 +79,21 @@ const ACTORS = {
   },
 } as const satisfies Record<string, ActorRef>;
 
+function actorBindings(): TrialPolicyActorBindingInput[] {
+  return Object.values(ACTORS).map((actor) => ({
+    actor,
+    representedPartyIds:
+      actor.role === "user_counsel"
+        ? ["party_rina_shah"]
+        : actor.role === "opposing_counsel"
+          ? ["party_redwood_signal"]
+          : [],
+  }));
+}
+
 type Harness = ReturnType<typeof createHarness>;
 
-function createHarness() {
+function createHarness(graph = createThreeWitnessCaseGraphV1Fixture()) {
   let state: TrialState | null = null;
   let identity = 0;
   const events: TrialEvent[] = [];
@@ -99,8 +112,9 @@ function createHarness() {
     const action = createStartTrialAction({
       trialId: TRIAL_ID,
       ...identityFields,
-      graph: createThreeWitnessCaseGraphV1Fixture(),
+      graph,
       actors: Object.values(ACTORS),
+      actorBindings: actorBindings(),
     });
     const result = commitAction(null, action);
     state = result.state;
@@ -671,8 +685,15 @@ describe("settlement lifecycle", () => {
     summary,
   });
 
+  const exactExpiry = (harness: Harness) =>
+    harness.state.lastSequence +
+    1 +
+    harness.state.policySnapshot.settlement.expiresAfterEventCount;
+
   it("supports counter, rejection, withdrawal, expiry, and acceptance", () => {
-    const harness = createHarness();
+    const graph = createThreeWitnessCaseGraphV1Fixture();
+    graph.settlement.expiresAfterEventCount = 2;
+    const harness = createHarness(graph);
     harness.start();
 
     harness.commit(
@@ -681,7 +702,7 @@ describe("settlement lifecycle", () => {
         offerId: "offer_initial",
         parentOfferId: null,
         terms: terms("Initial claimant offer", 100_000),
-        expiresAtSequence: harness.state.lastSequence + 20,
+        expiresAtSequence: exactExpiry(harness),
       },
       ACTORS.userCounsel,
     );
@@ -691,7 +712,7 @@ describe("settlement lifecycle", () => {
         offerId: "offer_counter",
         parentOfferId: "offer_initial",
         terms: terms("Respondent counteroffer", 65_000),
-        expiresAtSequence: harness.state.lastSequence + 20,
+        expiresAtSequence: exactExpiry(harness),
       },
       ACTORS.opposingCounsel,
     );
@@ -710,7 +731,7 @@ describe("settlement lifecycle", () => {
         offerId: "offer_withdrawn",
         parentOfferId: null,
         terms: terms("Offer later withdrawn", 80_000),
-        expiresAtSequence: harness.state.lastSequence + 20,
+        expiresAtSequence: exactExpiry(harness),
       },
       ACTORS.userCounsel,
     );
@@ -721,7 +742,7 @@ describe("settlement lifecycle", () => {
     );
     expect(harness.state.settlementOffers.offer_withdrawn.status).toBe("withdrawn");
 
-    const expirySequence = harness.state.lastSequence + 2;
+    const expirySequence = exactExpiry(harness);
     harness.commit(
       "PROPOSE_SETTLEMENT",
       {
@@ -742,7 +763,7 @@ describe("settlement lifecycle", () => {
       },
       ACTORS.userCounsel,
     );
-    expect(harness.state.lastSequence).toBe(expirySequence);
+    expect(harness.state.lastSequence + 1).toBe(expirySequence);
     harness.commit(
       "EXPIRE_SETTLEMENT",
       { offerId: "offer_expiring" },
@@ -756,7 +777,7 @@ describe("settlement lifecycle", () => {
         offerId: "offer_accepted",
         parentOfferId: null,
         terms: terms("Final accepted offer", 85_000),
-        expiresAtSequence: harness.state.lastSequence + 10,
+        expiresAtSequence: exactExpiry(harness),
       },
       ACTORS.userCounsel,
     );
@@ -781,7 +802,7 @@ describe("settlement lifecycle", () => {
         offerId: "offer_counterparty_only",
         parentOfferId: null,
         terms: terms("Counterparty-only offer", 90_000),
-        expiresAtSequence: harness.state.lastSequence + 20,
+        expiresAtSequence: exactExpiry(harness),
       },
       ACTORS.userCounsel,
     );
@@ -794,7 +815,7 @@ describe("settlement lifecycle", () => {
           offerId: "offer_invalid_same_side_counter",
           parentOfferId: "offer_counterparty_only",
           terms: terms("Invalid same-side counter", 95_000),
-          expiresAtSequence: harness.state.lastSequence + 20,
+          expiresAtSequence: exactExpiry(harness),
         },
         ACTORS.userCounsel,
       ),
