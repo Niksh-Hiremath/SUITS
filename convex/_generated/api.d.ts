@@ -10,9 +10,13 @@
 
 import type * as artifacts from "../artifacts.js";
 import type * as autonomous from "../autonomous.js";
+import type * as caseDrafts from "../caseDrafts.js";
+import type * as caseServiceBoundary from "../caseServiceBoundary.js";
+import type * as caseUploads from "../caseUploads.js";
 import type * as cases from "../cases.js";
 import type * as evals from "../evals.js";
 import type * as events from "../events.js";
+import type * as http from "../http.js";
 import type * as migrations from "../migrations.js";
 import type * as participatory from "../participatory.js";
 import type * as traces from "../traces.js";
@@ -29,9 +33,13 @@ import type {
 declare const fullApi: ApiFromModules<{
   artifacts: typeof artifacts;
   autonomous: typeof autonomous;
+  caseDrafts: typeof caseDrafts;
+  caseServiceBoundary: typeof caseServiceBoundary;
+  caseUploads: typeof caseUploads;
   cases: typeof cases;
   evals: typeof evals;
   events: typeof events;
+  http: typeof http;
   migrations: typeof migrations;
   participatory: typeof participatory;
   traces: typeof traces;
