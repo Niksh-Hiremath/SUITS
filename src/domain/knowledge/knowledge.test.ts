@@ -15,9 +15,11 @@ import {
 import {
   buildJuryRecord,
   buildKnowledgeView,
+  buildOpponentCounselPublicKnowledgeView,
   buildOpponentPlannerKnowledgeView,
   JURY_RECORD_SCHEMA_VERSION,
   KNOWLEDGE_VIEW_SCHEMA_VERSION,
+  OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION,
   OPPONENT_PLANNER_KNOWLEDGE_VIEW_SCHEMA_VERSION,
   KnowledgeViewSchema,
   type KnowledgeStateProjection,
@@ -678,6 +680,28 @@ describe("counsel and judge privilege isolation", () => {
     );
     expect(serialized).not.toContain("instruction_override");
     expect(serialized).not.toContain("availablePriorStatementIds");
+  });
+
+  it("removes private strategy and settlement state from open-court counsel context", () => {
+    const view = buildOpponentCounselPublicKnowledgeView(
+      createKnowledgeState(),
+      "actor_opposing_counsel",
+    );
+
+    expect(view.schemaVersion).toBe(
+      OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION,
+    );
+    expect(view.actorRole).toBe("opposing_counsel");
+    expect(view.counsel.strategyMemory).toEqual([]);
+    expect(view.counsel.privateSettlement).toBeNull();
+    expect(view.counsel.facts.length).toBeGreaterThan(0);
+    expect(view.counsel.evidence.length).toBeGreaterThan(0);
+
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain("Preserve the metadata foundation.");
+    expect(serialized).not.toContain("offer_opposing_private");
+    expect(serialized).not.toContain("No admission of liability");
+    expect(serialized).not.toContain("reservationValue");
   });
 
   it("refuses to build the opposing planner view for another role", () => {
