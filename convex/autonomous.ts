@@ -78,7 +78,10 @@ export const runGolden = action({
     promptVersion: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ trialId: string; debriefId: string; evalId: string; passed: boolean }> => {
-    const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+    const model = process.env.OPENAI_DEEP_MODEL ?? "gpt-5.6-terra";
+    if (model !== "gpt-5.6-terra") {
+      throw new Error("OPENAI_DEEP_MODEL must be gpt-5.6-terra");
+    }
     const promptVersion = args.promptVersion ?? "jury-review.v1";
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");

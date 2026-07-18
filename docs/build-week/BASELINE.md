@@ -88,7 +88,7 @@ Material defects that must not be preserved as normal behavior:
 - `askWitness` pays for manager/specialist/reviewer output and then commits an authored answer instead;
 - opposing counsel is authored without GPT;
 - the final GPT verdict is overwritten deterministically;
-- runtime defaults to `gpt-5.4-mini`;
+- runtime defaulted to a now-removed, forbidden legacy model literal;
 - the autonomous Harbor/Northstar transcript is persisted under the Asha case and can evade shallow eval assertions;
 - debrief replacement deletes the prior debrief record;
 - global public queries expose all trials and traces without ownership checks.

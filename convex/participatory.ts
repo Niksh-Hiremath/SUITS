@@ -74,7 +74,10 @@ export const askWitness = action({
     if (!run || !publicCase || !privateCase) throw new Error("Court Director context unavailable");
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
-    const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+    const model = process.env.OPENAI_LIVE_MODEL ?? "gpt-5.6-luna";
+    if (model !== "gpt-5.6-luna") {
+      throw new Error("OPENAI_LIVE_MODEL must be gpt-5.6-luna");
+    }
     const openai = new OpenAI({ apiKey });
     let directorInputTokens = 0;
     let directorOutputTokens = 0;
@@ -175,7 +178,10 @@ export const finish = action({
     await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "deliberation", actionId: `${args.trialId}:closing` });
     const run = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
     if (!run) throw new Error("Trial not found");
-    const model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
+    const model = process.env.OPENAI_DEEP_MODEL ?? "gpt-5.6-terra";
+    if (model !== "gpt-5.6-terra") {
+      throw new Error("OPENAI_DEEP_MODEL must be gpt-5.6-terra");
+    }
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
     const turnIds = run.turns.map((turn) => turn.turnId);

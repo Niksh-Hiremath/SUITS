@@ -1,37 +1,43 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { readServerEnv } from "./env";
-
-const ORIGINAL_ENV = { ...process.env };
-
-afterEach(() => {
-  process.env = { ...ORIGINAL_ENV };
-});
+import {
+  OPENAI_DEEP_MODEL,
+  OPENAI_LIVE_MODEL,
+  readServerEnv,
+} from "./env";
 
 describe("readServerEnv", () => {
-  it("returns the verified provider configuration", () => {
-    process.env.OPENAI_API_KEY = "test-openai";
-    process.env.OPENAI_MODEL = "gpt-5.4-mini";
-    process.env.ELEVENLABS_API_KEY = "test-elevenlabs";
-    process.env.ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5";
-    process.env.ELEVENLABS_STT_MODEL = "scribe_v2";
-
-    expect(readServerEnv()).toMatchObject({
-      OPENAI_MODEL: "gpt-5.4-mini",
-      ELEVENLABS_TTS_MODEL: "eleven_flash_v2_5",
-      ELEVENLABS_STT_MODEL: "scribe_v2",
+  it("requires only the server-side API key and applies exact model defaults", () => {
+    expect(readServerEnv({ OPENAI_API_KEY: "test-openai" })).toEqual({
+      OPENAI_API_KEY: "test-openai",
+      OPENAI_LIVE_MODEL,
+      OPENAI_DEEP_MODEL,
     });
   });
 
-  it("reports missing variable names without exposing values", () => {
-    const source = {
-      OPENAI_MODEL: "gpt-5.4-mini",
-      ELEVENLABS_TTS_MODEL: "eleven_flash_v2_5",
-      ELEVENLABS_STT_MODEL: "scribe_v2",
-    };
+  it("accepts only the configured Luna and Terra roles", () => {
+    expect(
+      readServerEnv({
+        OPENAI_API_KEY: "test-openai",
+        OPENAI_LIVE_MODEL: "gpt-5.6-luna",
+        OPENAI_DEEP_MODEL: "gpt-5.6-terra",
+      }),
+    ).toMatchObject({
+      OPENAI_LIVE_MODEL: "gpt-5.6-luna",
+      OPENAI_DEEP_MODEL: "gpt-5.6-terra",
+    });
 
-    expect(() => readServerEnv(source)).toThrow(
-      "Missing required environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY",
+    expect(() =>
+      readServerEnv({
+        OPENAI_API_KEY: "test-openai",
+        OPENAI_LIVE_MODEL: "unexpected-model",
+      }),
+    ).toThrow("OPENAI_LIVE_MODEL must be gpt-5.6-luna");
+  });
+
+  it("reports a missing key without exposing any configured value", () => {
+    expect(() => readServerEnv({})).toThrow(
+      "Missing required environment variables: OPENAI_API_KEY",
     );
   });
 });
