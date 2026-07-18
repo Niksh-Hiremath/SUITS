@@ -7,6 +7,7 @@ import {
   ConvexCaseServiceError,
   buildCaseCompileReplayResponse,
   callConvexCaseService,
+  isTrustedRequestOrigin,
   verifyCaseOwnerSession,
 } from "@/server/case-api";
 
@@ -24,8 +25,7 @@ function jsonError(status: number, code: string, message: string): NextResponse 
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const origin = request.headers.get("origin");
-  if (origin !== null && origin !== request.nextUrl.origin) {
+  if (!isTrustedRequestOrigin(request)) {
     return jsonError(403, "ORIGIN_REJECTED", "Cross-origin case reads are not allowed.");
   }
 

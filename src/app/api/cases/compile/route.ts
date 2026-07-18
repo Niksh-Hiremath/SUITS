@@ -20,6 +20,7 @@ import {
   caseCompileRateLimiter,
   callConvexCaseService,
   deriveCaseCompilationIds,
+  isTrustedRequestOrigin,
   parseCaseCompileRequestId,
   readBoundedRequestBody,
   resolveCaseUploadMimeType,
@@ -76,11 +77,6 @@ function jsonError(
   );
 }
 
-function trustedOrigin(request: NextRequest): boolean {
-  const origin = request.headers.get("origin");
-  return origin === null || origin === request.nextUrl.origin;
-}
-
 function ingestionErrorResponse(error: Error): NextResponse | null {
   if (!error.message.startsWith("UPLOAD_")) return null;
   if (error.message === "UPLOAD_SIZE_EXCEEDED") {
@@ -132,7 +128,9 @@ async function storePacket(
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!trustedOrigin(request)) return jsonError(403, "ORIGIN_REJECTED", "Cross-origin case uploads are not allowed.");
+  if (!isTrustedRequestOrigin(request)) {
+    return jsonError(403, "ORIGIN_REJECTED", "Cross-origin case uploads are not allowed.");
+  }
 
   const contentEncoding = request.headers.get("content-encoding");
   if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {

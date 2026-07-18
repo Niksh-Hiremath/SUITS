@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   CASE_OWNER_COOKIE_MAX_AGE_SECONDS,
   CASE_OWNER_COOKIE_NAME,
+  isTrustedRequestOrigin,
   resolveCaseOwnerSession,
 } from "../../../../server/case-api";
 
@@ -16,8 +17,7 @@ function jsonError(status: number, code: string, message: string): NextResponse 
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const origin = request.headers.get("origin");
-  if (origin !== null && origin !== request.nextUrl.origin) {
+  if (!isTrustedRequestOrigin(request)) {
     return jsonError(403, "ORIGIN_REJECTED", "Cross-origin session requests are not allowed.");
   }
 

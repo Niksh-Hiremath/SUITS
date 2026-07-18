@@ -12,6 +12,7 @@ describe("case owner session route", () => {
 
   it("issues a signed HTTP-only owner cookie", async () => {
     vi.stubEnv("SUITS_SESSION_SECRET", SESSION_SECRET);
+    vi.stubEnv("SUITS_PUBLIC_ORIGIN", "https://suits.test");
     const response = await POST(
       new NextRequest("https://suits.test/api/cases/session", {
         method: "POST",
@@ -29,6 +30,7 @@ describe("case owner session route", () => {
 
   it("rejects cross-origin session minting", async () => {
     vi.stubEnv("SUITS_SESSION_SECRET", SESSION_SECRET);
+    vi.stubEnv("SUITS_PUBLIC_ORIGIN", "https://suits.test");
     const response = await POST(
       new NextRequest("https://suits.test/api/cases/session", {
         method: "POST",

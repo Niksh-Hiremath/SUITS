@@ -7,6 +7,7 @@ import {
   ConvexCaseServiceError,
   RequestBodyLimitError,
   callConvexCaseService,
+  isTrustedRequestOrigin,
   readBoundedRequestBody,
   verifyCaseOwnerSession,
 } from "@/server/case-api";
@@ -49,8 +50,7 @@ function jsonError(status: number, code: string, message: string): NextResponse 
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const origin = request.headers.get("origin");
-  if (origin !== null && origin !== request.nextUrl.origin) {
+  if (!isTrustedRequestOrigin(request)) {
     return jsonError(403, "ORIGIN_REJECTED", "Cross-origin publication is not allowed.");
   }
   const contentEncoding = request.headers.get("content-encoding");
