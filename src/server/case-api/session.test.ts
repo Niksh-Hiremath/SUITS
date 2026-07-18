@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   readCaseServiceSecret,
   resolveCaseOwnerSession,
+  verifyCaseOwnerSession,
 } from "./session";
 
 const SECRET = "test-only-service-secret-that-is-long-enough";
@@ -22,6 +23,7 @@ describe("signed anonymous case ownership", () => {
     expect(first).toMatchObject({ ownerId: `owner:${SESSION_ID}`, isNew: true });
     expect(second).toMatchObject({ ownerId: `owner:${SESSION_ID}`, isNew: false });
     expect(second.cookieValue).toBe(first.cookieValue);
+    expect(verifyCaseOwnerSession(first.cookieValue, SECRET)).toEqual(second);
   });
 
   it("replaces tampered, malformed, or incorrectly signed cookies", () => {
@@ -43,6 +45,7 @@ describe("signed anonymous case ownership", () => {
           createSessionId: () => replacementId,
         }),
       ).toMatchObject({ ownerId: `owner:${replacementId}`, isNew: true });
+      expect(verifyCaseOwnerSession(cookie, SECRET)).toBeNull();
     }
   });
 
@@ -53,4 +56,3 @@ describe("signed anonymous case ownership", () => {
     );
   });
 });
-

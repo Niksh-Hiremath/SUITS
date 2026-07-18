@@ -14,6 +14,8 @@ export type CaseOwnerSession = Readonly<{
   isNew: boolean;
 }>;
 
+export type VerifiedCaseOwnerSession = Omit<CaseOwnerSession, "isNew"> & Readonly<{ isNew: false }>;
+
 export function readCaseServiceSecret(source: EnvironmentSource = process.env): string {
   const secret = source.SUITS_CONVEX_SERVICE_SECRET?.trim();
   if (!secret || secret.length < 32) {
@@ -49,6 +51,19 @@ function parseCookie(value: string | undefined, secret: string): string | null {
   return signaturesMatch(signature, signatureFor(sessionId, secret)) ? sessionId : null;
 }
 
+export function verifyCaseOwnerSession(
+  cookieValue: string | undefined,
+  secret = readCaseServiceSecret(),
+): VerifiedCaseOwnerSession | null {
+  const sessionId = parseCookie(cookieValue, secret);
+  if (sessionId === null) return null;
+  return {
+    ownerId: `owner:${sessionId}`,
+    cookieValue: `${SESSION_VERSION}.${sessionId}.${signatureFor(sessionId, secret)}`,
+    isNew: false,
+  };
+}
+
 export function resolveCaseOwnerSession(
   cookieValue: string | undefined,
   options: Readonly<{
@@ -57,7 +72,7 @@ export function resolveCaseOwnerSession(
   }> = {},
 ): CaseOwnerSession {
   const secret = options.secret ?? readCaseServiceSecret();
-  const existingSessionId = parseCookie(cookieValue, secret);
+  const existingSessionId = verifyCaseOwnerSession(cookieValue, secret)?.ownerId.slice("owner:".length) ?? null;
   const sessionId = existingSessionId ?? (options.createSessionId ?? randomUUID)();
   if (!UUID_PATTERN.test(sessionId)) throw new Error("Case owner session IDs must be UUIDv4 values");
   return {
@@ -66,4 +81,3 @@ export function resolveCaseOwnerSession(
     isNew: existingSessionId === null,
   };
 }
-
