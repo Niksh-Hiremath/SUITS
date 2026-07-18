@@ -20,11 +20,25 @@ describe("case compilation rate limit", () => {
     expect(limiter.check("client-a", 600_001).allowed).toBe(true);
   });
 
-  it("hashes the trusted proxy address instead of retaining it", () => {
-    const first = caseCompilationClientKey(new Headers({ "x-real-ip": "203.0.113.7" }));
-    const second = caseCompilationClientKey(new Headers({ "x-real-ip": "203.0.113.7" }));
+  it("hashes only explicitly trusted proxy addresses instead of retaining them", () => {
+    const headers = new Headers({ "x-real-ip": "203.0.113.7" });
+    const environment = { SUITS_TRUSTED_PROXY: "x-real-ip" };
+    const first = caseCompilationClientKey(headers, environment);
+    const second = caseCompilationClientKey(headers, environment);
     expect(first).toBe(second);
     expect(first).toMatch(/^[a-f0-9]{64}$/u);
     expect(first).not.toContain("203.0.113.7");
+  });
+
+  it("ignores caller-supplied forwarding headers without trusted proxy configuration", () => {
+    const direct = caseCompilationClientKey(new Headers(), {});
+    expect(caseCompilationClientKey(new Headers({ "x-real-ip": "203.0.113.7" }), {})).toBe(direct);
+    expect(caseCompilationClientKey(new Headers({ "x-forwarded-for": "198.51.100.8" }), {})).toBe(direct);
+    expect(
+      caseCompilationClientKey(
+        new Headers({ "x-vercel-forwarded-for": "not-an-ip" }),
+        { VERCEL: "1" },
+      ),
+    ).toBe(direct);
   });
 });

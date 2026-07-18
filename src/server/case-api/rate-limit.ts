@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
 const WINDOW_MS = 10 * 60 * 1_000;
 const MAX_ATTEMPTS_PER_WINDOW = 5;
@@ -46,14 +47,31 @@ export class CaseCompileRateLimiter {
   }
 }
 
-export function caseCompilationClientKey(headers: Headers): string {
-  const forwarded = headers.get("x-vercel-forwarded-for") ??
-    headers.get("cf-connecting-ip") ??
-    headers.get("x-real-ip") ??
-    headers.get("x-forwarded-for")?.split(",", 1)[0] ??
-    "direct-client";
+type EnvironmentSource = Partial<Record<string, string | undefined>>;
+
+function trustedClientAddress(headers: Headers, source: EnvironmentSource): string {
+  const proxy = source.SUITS_TRUSTED_PROXY?.trim().toLowerCase() ||
+    (source.VERCEL === "1" ? "vercel" : "none");
+  const candidate = proxy === "vercel"
+    ? headers.get("x-vercel-forwarded-for")?.split(",", 1)[0]
+    : proxy === "cloudflare"
+      ? headers.get("cf-connecting-ip")
+      : proxy === "x-real-ip"
+        ? headers.get("x-real-ip")
+        : proxy === "x-forwarded-for"
+          ? headers.get("x-forwarded-for")?.split(",", 1)[0]
+          : null;
+  const address = candidate?.trim() ?? "";
+  return isIP(address) === 0 ? "direct-client" : address.toLowerCase();
+}
+
+export function caseCompilationClientKey(
+  headers: Headers,
+  source: EnvironmentSource = process.env,
+): string {
+  const clientAddress = trustedClientAddress(headers, source);
   return createHash("sha256")
-    .update(`suits-case-compiler-client:${forwarded.trim().slice(0, 240)}`)
+    .update(`suits-case-compiler-client:${clientAddress}`)
     .digest("hex");
 }
 
