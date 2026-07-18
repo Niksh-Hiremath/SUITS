@@ -6,5 +6,6 @@ export * from "./openai-provider";
 export * from "./opponent-planner-prompt";
 export * from "./pricing";
 export * from "./provider";
+export * from "./structured-call";
 export * from "./witness-responder";
 export * from "./witness-prompt";
