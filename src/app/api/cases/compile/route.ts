@@ -58,6 +58,8 @@ const DraftRegistrationResponseSchema = z
   })
   .strict();
 
+const CaseUploadCleanupResponseSchema = z.object({ deleted: z.boolean() }).strict();
+
 const CaseCompilePermitResponseSchema = z
   .object({
     allowed: z.boolean(),
@@ -310,29 +312,46 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       signal: request.signal,
     });
     const storageId = await storePacket(uploadUrl, bytes, mimeType, request.signal);
-    const registration = await callConvexCaseService({
-      path: "/service/case-draft/register",
-      body: {
-        ownerId: ownerSession.ownerId,
-        uploadId,
-        caseId,
-        storageId,
-        originalName: ingestion.upload.originalName,
-        mimeType: ingestion.upload.mimeType,
-        sizeBytes: ingestion.upload.sizeBytes,
-        contentDigest: ingestion.upload.contentDigest,
-        extractionAdapterId: ingestion.extractionAdapterId,
-        extractionCharacterCount: ingestion.extractionCharacterCount,
-        injectionFlags: ingestion.injectionFlags,
-        sourceSegments: ingestion.segments,
-        caseGraph: compilation.caseGraph,
-        validationReport: compilation.validationReport,
-        observability: compilation.observability,
-      },
-      responseSchema: DraftRegistrationResponseSchema,
-      timeoutMs: 120_000,
-      signal: request.signal,
-    });
+    let registration: z.infer<typeof DraftRegistrationResponseSchema>;
+    try {
+      registration = await callConvexCaseService({
+        path: "/service/case-draft/register",
+        body: {
+          ownerId: ownerSession.ownerId,
+          uploadId,
+          caseId,
+          storageId,
+          originalName: ingestion.upload.originalName,
+          mimeType: ingestion.upload.mimeType,
+          sizeBytes: ingestion.upload.sizeBytes,
+          contentDigest: ingestion.upload.contentDigest,
+          extractionAdapterId: ingestion.extractionAdapterId,
+          extractionCharacterCount: ingestion.extractionCharacterCount,
+          injectionFlags: ingestion.injectionFlags,
+          sourceSegments: ingestion.segments,
+          caseGraph: compilation.caseGraph,
+          validationReport: compilation.validationReport,
+          observability: compilation.observability,
+        },
+        responseSchema: DraftRegistrationResponseSchema,
+        timeoutMs: 120_000,
+        signal: request.signal,
+      });
+    } catch (registrationError) {
+      try {
+        const cleanup = await callConvexCaseService({
+          path: "/service/case-upload/cleanup",
+          body: { ownerId: ownerSession.ownerId, uploadId, storageId },
+          responseSchema: CaseUploadCleanupResponseSchema,
+        });
+        console.info("case_storage_cleanup", { deleted: cleanup.deleted });
+      } catch (cleanupError) {
+        console.error("case_storage_cleanup_failed", {
+          name: cleanupError instanceof Error ? cleanupError.name : "UnknownError",
+        });
+      }
+      throw registrationError;
+    }
     if (registration.uploadId !== uploadId || registration.caseId !== caseId) {
       throw new ConvexCaseServiceError("CASE_DRAFT_RESPONSE_MISMATCH", 502);
     }
