@@ -17,6 +17,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { storedSha256Matches } from "./storageIntegrity";
 
 const MAX_UPLOADS_PER_OWNER_QUERY = 500;
 const MAX_SOURCE_SEGMENTS_PER_UPLOAD = 1_000;
@@ -151,7 +152,7 @@ export const registerStoredUpload = mutation({
       sizeBytes: args.sizeBytes,
       contentDigest: args.contentDigest,
     });
-    if (storedFile.sha256 !== registration.contentDigest) {
+    if (!storedSha256Matches(storedFile.sha256, registration.contentDigest)) {
       throw new Error("UPLOAD_DIGEST_MISMATCH");
     }
     const initial = nextUploadVersion(undefined, "uploaded");

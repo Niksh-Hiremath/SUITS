@@ -25,6 +25,7 @@ import {
   serializePublishedCompilerMetadata,
   type RegisterCaseDraftRequest,
 } from "./caseServiceBoundary";
+import { storedSha256Matches } from "./storageIntegrity";
 
 const CASE_SOURCE_SCHEMA_VERSION = "case-source.v1";
 const MAX_CASE_GRAPH_RECORD_BYTES = 900_000;
@@ -151,7 +152,9 @@ async function assertStoredUpload(
   const storedFile = await ctx.db.system.get("_storage", storageId);
   if (!storedFile) throw new Error("CASE_UPLOAD_STORAGE_OBJECT_NOT_FOUND");
   if (storedFile.size !== request.sizeBytes) throw new Error("CASE_UPLOAD_SIZE_MISMATCH");
-  if (storedFile.sha256 !== request.contentDigest) throw new Error("CASE_UPLOAD_DIGEST_MISMATCH");
+  if (!storedSha256Matches(storedFile.sha256, request.contentDigest)) {
+    throw new Error("CASE_UPLOAD_DIGEST_MISMATCH");
+  }
   if (!storedFile.contentType) throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
   let storedMimeType: string;
   try {
