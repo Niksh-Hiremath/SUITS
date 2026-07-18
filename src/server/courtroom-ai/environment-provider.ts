@@ -10,6 +10,7 @@ import type {
   CourtroomModelProviderRequest,
   CourtroomModelProviderResponse,
 } from "./provider";
+import { CourtroomModelProviderError } from "./provider";
 
 type EnvironmentCourtroomModelProviderOptions = Readonly<{
   readEnvironment?: () => ServerEnv;
@@ -42,9 +43,20 @@ export class EnvironmentCourtroomModelProvider
   async generate<TSchema extends z.ZodObject>(
     request: CourtroomModelProviderRequest<TSchema>,
   ): Promise<CourtroomModelProviderResponse<z.output<TSchema>>> {
-    this.#delegate ??= this.#createProvider(
-      this.#readEnvironment().OPENAI_API_KEY,
-    );
+    if (this.#delegate === null) {
+      try {
+        this.#delegate = this.#createProvider(
+          this.#readEnvironment().OPENAI_API_KEY,
+        );
+      } catch (error) {
+        throw new CourtroomModelProviderError(
+          "openai_configuration_error",
+          "The courtroom model provider is not configured",
+          false,
+          { cause: error },
+        );
+      }
+    }
     return await this.#delegate.generate(request);
   }
 }
