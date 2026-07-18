@@ -46,6 +46,18 @@ const ACTORS = {
     side: "opposing",
     witnessId: null,
   },
+  jury: {
+    actorId: "actor_jury",
+    role: "jury",
+    side: "neutral",
+    witnessId: null,
+  },
+  debriefCoach: {
+    actorId: "actor_debrief_coach",
+    role: "debrief_coach",
+    side: "neutral",
+    witnessId: null,
+  },
   rina: {
     actorId: "actor_witness_rina",
     role: "witness",
@@ -202,6 +214,37 @@ function answerRina(harness: Harness, responseId: string, suffix = "one"): Commi
 }
 
 describe("trial action validation", () => {
+  it("enforces the exhaustive actor-role permission matrix", () => {
+    const harness = createHarness();
+    harness.start();
+
+    expectIssue(
+      harness.state,
+      harness.draft(
+        "PROPOSE_ASSERTION",
+        {
+          factId: "fact_jury_must_not_propose",
+          proposition: "The jury cannot create facts in the trial record.",
+          provenanceIds: ["provenance_invalid_jury_action"],
+          visibility: "public",
+        },
+        ACTORS.jury,
+      ),
+      "ACTOR_NOT_PERMITTED",
+    );
+
+    expectIssue(
+      harness.state,
+      harness.draft("DELIBERATE", {}, ACTORS.system),
+      "ACTOR_NOT_PERMITTED",
+    );
+    expectIssue(
+      harness.state,
+      harness.draft("GENERATE_DEBRIEF", { debriefId: "debrief_invalid" }, ACTORS.system),
+      "ACTOR_NOT_PERMITTED",
+    );
+  });
+
   it("rejects an illegal phase transition", () => {
     const harness = createHarness();
     harness.start();

@@ -6,6 +6,7 @@ import {
   type TrialPhase,
   type TrialState,
 } from "./schemas";
+import { isActionAllowedForActor } from "./permissions";
 
 export const TRIAL_ENGINE_ERROR_CODES = [
   "INVALID_ACTION",
@@ -78,43 +79,6 @@ const PHASE_TRANSITIONS: Readonly<Record<TrialPhase, readonly TrialPhase[]>> = {
   complete: [],
 };
 
-const JUDGE_ACTIONS = new Set<TrialActionType>([
-  "BEGIN_PHASE",
-  "SWEAR_WITNESS",
-  "RULE_ON_OBJECTION",
-  "STRIKE_TESTIMONY",
-  "RULE_ON_EVIDENCE",
-  "REVEAL_HIDDEN_FACT",
-  "VERIFY_ASSERTION",
-  "RULE_ON_ASSERTION",
-  "PAUSE_TRIAL",
-  "REQUEST_RECESS",
-  "RESUME_TRIAL",
-  "INSTRUCT_JURY",
-  "RENDER_VERDICT",
-]);
-
-const COUNSEL_ACTIONS = new Set<TrialActionType>([
-  "CALL_WITNESS",
-  "ASK_QUESTION",
-  "END_EXAMINATION",
-  "RECALL_WITNESS",
-  "RELEASE_WITNESS",
-  "OBJECT",
-  "REPHRASE_QUESTION",
-  "MOVE_TO_STRIKE",
-  "OFFER_EVIDENCE",
-  "WITHDRAW_EVIDENCE",
-  "PROPOSE_ASSERTION",
-  "PROPOSE_SETTLEMENT",
-  "COUNTER_SETTLEMENT",
-  "ACCEPT_SETTLEMENT",
-  "REJECT_SETTLEMENT",
-  "WITHDRAW_SETTLEMENT",
-  "REST_CASE",
-  "GIVE_CLOSING",
-]);
-
 function invalid(code: TrialEngineErrorCode, message: string, path?: string): ActionValidationResult {
   return { ok: false, issue: { code, message, path } };
 }
@@ -141,18 +105,12 @@ function ensureActorPermission(state: TrialState, action: TrialAction): ActionVa
   ) {
     return invalid("ACTOR_NOT_PERMITTED", `Actor metadata does not match the canonical roster`, "actor");
   }
-  if (JUDGE_ACTIONS.has(action.type) && canonical.role !== "judge" && canonical.role !== "system") {
-    return invalid("ACTOR_NOT_PERMITTED", `${action.type} requires the judge or deterministic system`);
-  }
-  if (
-    COUNSEL_ACTIONS.has(action.type) &&
-    canonical.role !== "user_counsel" &&
-    canonical.role !== "opposing_counsel"
-  ) {
-    return invalid("ACTOR_NOT_PERMITTED", `${action.type} requires counsel`);
-  }
-  if (action.type === "ANSWER_QUESTION" && canonical.role !== "witness") {
-    return invalid("ACTOR_NOT_PERMITTED", "Only the active witness may answer a courtroom question");
+  if (!isActionAllowedForActor(canonical.role, action.type)) {
+    return invalid(
+      "ACTOR_NOT_PERMITTED",
+      `${canonical.role} actor ${canonical.actorId} may not perform ${action.type}`,
+      "type",
+    );
   }
   return null;
 }
