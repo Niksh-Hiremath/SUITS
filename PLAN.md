@@ -504,14 +504,14 @@ Gate:
 
 Deliverables:
 
-- [ ] Responses API streaming adapter;
-- [ ] strict schemas for all call classes;
+- [x] Responses API streaming adapter;
+- [x] strict schemas for all call classes;
 - [ ] role-specific KnowledgeView prompts;
 - [ ] cancellation/revision handling;
 - [ ] validation and targeted repair;
-- [ ] prompt/version/cost/latency traces;
-- [ ] deterministic mock/replay adapter;
-- [ ] live integration smoke command.
+- [x] prompt/version/cost/latency traces;
+- [x] deterministic mock/replay adapter;
+- [x] live integration smoke command.
 
 Gate:
 
@@ -798,6 +798,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. The local OpenAI key has not yet been used for a Luna courtroom smoke, so entitlement and live latency remain unverified rather than presumed. Convex CLI authentication remains valid and needs no user login.
   - Commits: `05ca446`, `d162fb6`.
 
+- 2026-07-19 04:53 IST — Milestone 4 live Luna witness checkpoint
+  - Changed: added the streamed Responses provider and strict contracts for every planned courtroom call class; implemented the witness-specific KnowledgeView prompt, one targeted semantic repair, cancellation, phrase emission after whole-output validation, published Luna/Terra cost estimation, immutable owner-bound call/attempt audits, and an atomic generated-testimony append. The active Next.js BFF now obtains a secret-only Convex preparation, calls `gpt-5.6-luna`, and commits only against a freshly revalidated head; the compatibility Convex command refuses model-required questions instead of fabricating testimony.
+  - Verified: 60 provider/boundary tests, 19 focused persistence tests, seven Convex hearing-runtime tests, and 32 protected-BFF/integration tests passed, along with both TypeScript surfaces and scoped lint. `npx convex dev --once` synchronized the new tables, indexes, and functions to `cheery-bandicoot-36` without another login. A real two-witness Luna smoke completed in 22.576 seconds, committed and durably reloaded both grounded answers, used distinct audited call IDs, required zero repairs, and cited no fact or evidence outside either witness's scoped request. Calls used 2,105 input/120 output tokens at an estimated $0.002825 and 2,199 input/130 output tokens at an estimated $0.002979.
+  - Remaining: this is a witness-path checkpoint, not the Milestone 4 gate. Opposing-counsel planning/examination/objections, judge rulings, settlement evaluation, jury deliberation/verdict, and Terra final coaching still require role-specific prompt/orchestration cutovers and a real multi-role trial before the gate checkboxes can be marked complete.
+  - Blocked: none. The local file intentionally lacks the Convex service secret; the live command loaded the already-configured development secret into that PowerShell process without printing or persisting it.
+  - Commits: implementation series `a623b80` through `01c0471`, plus generated binding refresh `920f60a`; this PLAN checkpoint is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -828,6 +835,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The legacy `/records` route still reads unauthenticated mutable legacy trial tables. The V3 hearing no longer links to it; owner-bound V3 Court Records and full event pagination remain later deliverables rather than being misrepresented as complete.
 - OpenAI's strict Zod helper rejects a discriminated union at the schema root (`Root schema must have type: 'object'`). Runtime call contracts therefore use a strict object root and place any discriminated proposal union inside a required property; the witness contract has a focused conversion test so this provider constraint cannot regress silently.
 - The active Convex hearing action can validate and persist model output but cannot relay incremental Responses API deltas through the current Convex HTTP-to-Next JSON chain or bind browser disconnects directly to the provider `AbortSignal`. Live model orchestration therefore belongs in the Next.js server, with Convex exposing secret-only prepare and commit boundaries around its canonical state.
+- Terminal model-call audits are immutable by `callId`. Retrying a still-pending witness response after a failed or cancelled provider call therefore requires a fresh audited call ID while retaining the stable response ID and material command identity; reusing the failed call ID would correctly conflict with its terminal trace.
+- Published standard GPT-5.6 pricing supports deterministic estimates for Luna and Terra, but the estimator must return `null` when provider counters cannot be partitioned safely into uncached input, cached reads, cache writes, and output. The recorded rates and provenance are [OpenAI's model catalog](https://developers.openai.com/api/docs/models) and [the GPT-5.6 announcement](https://openai.com/index/gpt-5-6/).
+- The live courtroom test initially failed safely before any model call because `SUITS_CONVEX_SERVICE_SECRET` was absent from local files. Reading the existing development value into one PowerShell process through `npx convex env get`, without printing or persisting it, then produced a successful real two-witness Luna run; no Convex login was needed.
 
 ## 15. Decisions
 
@@ -858,6 +868,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Represent witness dialogue as bounded, phrase-sized grounded segments. Flatten only a fully validated proposal into the canonical `ANSWER_QUESTION` action; prior-statement IDs and semantic performance remain audit/rendering metadata, while the engine receives only its existing text/fact/evidence payload.
 - Use fixed server-owned language for insufficient-knowledge, outside-scope, cannot-recall, and unclear-question dispositions. The model selects the disposition and performance only, preventing a nominal refusal from becoming a free-text leakage channel.
 - Run interactive courtroom intelligence in the Next.js server with `gpt-5.6-luna`, then revalidate a fresh Convex head before trusted append. Keep `gpt-5.6-terra` reserved for case compilation and final coaching, and never substitute authored dialogue when a live provider output is invalid, cancelled, or stale.
+- Commit an accepted generated courtroom action and its accepted audit in the same Convex transaction. The standalone terminal-audit boundary accepts only failed or cancelled calls, so a crash cannot leave accepted model output recorded without its canonical event or vice versa.
+- Allocate a new audited call ID for each provider retry while preserving the pending response/action identity. This keeps immutable failed/cancelled traces replay-safe without allowing multiple material answers for one courtroom request.
 
 ## 16. Verification Evidence
 
@@ -948,6 +960,17 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run typecheck` — exit 0.
   - `git push origin main` after `05ca446` and `d162fb6` — exit 0; both scoped contract commits are present on `origin/main`.
   - OpenAI Luna live runtime check — not run at this checkpoint; it remains an explicit Milestone 4 gate, not a pass.
+
+- 2026-07-19 03:51–04:53 IST — Milestone 4 witness runtime and live checkpoint
+  - `npm exec -- vitest run src/server/courtroom-ai src/domain/hearing-runtime/model-boundary.test.ts` — exit 0; 60 tests passed across the streamed provider, environment adapter, pricing, witness orchestration, strict contracts, redaction, cancellation, repair, and precommit binding.
+  - Focused courtroom-call persistence and atomic generated-append suites — exit 0; 19 tests passed, including owner isolation, exact replay, conflicting trace rejection, accepted event/audit atomicity, and full rollback after an injected trace conflict.
+  - `npm exec -- vitest run convex/hearingRuntime.integration.test.ts` — exit 0; seven tests passed for isolated preparation, fresh retry call IDs, refusal to fabricate model-required answers, accepted AI append/audit, exact prepare/commit replay, foreign-fact/cross-owner/stale rejection, and multi-witness resume.
+  - Protected hearing BFF/domain/Convex integration slice — exit 0; 32 tests passed for secret-only prepare/commit/terminal-audit routing, safe diagnostics, disconnect cancellation, accepted commit, failed-call audit, and rejection of the removed direct Convex model-required path.
+  - `npm run typecheck -- --pretty false`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, scoped ESLint, and `git diff --check` — exit 0.
+  - `npx convex dev --once` — exit 0; functions ready on development deployment `cheery-bandicoot-36` without a login prompt. It added `courtroomModelCallAttempts.by_call_attempt` plus `courtroomModelCalls.by_call_id`, `.by_owner_trial`, and `.by_trial_time`.
+  - Initial `$env:RUN_OPENAI_LIVE_COURTROOM='1'; npm run test:live:courtroom-witness` — exited before a provider request with the intended configuration error because the local files do not persist `SUITS_CONVEX_SERVICE_SECRET`; this failed preflight is not counted as a live pass.
+  - Process-local development-secret retrieval followed by `$env:RUN_OPENAI_LIVE_COURTROOM='1'; npm run test:live:courtroom-witness` — exit 0; one real test passed in 22.576 seconds for trial `trial_f45026de69a54df5981989d7b05542c7`. Luna answered `witness_rina_shah` with 2,105 input/120 output tokens and estimated cost $0.002825, then `witness_theo_morgan` with 2,199 input/130 output tokens and estimated cost $0.002979. Both calls had zero repairs, distinct call IDs, only request-scoped citations, atomic durable events/audits, and byte-equivalent owner reload at the final head.
+  - Opposing counsel, judge, settlement, jury, and Terra coaching were not exercised by this live test and remain unverified; this evidence does not satisfy the full multi-role Milestone 4 gate.
 
 ## 17. Blocked external prerequisites
 
