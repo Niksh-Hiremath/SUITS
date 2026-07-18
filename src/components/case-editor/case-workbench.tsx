@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import {
   CaseApiErrorResponseSchema,
@@ -17,9 +17,12 @@ import { CaseGraphReviewEditor } from "./case-graph-review-editor";
 import { CaseSourceReview } from "./case-source-review";
 import styles from "./case-workbench.module.css";
 
-type WorkbenchStage = "select" | "compiling" | "review" | "publishing" | "published" | "error";
+type WorkbenchStage = "select" | "loading" | "compiling" | "review" | "publishing" | "published" | "error";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const UPLOAD_ID_PATTERN = /^upload:[a-f0-9]{48}$/u;
+
+type Props = Readonly<{ initialDraftUploadId?: string | null }>;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -36,13 +39,45 @@ async function errorMessage(response: Response): Promise<string> {
   }
 }
 
-export function CaseWorkbench() {
-  const [stage, setStage] = useState<WorkbenchStage>("select");
+function replaceDraftLocation(uploadId: string | null): void {
+  const url = new URL(window.location.href);
+  if (uploadId === null) url.searchParams.delete("draft");
+  else url.searchParams.set("draft", uploadId);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
+  const [stage, setStage] = useState<WorkbenchStage>(
+    initialDraftUploadId === null ? "select" : "loading",
+  );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [compiled, setCompiled] = useState<CaseCompileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [published, setPublished] = useState<CasePublishResponse | null>(null);
   const compileRequestId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (initialDraftUploadId === null || !UPLOAD_ID_PATTERN.test(initialDraftUploadId)) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/cases/draft?uploadId=${encodeURIComponent(initialDraftUploadId)}`, {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(await errorMessage(response));
+        const result = CaseCompileResponseSchema.safeParse(await response.json());
+        if (!result.success) throw new Error("The server returned an invalid case draft.");
+        setCompiled(result.data);
+        setStage("review");
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setError(caught instanceof Error ? caught.message : "Draft restoration failed.");
+        setStage("error");
+      }
+    })();
+    return () => controller.abort();
+  }, [initialDraftUploadId]);
 
   const sourceCoveragePercent = useMemo(() => {
     if (!compiled || compiled.report.provenance.factualFields === 0) return null;
@@ -88,6 +123,7 @@ export function CaseWorkbench() {
       const result = CaseCompileResponseSchema.safeParse(await response.json());
       if (!result.success) throw new Error("The server returned an invalid compiled case.");
       setCompiled(result.data);
+      replaceDraftLocation(result.data.upload.uploadId);
       setStage("review");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Case compilation failed.");
@@ -116,6 +152,7 @@ export function CaseWorkbench() {
       const result = CasePublishResponseSchema.safeParse(await response.json());
       if (!result.success) throw new Error("The server returned an invalid publication result.");
       setPublished(result.data);
+      replaceDraftLocation(null);
       setStage("published");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Publishing failed.");
@@ -130,6 +167,7 @@ export function CaseWorkbench() {
     setPublished(null);
     setError(null);
     compileRequestId.current = null;
+    replaceDraftLocation(null);
   }
 
   return (
@@ -145,11 +183,13 @@ export function CaseWorkbench() {
             ? 0
             : stage === "compiling"
               ? 1
-              : stage === "review" || (stage === "error" && compiled)
+              : stage === "loading"
                 ? 2
-                : stage === "error"
-                  ? 0
-                  : 3;
+                : stage === "review" || (stage === "error" && compiled)
+                  ? 2
+                  : stage === "error"
+                    ? 0
+                    : 3;
           return (
             <li className={index <= activeIndex ? styles.activeStep : undefined} key={label}>
               <span>{number}</span>
@@ -197,12 +237,12 @@ export function CaseWorkbench() {
         </form>
       )}
 
-      {stage === "compiling" && (
+      {(stage === "compiling" || stage === "loading") && (
         <section className={styles.processingPanel} aria-live="polite">
           <span className={styles.spinner} aria-hidden="true" />
-          <p className={styles.kicker}>Terra case compiler</p>
-          <h2>Indexing the record and checking provenance…</h2>
-          <p>This may take a moment. The original packet stays outside the public case catalog.</p>
+          <p className={styles.kicker}>{stage === "loading" ? "Secure case storage" : "Terra case compiler"}</p>
+          <h2>{stage === "loading" ? "Restoring the grounded draft…" : "Indexing the record and checking provenance…"}</h2>
+          <p>{stage === "loading" ? "Only the signed owner session can reopen this review." : "This may take a moment. The original packet stays outside the public case catalog."}</p>
         </section>
       )}
 

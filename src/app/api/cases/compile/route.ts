@@ -2,21 +2,20 @@ import OpenAI from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { CaseGraphV1Schema } from "@/domain/case-graph";
 import { readServerEnv } from "@/lib/env";
 import {
   CaseCompilationError,
   CaseCompilerInputSchema,
-  CaseCompilerValidationReportSchema,
-  MAX_CASE_COMPILER_SOURCE_SEGMENTS,
   OpenAICaseCompilerProvider,
   compileCasePacket,
 } from "@/server/case-compiler";
 import {
   CASE_OWNER_COOKIE_NAME,
+  CaseCompileReplayResponseSchema,
   ConvexCaseServiceError,
   RequestBodyLimitError,
   buildCaseCompilationReviewReport,
+  buildCaseCompileReplayResponse,
   caseCompilationClientKey,
   caseCompileRateLimiter,
   callConvexCaseService,
@@ -30,8 +29,6 @@ import {
 import {
   DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
   MAX_CASE_UPLOAD_SIZE_BYTES,
-  MAX_PROMPT_INJECTION_FLAGS,
-  PromptInjectionFlagSchema,
   ingestCaseUpload,
   sha256Hex,
 } from "@/server/case-ingestion";
@@ -66,27 +63,6 @@ const CaseCompilePermitResponseSchema = z
     retryAfterSeconds: z.number().int().min(0).max(600),
   })
   .strict();
-
-const CaseCompileReplayResponseSchema = z.discriminatedUnion("found", [
-  z.object({ found: z.literal(false) }).strict(),
-  z
-    .object({
-      found: z.literal(true),
-      caseGraph: CaseGraphV1Schema,
-      validationReport: CaseCompilerValidationReportSchema,
-      injectionFlags: z.array(PromptInjectionFlagSchema).max(MAX_PROMPT_INJECTION_FLAGS),
-      upload: z
-        .object({
-          uploadId: z.string().regex(/^upload:[a-f0-9]{48}$/u),
-          fileName: z.string().trim().min(1).max(300),
-          mimeType: z.string().trim().min(1).max(160),
-          sizeBytes: z.number().int().positive().max(MAX_CASE_UPLOAD_SIZE_BYTES),
-          sourceSegmentCount: z.number().int().positive().max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
-        })
-        .strict(),
-    })
-    .strict(),
-]);
 
 function jsonError(
   status: number,
@@ -256,21 +232,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       signal: request.signal,
     });
     if (replay.found) {
-      if (
-        replay.upload.uploadId !== uploadId ||
-        replay.caseGraph.caseId !== caseId ||
-        replay.caseGraph.status !== "draft" ||
-        replay.caseGraph.sourceSegments.length !== replay.upload.sourceSegmentCount ||
-        replay.validationReport.status === "rejected"
-      ) {
-        throw new ConvexCaseServiceError("CASE_COMPILE_REPLAY_MISMATCH", 502);
-      }
       return NextResponse.json(
-        {
-          caseGraph: replay.caseGraph,
-          report: buildCaseCompilationReviewReport(replay, replay.injectionFlags),
-          upload: replay.upload,
-        },
+        buildCaseCompileReplayResponse(replay, { uploadId, caseId }),
         { headers: { "Cache-Control": "no-store", "X-SUITS-Replayed": "true" } },
       );
     }
