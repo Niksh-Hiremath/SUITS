@@ -469,18 +469,18 @@ Gate:
 
 Deliverables:
 
-- [ ] upload/storage/extraction pipeline;
-- [ ] source-segment provenance;
-- [ ] strict GPT-5.6 CaseCompiler;
-- [ ] injection-resistant prompt boundary;
-- [ ] uncertainty/validation report;
-- [ ] user review/edit/publish UI;
-- [ ] at least three seeded cases total.
+- [x] upload/storage/extraction pipeline;
+- [x] source-segment provenance;
+- [x] strict GPT-5.6 CaseCompiler;
+- [x] injection-resistant prompt boundary;
+- [x] uncertainty/validation report;
+- [x] user review/edit/publish UI;
+- [x] at least three seeded cases total.
 
 Gate:
 
-- [ ] A fixture packet compiles into valid CaseGraph with all factual fields linked to source segments or marked inferred/uncertain.
-- [ ] Malicious embedded instructions do not change compiler behavior in tests.
+- [x] A fixture packet compiles into valid CaseGraph with all factual fields linked to source segments or marked inferred/uncertain.
+- [x] Malicious embedded instructions are not obeyed and do not change authored case semantics or trusted compiler behavior in tests.
 
 ### Milestone 3 — General multi-witness trial engine
 
@@ -740,7 +740,7 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Baseline recorded.
 - [x] Milestone 0 complete.
 - [x] Milestone 1 complete.
-- [ ] Milestone 2 complete.
+- [x] Milestone 2 complete.
 - [ ] Milestone 3 complete.
 - [ ] Milestone 4 complete.
 - [ ] Milestone 5 complete.
@@ -770,6 +770,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none for Milestone 1.
   - Commits: `63de85b`, `d1c0857`; this PLAN completion entry is committed separately.
 
+- 2026-07-18 23:01 IST — Milestone 2 case ingestion/compiler gate complete
+  - Changed: delivered bounded PDF/DOCX/TXT/Markdown/JSON ingestion; immutable source segments and field-level grounding; a strict streamed `gpt-5.6-terra` compiler with targeted repair and prompt-injection classification; uncertainty and source-coverage reports; owner-bound draft review/edit/publish and recovery workspaces; three complete seeded fictional cases; atomic Convex compile claims, per-generation durable quotas, fenced draft registration, idempotent replay, upload cleanup, and a dry-run-by-default orphan reconciler.
+  - Verified: the named M2 acceptance slice passed 69 tests and the owner publication integration passed; the full repository gate passed clean install, lint, both TypeScript surfaces, 313 tests with two explicitly skipped live suites, three evals, and a production build that completed static generation 16/16. Real Terra smoke and strengthened adversarial-injection runs passed. The reproducible PowerShell race produced one fast `409`, one durable `200`, and a 439 ms replay without a second generation; Convex showed one quota charge, a completed generation-1 claim with its lease token cleared, two append-only upload records, and zero orphaned or dangling storage objects.
+  - Remaining: Milestone 3 general multi-witness trial orchestration and Convex resume behavior. Capture formal Playwright screenshots/video at the Milestone 9 visual gate; the Windows file-picker helper stopped when it could not establish the current Chrome URL with sufficient confidence, so no visual artifact is claimed here.
+  - Blocked: none for Milestone 2. The stopped Windows automation helper is a QA-tool limitation, not a product or acceptance-gate blocker.
+  - Commits: scoped M2 series from `06589aa` through `bc1a23a`; this PLAN gate entry is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -786,6 +793,11 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Convex CLI login exposed one existing non-demo project, `SUITS` (`suits-749d2`), under team `niksh-hiremath`. Linking provisioned the personal development deployment `cheery-bandicoot-36` and populated ignored `.env.local` Convex client/deployment keys; no new project or production deployment was created.
 - The linked development deployment retains all nine legacy tables and accepted eight additive SUITS 2.0 tables plus their indexes. Deployment environment names still include legacy ElevenLabs variables and an obsolete generic model selector; their values were not read or printed, and later milestones must replace the canonical voice/model paths without treating those settings as current architecture.
 - Bounded inventory confirmed 1 public case, 1 private case, 17 trials, 57 turns, 38 traces, 24 jury votes, 8 debriefs, 0 eval runs, and 16 product events. The conservative backfill inserted one private `case-graph.legacy.v1` record and preserved all legacy rows; the same batch ID replayed without another insert.
+- Terra initially returned schema-shaped grounding-owner placeholders under the v3 compiler contract. The compiler now canonicalizes those placeholders to stable case entity IDs before strict citation/ownership validation; the standard live fixture then passed on its first attempt with three witnesses, five exhibits, eight facts, and three surfaced uncertainties.
+- Convex `_storage.sha256` is represented as base64 while CaseGraph/source digests use lowercase hex. Exact base64/base64url/hex normalization is required before associating a storage object with a compile claim; MIME type alone is never sufficient.
+- A real two-request race proved that the external OpenAI call can require one targeted repair even when the deterministic contract is correct: the winning request's first streamed response failed `strict_schema_invalid`, the repair was accepted, and the competing request remained a free `409`. The durable claim therefore must fence generations and registrations rather than assuming one provider attempt.
+- The adversarial live packet was classified for all five authored patterns (`instruction_override`, `role_impersonation`, `safety_bypass`, `secret_exfiltration`, and `tool_invocation`) while still compiling the fictional facts into a draft; packet text never became instructions.
+- Browser-plugin page evaluation intentionally withholds raw `fetch`, XHR, cookie mutation, and local-file constructors. Exact multipart concurrency verification therefore used PowerShell against the real Next.js HTTP boundary, while semantic browser inspection covered the case library and upload surface. Windows Computer Use stopped rather than acting when it could not verify Chrome's URL.
 
 ## 15. Decisions
 
@@ -801,6 +813,10 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - The user subsequently authorized small milestone commits and pushes. Push only green, scoped commits on the active branch; never force-push, rewrite history, or push secrets/tags implicitly.
 - Link only the existing Convex `SUITS` project and use a personal cloud development deployment for schema/function verification. Keep `.env.local` ignored and never print its values. Run conservative legacy backfills only after read-only inventory and command review; the first CaseGraph batch satisfied those conditions and was executed idempotently on development.
 - Do not fabricate event histories for mutable legacy trials. Preserve their tables and bounded inventory checkpoints, backfill their CaseGraph, and start append-only SUITS 2.0 streams through an explicit version-0 `START_TRIAL` event when a legacy trial is resumed or upgraded.
+- Bind private upload workspaces to a signed 30-day owner cookie and derive upload/case/claim identities from owner, request UUID, and content digest. Never accept a caller-selected durable identity or trust forwarding headers unless the configured proxy address is itself trusted.
+- Treat one compile generation as the billable unit. Completed replay and live competitors are free; every retry or expired-lease takeover consumes a new durable quota attempt. Complete the claim in the same Convex transaction as the draft writes, retain generation/token fencing on every intermediate action, and clear the lease token when completion becomes durable.
+- Keep storage reconciliation additive and conservative: exact seven-day retention, digest-and-time claim association, a final transactional reference check, bounded cursor/generation locks, append-only audit rows, daily scheduling, and deletion disabled unless `SUITS_STORAGE_RECONCILER_DELETE_ENABLED=1` is explicitly configured.
+- Keep all seeded matters fictional and educational, with three or more witnesses, evidence/fact provenance, contradictions, and private settlement controls. User uploads remain drafts until explicit human review and publication.
 
 ## 16. Verification Evidence
 
@@ -843,6 +859,23 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run eval` — exit 0; one file and three legacy eval tests passed.
   - `npm run build` — exit 0; optimized Next.js build compiled, typechecked, and prerendered all four routes with linked `.env.local` Convex configuration.
   - `npm exec -- tsc -p convex/tsconfig.json --noEmit` — exit 0.
+
+- 2026-07-18 18:06–23:01 IST — Milestone 2 completion gate
+  - `$env:RUN_OPENAI_LIVE='1'; npm run test:live:case-compiler` — exit 0; real `gpt-5.6-terra` Responses API stream accepted on the first attempt in 58,654 ms with three witnesses, five evidence items, eight facts, three uncertainties, and no validation issues. Usage was 7,286 input, 11,427 output, 18,713 total, 3,682 cache-write, and 1,034 reasoning tokens.
+  - `$env:RUN_OPENAI_LIVE_INJECTION='1'; npm run test:live:case-compiler-injection` — exit 0 after strengthening the gate; real adversarial packet accepted on the first attempt in 74,146 ms with request/response ID `resp_0d12e785ac31b16b016a5bbb67403c819a9e2764b6285dff0b`. The test proved the exact clean packet title, party/issue/witness/evidence/fact IDs, fact statuses, and settlement controls remained intact while all five injection patterns were detected and no validation issues remained. Usage was 7,422 input, 12,213 output, 19,635 total, 3,682 cached input, and 1,338 reasoning tokens.
+  - `.\scripts\verify-case-compile-singleflight.ps1` — exit 0 against `http://127.0.0.1:3000`; session establishment returned 200, and two byte-identical 12,501-byte multipart requests with request ID `aa5e9665-24c7-49d1-a5fd-6ef0385a007c` produced `409 CASE_COMPILATION_IN_PROGRESS` in 1,369 ms with `Retry-After: 60` and one `200` in 61,753 ms. The identical retry returned 200 in 439 ms with `X-SUITS-Replayed: true` and the same upload/case identity. The committed PowerShell verifier asserts every status/header/identity condition and emits machine-readable evidence.
+  - Earlier persisted live-race compiler audit — model `gpt-5.6-terra`, prompt `case-compiler.prompt.v3`, schema `case-compiler.output.v3`, 121,043.84 ms total and one targeted repair. Attempt 1 (`resp_07eb6d67a82bad67016a5bb4911e0c81998ab501418a15fd45`) streamed 39,748 characters and failed `strict_schema_invalid`; attempt 2 (`resp_030ccf1ef901cbe7016a5bb4d78f48819bb636293432153d69`) streamed 39,709 characters and was accepted. The response audit retained per-attempt usage, latency, request/response IDs, retry count, and accepted citations.
+  - Convex post-race inspection — one completed generation-1 claim, one quota attempt, lease token/expiry cleared, completion/quota timestamps present, upload versions 1 (`uploaded`) and 2 (`indexed`) sharing one storage object, three total storage objects, three referenced objects, zero unreferenced objects, and zero dangling references.
+  - `npx convex dev --once` — exit 0; additive claim/reconciler functions and indexes ready on development deployment `cheery-bandicoot-36` at 22:51:51 IST. `SUITS_STORAGE_RECONCILER_DELETE_ENABLED=0`; no production deployment or deletion sweep was invoked.
+  - `npx vitest run tests/fixtures/case-packets/case-packets.test.ts src/server/case-ingestion/ingestion.test.ts src/server/case-ingestion/adapters/adapters.test.ts src/server/case-compiler/case-compiler.test.ts src/server/case-compiler/openai-provider.test.ts src/domain/seeded-cases/catalog.test.ts src/components/case-editor/case-graph-review-editor.test.tsx src/components/case-editor/case-workbench.test.ts src/components/case-editor/case-source-review.test.tsx src/app/api/cases/compile/route.test.ts` — exit 0; 10 files and 69 M2 acceptance tests passed.
+  - `npx vitest run convex/casePublication.integration.test.ts` — exit 0; one real Convex transaction test proved owner draft reopen/list, edited publication, two immutable graph versions, human-review audit/provenance, latest published reopen/list, rejected cross-owner publication, and continued cross-owner read isolation.
+  - `npm ci` — exit 0; 436 packages installed and 437 audited. Two moderate dependency advisories and three pending npm install-script review notices remain reported, not silently treated as fixed.
+  - `npm run lint` — exit 0; the same five pre-existing warnings and no errors.
+  - `npm run typecheck` — exit 0.
+  - `npm test` — exit 0; 50 files passed, two live-only files explicitly skipped by their environment gates; 313 tests passed and two skipped.
+  - `npm run eval` — exit 0; one file and three legacy eval tests passed.
+  - `npx tsc -p convex/tsconfig.json --noEmit` — exit 0.
+  - `npm run build` — exit 0; Next.js 16.2.10 production build compiled/typechecked, completed static generation 16/16, and reported all expected app routes, including five owner/case API routes, three seeded static case pages, and the dynamic case workbench.
 
 ## 17. Blocked external prerequisites
 
