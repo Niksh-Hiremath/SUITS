@@ -15,8 +15,10 @@ import {
 import {
   buildJuryRecord,
   buildKnowledgeView,
+  buildOpponentPlannerKnowledgeView,
   JURY_RECORD_SCHEMA_VERSION,
   KNOWLEDGE_VIEW_SCHEMA_VERSION,
+  OPPONENT_PLANNER_KNOWLEDGE_VIEW_SCHEMA_VERSION,
   KnowledgeViewSchema,
   type KnowledgeStateProjection,
 } from "./index";
@@ -628,6 +630,63 @@ describe("counsel and judge privilege isolation", () => {
     expect(() => buildKnowledgeView(state, "actor_user_counsel")).toThrow(
       "does not represent pinned party party_unrepresented_same_side",
     );
+  });
+
+  it("builds a witness-linked opposing planner view without widening counsel knowledge", () => {
+    const state = createKnowledgeState();
+    const view = buildOpponentPlannerKnowledgeView(
+      state,
+      "actor_opposing_counsel",
+    );
+
+    expect(view.schemaVersion).toBe(
+      OPPONENT_PLANNER_KNOWLEDGE_VIEW_SCHEMA_VERSION,
+    );
+    expect(view.actorRole).toBe("opposing_counsel");
+    expect(view.planning.witnesses.map((witness) => witness.witnessId)).toEqual([
+      "witness_maya_ortiz",
+      "witness_rina_shah",
+      "witness_theo_morgan",
+    ]);
+
+    const permittedFactIds = new Set([
+      ...view.counsel.facts.map((fact) => fact.factId),
+      ...view.publicRecord.facts.map((fact) => fact.factId),
+    ]);
+    const permittedEvidenceIds = new Set([
+      ...view.counsel.evidence.map((evidence) => evidence.evidenceId),
+      ...view.publicRecord.evidence.map((evidence) => evidence.evidenceId),
+    ]);
+    for (const witness of view.planning.witnesses) {
+      expect(
+        witness.permittedKnownFactIds.every((factId) =>
+          permittedFactIds.has(factId),
+        ),
+      ).toBe(true);
+      expect(
+        witness.permittedSeenEvidenceIds.every((evidenceId) =>
+          permittedEvidenceIds.has(evidenceId),
+        ),
+      ).toBe(true);
+      expect(Object.keys(witness)).not.toContain("summary");
+      expect(Object.keys(witness)).not.toContain("priorStatements");
+    }
+
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain(
+      "Theo opened the complaint before the final edit.",
+    );
+    expect(serialized).not.toContain("instruction_override");
+    expect(serialized).not.toContain("availablePriorStatementIds");
+  });
+
+  it("refuses to build the opposing planner view for another role", () => {
+    expect(() =>
+      buildOpponentPlannerKnowledgeView(
+        createKnowledgeState(),
+        "actor_user_counsel",
+      ),
+    ).toThrow("Opponent planning requires opposing counsel");
   });
 
   it("gives the judge rules and procedural record without privileged settlement state", () => {
