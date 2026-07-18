@@ -64,6 +64,7 @@ const TrialViewSchema = z
     status: TrialStatusSchema,
     version: z.number().int().nonnegative(),
     sequence: z.number().int().nonnegative(),
+    lastEventId: IdentifierSchema,
     userSide: PlayerSideSchema,
   })
   .strict();

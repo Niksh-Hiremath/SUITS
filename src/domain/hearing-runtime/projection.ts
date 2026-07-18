@@ -102,6 +102,8 @@ export function buildHearingRuntimeView(
       `PLAYER_COUNSEL_REQUIRED:${input.playerActorId}:${trialState.userSide}`,
     );
   }
+  const lastEventId = trialState.eventIds.at(-1);
+  if (!lastEventId) throw new Error("TRIAL_EVENT_HEAD_REQUIRED");
 
   const knowledge = buildKnowledgeView(
     { caseGraph, trial: trialState },
@@ -306,6 +308,7 @@ export function buildHearingRuntimeView(
       status: trialState.status,
       version: trialState.version,
       sequence: trialState.lastSequence,
+      lastEventId,
       userSide: trialState.userSide,
     },
     activeAppearance: activeAppearance
