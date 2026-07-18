@@ -12,12 +12,14 @@ import {
 import {
   CASE_OWNER_COOKIE_NAME,
   ConvexCaseServiceError,
+  RequestBodyLimitError,
   buildCaseCompilationReviewReport,
   caseCompilationClientKey,
   caseCompileRateLimiter,
   callConvexCaseService,
   deriveCaseCompilationIds,
   parseCaseCompileRequestId,
+  readBoundedRequestBody,
   resolveCaseUploadMimeType,
   validateConvexStorageUploadUrl,
   verifyCaseOwnerSession,
@@ -121,6 +123,15 @@ async function storePacket(
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!trustedOrigin(request)) return jsonError(403, "ORIGIN_REJECTED", "Cross-origin case uploads are not allowed.");
 
+  const contentEncoding = request.headers.get("content-encoding");
+  if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+    return jsonError(415, "UPLOAD_CONTENT_ENCODING_REJECTED", "Compressed request bodies are not accepted.");
+  }
+  const contentType = request.headers.get("content-type");
+  if (contentType === null || !/^multipart\/form-data\s*;/iu.test(contentType)) {
+    return jsonError(415, "UPLOAD_MULTIPART_REQUIRED", "Send the case packet as multipart form data.");
+  }
+
   const declaredLength = Number(request.headers.get("content-length"));
   if (
     Number.isFinite(declaredLength) &&
@@ -155,7 +166,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const form = await request.formData();
+    const multipartBody = await readBoundedRequestBody(
+      request,
+      MAX_CASE_UPLOAD_SIZE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES,
+    );
+    let form: FormData;
+    try {
+      form = await new Response(multipartBody, {
+        headers: { "Content-Type": contentType },
+      }).formData();
+    } catch {
+      return jsonError(400, "UPLOAD_MULTIPART_INVALID", "The multipart case packet request is invalid.");
+    }
     const requestId = parseCaseCompileRequestId(form.get("requestId"));
     if (requestId === null) {
       return jsonError(400, "CASE_COMPILE_REQUEST_ID_REQUIRED", "A retry-safe compilation request ID is required.");
@@ -185,6 +207,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         mimeType,
         bytes,
         expectedContentDigest: contentDigest,
+        signal: request.signal,
       },
       DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS,
     );
@@ -253,6 +276,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
+    if (error instanceof RequestBodyLimitError) {
+      return error.code === "REQUEST_BODY_TOO_LARGE"
+        ? jsonError(413, "UPLOAD_SIZE_EXCEEDED", "The case packet exceeds the 20 MB upload limit.")
+        : jsonError(400, "UPLOAD_CONTENT_EMPTY", "The case packet request is empty.");
+    }
     if (error instanceof CaseCompilationError) {
       const providerFailed = error.attempts.length > 0 &&
         error.attempts.every((attempt) => attempt.outcome === "provider_failed");

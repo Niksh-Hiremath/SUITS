@@ -5,7 +5,9 @@ import { CaseGraphV1Schema } from "@/domain/case-graph";
 import {
   CASE_OWNER_COOKIE_NAME,
   ConvexCaseServiceError,
+  RequestBodyLimitError,
   callConvexCaseService,
+  readBoundedRequestBody,
   verifyCaseOwnerSession,
 } from "@/server/case-api";
 
@@ -41,6 +43,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (origin !== null && origin !== request.nextUrl.origin) {
     return jsonError(403, "ORIGIN_REJECTED", "Cross-origin publication is not allowed.");
   }
+  const contentEncoding = request.headers.get("content-encoding");
+  if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+    return jsonError(415, "PUBLISH_CONTENT_ENCODING_REJECTED", "Compressed request bodies are not accepted.");
+  }
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") {
+    return jsonError(415, "PUBLISH_JSON_REQUIRED", "Send the reviewed case as application/json.");
+  }
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_PUBLISH_BODY_BYTES) {
     return jsonError(413, "PUBLISH_BODY_TOO_LARGE", "The reviewed case exceeds the publication limit.");
@@ -52,7 +62,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const parsed = PublishRequestSchema.parse(await request.json());
+    const body = await readBoundedRequestBody(request, MAX_PUBLISH_BODY_BYTES);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as unknown;
+    } catch {
+      return jsonError(400, "PUBLISH_REQUEST_INVALID", "The reviewed case payload is invalid.");
+    }
+    const parsed = PublishRequestSchema.parse(payload);
     if (parsed.caseGraph.status !== "published") {
       return jsonError(422, "CASE_STATUS_INVALID", "A reviewed case must be marked published.");
     }
@@ -69,6 +86,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
+    if (error instanceof RequestBodyLimitError) {
+      return error.code === "REQUEST_BODY_TOO_LARGE"
+        ? jsonError(413, "PUBLISH_BODY_TOO_LARGE", "The reviewed case exceeds the publication limit.")
+        : jsonError(400, "PUBLISH_REQUEST_INVALID", "The reviewed case payload is empty.");
+    }
     if (error instanceof z.ZodError || error instanceof SyntaxError) {
       return jsonError(400, "PUBLISH_REQUEST_INVALID", "The reviewed case payload is invalid.");
     }

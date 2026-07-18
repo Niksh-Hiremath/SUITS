@@ -12,14 +12,14 @@ type BodySource = Readonly<{
 export async function readBoundedRequestBody(
   request: BodySource,
   maximumBytes: number,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     throw new RangeError("maximumBytes must be a positive safe integer");
   }
   if (request.body === null) throw new RequestBodyLimitError("REQUEST_BODY_EMPTY");
 
   const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   let totalBytes = 0;
   try {
     while (true) {
