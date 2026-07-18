@@ -486,19 +486,19 @@ Gate:
 
 Deliverables:
 
-- [ ] dynamic phase/action permissions;
-- [ ] both sides calling/recalling/releasing witnesses;
-- [ ] direct and cross examination;
-- [ ] evidence offer/ruling and fact lifecycle;
-- [ ] opposing strategy state;
-- [ ] negotiation state and private offers;
-- [ ] pause/resume/replay in Convex;
+- [x] dynamic phase/action permissions;
+- [x] both sides calling/recalling/releasing witnesses;
+- [x] direct and cross examination;
+- [x] evidence offer/ruling and fact lifecycle;
+- [x] opposing strategy state;
+- [x] negotiation state and private offers;
+- [x] pause/resume/replay in Convex;
 - [ ] migration away from hardcoded golden roleplay as normal runtime.
 
 Gate:
 
-- [ ] A deterministic scripted simulation completes with three witnesses, one excluded exhibit, one stricken statement, one revealed hidden fact, and one rejected or accepted settlement.
-- [ ] Reloading mid-hearing resumes from the last committed event.
+- [x] A deterministic scripted simulation completes with three witnesses, one excluded exhibit, one stricken statement, one revealed hidden fact, and one rejected or accepted settlement.
+- [x] Reloading mid-hearing resumes from the last committed event.
 
 ### Milestone 4 — GPT-5.6 courtroom intelligence
 
@@ -777,6 +777,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none for Milestone 2. The stopped Windows automation helper is a QA-tool limitation, not a product or acceptance-gate blocker.
   - Commits: scoped M2 series from `06589aa` through `bc1a23a`; this PLAN gate entry is committed separately.
 
+- 2026-07-19 02:13 IST — Milestone 3 event engine and Convex persistence checkpoint
+  - Changed: generalized the active engine to V3 while preserving exact V1/V2 contracts; added multi-appearance direct/cross/redirect/recross examination, both-side call/recall/release, bounded exhibit presentation for witness foundation, revalidated evidence foundation, strike-motion grant/deny/withdraw lifecycles, independent fact support, bilateral settlement authority, opposing strategy, strict completion/citation/provenance gates, canonical event-envelope replay, and full CaseGraph-content pinning. Convex now derives owner/actor identity server-side, separates public player actions from trusted judge/AI/system actions, commits events/projections/snapshots/receipts atomically, and enforces idempotency plus expected-version concurrency.
+  - Verified: 181 focused domain/Convex tests passed; the scripted acceptance completes three witnesses, an excluded exhibit, stricken testimony, an atomically revealed hidden fact, rejected settlement, pause/reload, verdict, debrief, completion, and byte-identical double replay. The full repository passed 427 tests with two explicit live-only skips, lint with only five known warnings, both TypeScript surfaces, three evals, and a 16/16 production build.
+  - Remaining: replace the legacy `/hearing` golden-answer/opposing/verdict runtime path with the V3 event engine before marking Milestone 3 complete; then run a linked development Convex sync and a real durable create/append/reload smoke before the final M3 gate commit.
+  - Blocked: none. Convex CLI authentication was already valid; no new login was required.
+  - Commit: `348ac0c` (`feat: generalize multi-witness trial engine`).
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -799,6 +806,10 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The adversarial live packet was classified for all five authored patterns (`instruction_override`, `role_impersonation`, `safety_bypass`, `secret_exfiltration`, and `tool_invocation`) while still compiling the fictional facts into a draft; packet text never became instructions.
 - Browser-plugin page evaluation intentionally withholds raw `fetch`, XHR, cookie mutation, and local-file constructors. Exact multipart concurrency verification therefore used PowerShell against the real Next.js HTTP boundary, while semantic browser inspection covered the case library and upload surface. Windows Computer Use stopped rather than acting when it could not verify Chrome's URL.
 
+- Active V3 replay cannot authenticate arbitrary historical event IDs without an integrity field. New events therefore use the canonical `event:<actionId>` identity and an immediately preceding causation link; V2-to-V3 migration deterministically remaps legacy event IDs, causation, and event citations before replay validation.
+- Evidence authentication required a bounded pre-admission context: witnesses could not cite an unadmitted exhibit when their view exposed admitted exhibits only. `ASK_QUESTION.presentedEvidenceIds` now records the exact seen, non-excluded exhibits shown for identification, and `knowledge-view.v2` exposes only that bounded set to the active witness.
+- A full CaseGraph ID/version pair was insufficient to authenticate private witness and settlement material after hydration. Active V3 state now pins a canonical full-graph SHA-256 separately from the legacy source-content digest and rejects any hydrated graph whose complete canonical content differs.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -817,6 +828,11 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat one compile generation as the billable unit. Completed replay and live competitors are free; every retry or expired-lease takeover consumes a new durable quota attempt. Complete the claim in the same Convex transaction as the draft writes, retain generation/token fencing on every intermediate action, and clear the lease token when completion becomes durable.
 - Keep storage reconciliation additive and conservative: exact seven-day retention, digest-and-time claim association, a final transactional reference check, bounded cursor/generation locks, append-only audit rows, daily scheduling, and deletion disabled unless `SUITS_STORAGE_RECONCILER_DELETE_ENABLED=1` is explicitly configured.
 - Keep all seeded matters fictional and educational, with three or more witnesses, evidence/fact provenance, contradictions, and private settlement controls. User uploads remain drafts until explicit human review and publication.
+
+- Freeze trial V1/V2 and policy V1/V2 exactly; add active V3 fields and deterministic migrations rather than mutating historical contracts. Preserve `caseGraphHash` as the legacy source digest and use the distinct `caseGraphContentHash` for full immutable hydration integrity.
+- Treat presenting an exhibit for identification as distinct from offering it into evidence. Any examining counsel may identify a non-excluded case exhibit that the pinned witness has seen; only policy-authorized counsel may offer it, and admission revalidates every active authenticating testimony ID.
+- Keep settlement V3 bilateral until per-recipient decisions and all-required acceptance semantics are modeled. A V3 offer therefore has exactly one recipient party, while frozen historical schemas remain unchanged.
+- Make public Convex trial append owner-derived and player-counsel-only. Judge, AI, deterministic, speech-system, and recovery actions use a separate trusted internal boundary; callers cannot forge canonical actors, trial ownership, graph publication, projection versions, or snapshot cadence.
 
 ## 16. Verification Evidence
 
@@ -876,6 +892,18 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run eval` — exit 0; one file and three legacy eval tests passed.
   - `npx tsc -p convex/tsconfig.json --noEmit` — exit 0.
   - `npm run build` — exit 0; Next.js 16.2.10 production build compiled/typechecked, completed static generation 16/16, and reported all expected app routes, including five owner/case API routes, three seeded static case pages, and the dynamic case workbench.
+
+- 2026-07-19 01:49–02:13 IST — Milestone 3 engine/persistence checkpoint
+  - `npx vitest run src/domain/trial-engine src/domain/trial-policy src/domain/knowledge src/domain/case-graph convex/trialEvents.integration.test.ts` — exit 0; 16 files and 181 tests passed.
+  - `src/domain/trial-engine/milestone3.acceptance.test.ts` — included in the focused gate; completed a three-witness both-sides call/recall script with one excluded exhibit, one stricken statement, one hidden fact revealed atomically, one rejected settlement, pause/reload, both closings, instructions, deliberation, verdict, debrief, completion, and two byte-identical replays.
+  - `src/domain/trial-engine/audit-regressions.integration.test.ts` — included in the focused gate; 17 adversarial tests passed for serialized witness isolation, inconsistent START mappings, recess mutation/open-work rejection, invalidated foundation, independent fact support, bilateral settlement shape, event/citation/causation/response-envelope tampering, admissible assertion bases, jury-safe citations, and duplicate completion artifacts.
+  - `convex/trialEvents.integration.test.ts` — included in the focused gate; ten tests passed for owner-derived create/read, public-player versus trusted append boundaries, atomic event/projection/snapshot/receipt writes, exact idempotent replay, action-ID conflicts, expected-version concurrency, snapshot/full replay, exact offset timestamps, payload-version migration handoff, envelope validation, pagination, and legacy handoff.
+  - `npm test` — exit 0; 63 files passed, two live-only files skipped; 427 tests passed and two skipped.
+  - `npm run lint` — exit 0; the same five known warnings and no errors.
+  - `npm run typecheck -- --pretty false` and `npx tsc -p convex/tsconfig.json --noEmit` — exit 0.
+  - `npm run eval` — exit 0; one file and three legacy eval tests passed.
+  - `npm run build` — exit 0; Next.js 16.2.10 compiled/typechecked and generated all 16 pages. This verifies the checkpoint build, not the still-pending V3 hearing-runtime cutover.
+  - `git diff --check` — exit 0.
 
 ## 17. Blocked external prerequisites
 
