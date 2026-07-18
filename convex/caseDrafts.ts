@@ -13,7 +13,7 @@ import {
   CaseUploadVersionMetadataSchema,
   normalizeCaseUploadMimeType,
   type CaseUploadVersionMetadata,
-} from "../src/server/case-ingestion";
+} from "../src/server/case-ingestion/schema";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import {
@@ -143,15 +143,14 @@ async function assertStoredUpload(
   if (!storedFile) throw new Error("CASE_UPLOAD_STORAGE_OBJECT_NOT_FOUND");
   if (storedFile.size !== request.sizeBytes) throw new Error("CASE_UPLOAD_SIZE_MISMATCH");
   if (storedFile.sha256 !== request.contentDigest) throw new Error("CASE_UPLOAD_DIGEST_MISMATCH");
-  if (storedFile.contentType) {
-    let storedMimeType: string;
-    try {
-      storedMimeType = normalizeCaseUploadMimeType(storedFile.contentType);
-    } catch {
-      throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
-    }
-    if (storedMimeType !== request.mimeType) throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
+  if (!storedFile.contentType) throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
+  let storedMimeType: string;
+  try {
+    storedMimeType = normalizeCaseUploadMimeType(storedFile.contentType);
+  } catch {
+    throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
   }
+  if (storedMimeType !== request.mimeType) throw new Error("CASE_UPLOAD_MIME_TYPE_MISMATCH");
 }
 
 async function assertExactRegistrationReplay(
@@ -429,7 +428,7 @@ export const publishCompiledDraft = internalMutation({
       .take(2);
     const draft = draftRecords[0];
     if (draftRecords.length !== 1 || !draft) throw new Error("CASE_DRAFT_NOT_FOUND");
-    if (draft.ownerId !== request.ownerId) throw new Error("CASE_DRAFT_OWNER_MISMATCH");
+    if (draft.ownerId !== request.ownerId) throw new Error("CASE_DRAFT_NOT_FOUND");
     if (draft.lifecycle !== "draft" || draft.version !== 1 || draft.caseId !== request.caseGraph.caseId) {
       throw new Error("CASE_PUBLISH_CONFLICT");
     }

@@ -19,7 +19,7 @@ import {
   OriginalFileNameSchema,
   PromptInjectionFlagSchema,
   Sha256DigestSchema,
-} from "../src/server/case-ingestion";
+} from "../src/server/case-ingestion/schema";
 import {
   MAX_CASE_COMPILER_SOURCE_CHARACTERS,
   MAX_CASE_COMPILER_SOURCE_SEGMENTS,
@@ -342,7 +342,6 @@ const INTERNAL_ERROR_STATUS = new Map<string, number>([
   ["CASE_DRAFT_ALREADY_EXISTS", 409],
   ["CASE_DRAFT_CONFLICT", 409],
   ["CASE_DRAFT_NOT_FOUND", 404],
-  ["CASE_DRAFT_OWNER_MISMATCH", 404],
   ["CASE_DRAFT_SOURCE_COLLISION", 409],
   ["CASE_DRAFT_TOO_LARGE", 413],
   ["CASE_PUBLISH_CONFLICT", 409],
