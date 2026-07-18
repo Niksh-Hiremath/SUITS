@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { createThreeWitnessCaseGraphV1Fixture, type CaseGraphV1 } from "../src/domain/case-graph";
 import {
@@ -9,6 +10,7 @@ import {
   CASE_COMPILER_VALIDATION_SCHEMA_VERSION,
 } from "../src/server/case-compiler/constants";
 import {
+  MAX_SERVICE_REQUEST_BYTES,
   CaseServiceBoundaryError,
   RegisterCaseDraftRequestSchema,
   annotateHumanReview,
@@ -18,6 +20,7 @@ import {
   caseServiceJson,
   deriveDraftGraphId,
   derivePublishedGraphId,
+  parseCaseServiceJson,
   serializePublishedCompilerMetadata,
   sha256Hex,
   verifyRegisterCaseDraftIntegrity,
@@ -304,6 +307,33 @@ describe("Convex case service boundary", () => {
       compilation: compilationAudit,
       humanReview: first.audit,
     });
+  });
+
+  it("streams service JSON through a hard byte limit even without Content-Length", async () => {
+    const schema = z.object({ uploadId: z.string() }).strict();
+    const request = new Request("https://example.test/service", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uploadId: UPLOAD_ID }),
+    });
+    await expect(parseCaseServiceJson(request, schema)).resolves.toEqual({ uploadId: UPLOAD_ID });
+
+    const oversized = new Request("https://example.test/service", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "x".repeat(MAX_SERVICE_REQUEST_BYTES + 1),
+    });
+    await expect(parseCaseServiceJson(oversized, schema)).rejects.toMatchObject({
+      code: "CASE_SERVICE_REQUEST_TOO_LARGE",
+      status: 413,
+    });
+
+    const compressed = new Request("https://example.test/service", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+      body: "{}",
+    });
+    await expect(parseCaseServiceJson(compressed, schema)).rejects.toMatchObject({ status: 415 });
   });
 
   it("returns compact no-store JSON and never reflects an unexpected internal error", async () => {

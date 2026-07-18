@@ -27,7 +27,7 @@ import {
 } from "../src/server/case-compiler/constants";
 
 const MAX_SERVICE_SECRET_CHARACTERS = 512;
-const MAX_SERVICE_REQUEST_BYTES = 8 * 1024 * 1024;
+export const MAX_SERVICE_REQUEST_BYTES = 8 * 1024 * 1024;
 const OWNER_ID_PATTERN = /^owner:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export const CASE_COMPILATION_AUDIT_SCHEMA_VERSION = "case-compilation-audit.v1" as const;
@@ -653,19 +653,54 @@ export async function parseCaseServiceJson<T>(
   if (contentType !== "application/json") {
     throw new CaseServiceBoundaryError("CASE_SERVICE_CONTENT_TYPE_INVALID", 415);
   }
+  const contentEncoding = request.headers.get("content-encoding");
+  if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+    throw new CaseServiceBoundaryError("CASE_SERVICE_CONTENT_TYPE_INVALID", 415);
+  }
   const declaredLength = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(declaredLength) && declaredLength > MAX_SERVICE_REQUEST_BYTES) {
     throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_TOO_LARGE", 413);
   }
 
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
+  if (request.body === null) {
     throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400);
   }
-  if (new TextEncoder().encode(text).byteLength > MAX_SERVICE_REQUEST_BYTES) {
-    throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_TOO_LARGE", 413);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      if (result.value.byteLength === 0) continue;
+      totalBytes += result.value.byteLength;
+      if (totalBytes > MAX_SERVICE_REQUEST_BYTES) {
+        await reader.cancel("case service request too large");
+        throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_TOO_LARGE", 413);
+      }
+      chunks.push(Uint8Array.from(result.value));
+    }
+  } catch (error) {
+    if (error instanceof CaseServiceBoundaryError) throw error;
+    throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400);
+  } finally {
+    reader.releaseLock();
+  }
+  if (totalBytes === 0) {
+    throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400);
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400);
   }
 
   let value: unknown;
