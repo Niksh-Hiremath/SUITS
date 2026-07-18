@@ -44,6 +44,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
+const CLAIM_COORDINATION_TIMEOUT_MS = 10_000;
 const CLAIM_ID_PATTERN = /^claim:[a-f0-9]{64}$/u;
 const LEASE_TOKEN_PATTERN = /^[a-f0-9]{64}$/u;
 const CASE_ID_PATTERN = /^case:[a-f0-9]{48}$/u;
@@ -235,10 +236,16 @@ function classifyWorkflowFailure(
         registrationOutcome: context.stage === "registration" ? "definite_not_committed" : undefined,
       };
     }
+    const deterministicRegistrationRejection =
+      context.stage === "registration" &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      error.status !== 401 &&
+      error.status !== 403;
     return {
       code: safeFailureCode(error.code, "CASE_SERVICE_UNAVAILABLE"),
-      category: "unavailable",
-      disposition: "retryable_failed",
+      category: deterministicRegistrationRejection ? "invalid_input" : "unavailable",
+      disposition: deterministicRegistrationRejection ? "terminal_failed" : "retryable_failed",
       registrationOutcome: context.stage === "registration" && error.status < 500
         ? "definite_not_committed"
         : context.stage === "registration"
@@ -297,7 +304,7 @@ async function acquireClaimWithRetry(
         path: "/service/case-compile-claim/acquire",
         body,
         responseSchema: CaseCompileClaimAcquireResponseSchema,
-        timeoutMs: 10_000,
+        timeoutMs: CLAIM_COORDINATION_TIMEOUT_MS,
         signal,
       });
     } catch (error) {
@@ -455,13 +462,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             path: "/service/case-compile-claim/heartbeat",
             body: fence,
             responseSchema: CaseCompileClaimHeartbeatResponseSchema,
+            timeoutMs: CLAIM_COORDINATION_TIMEOUT_MS,
             signal,
           }),
-          release: async (release) => callConvexCaseService({
-            path: "/service/case-compile-claim/release",
-            body: release,
-            responseSchema: CaseCompileClaimReleaseResponseSchema,
-          }),
+          release: async (release) => {
+            const receipt = await callConvexCaseService({
+              path: "/service/case-compile-claim/release",
+              body: release,
+              responseSchema: CaseCompileClaimReleaseResponseSchema,
+              timeoutMs: CLAIM_COORDINATION_TIMEOUT_MS,
+            });
+            if (
+              receipt.claimId !== release.claimId ||
+              receipt.generation !== release.generation ||
+              receipt.status !== release.disposition
+            ) {
+              throw new ConvexCaseServiceError("CASE_COMPILE_RELEASE_MISMATCH", 502);
+            }
+            return receipt;
+          },
         },
         ingest: async (prepared, signal) => ingestCaseUpload(
           {
