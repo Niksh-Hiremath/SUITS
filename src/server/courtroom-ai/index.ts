@@ -3,6 +3,7 @@ export * from "./environment-provider";
 export * from "./fake-provider";
 export * from "./openai-errors";
 export * from "./openai-provider";
+export * from "./opponent-planner";
 export * from "./opponent-planner-prompt";
 export * from "./pricing";
 export * from "./provider";
