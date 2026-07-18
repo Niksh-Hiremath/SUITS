@@ -41,6 +41,42 @@ const eventActorRole = v.union(
   v.literal("debrief_coach"),
 );
 
+const courtroomModelCallClass = v.union(
+  v.literal("case_compiler"),
+  v.literal("opponent_planner"),
+  v.literal("role_responder"),
+  v.literal("objection_resolver"),
+  v.literal("negotiation_agent"),
+  v.literal("debrief_generator"),
+);
+
+const courtroomModelCallTask = v.union(
+  v.literal("compile_case"),
+  v.literal("plan_opponent"),
+  v.literal("witness_answer"),
+  v.literal("counsel_response"),
+  v.literal("judge_response"),
+  v.literal("jury_deliberation"),
+  v.literal("resolve_objection"),
+  v.literal("evaluate_settlement"),
+  v.literal("generate_debrief"),
+);
+
+const courtroomModelCallStatus = v.union(
+  v.literal("accepted"),
+  v.literal("failed"),
+  v.literal("cancelled"),
+  v.literal("stale"),
+);
+
+const courtroomModelCallAttemptStatus = v.union(
+  v.literal("accepted"),
+  v.literal("validation_failed"),
+  v.literal("provider_failed"),
+  v.literal("cancelled"),
+  v.literal("stale"),
+);
+
 export default defineSchema({
   cases: defineTable({
     caseId: v.string(),
@@ -555,6 +591,71 @@ export default defineSchema({
     .index("by_trial_sequence", ["trialId", "sequence"])
     .index("by_trial_action", ["trialId", "actionId"])
     .index("by_trial_correlation", ["trialId", "correlationId"]),
+
+  courtroomModelCalls: defineTable({
+    callId: v.string(),
+    ownerId: v.string(),
+    trialId: v.string(),
+    responseId: v.union(v.string(), v.null()),
+    actorId: v.union(v.string(), v.null()),
+    actorRole: v.union(
+      v.literal("witness"),
+      v.literal("counsel"),
+      v.literal("judge"),
+      v.literal("jury"),
+      v.literal("debrief"),
+      v.literal("system"),
+      v.null(),
+    ),
+    callClass: courtroomModelCallClass,
+    task: courtroomModelCallTask,
+    status: courtroomModelCallStatus,
+    provider: v.string(),
+    model: runtimeOpenAiModel,
+    promptVersion: v.string(),
+    outputSchemaVersion: v.string(),
+    startedAt: v.number(),
+    completedAt: v.number(),
+    latencyMs: v.number(),
+    attemptCount: v.number(),
+    retryCount: v.number(),
+    validationFailureCount: v.number(),
+    acceptedCitationCount: v.number(),
+    outputCharacterCount: v.number(),
+    traceJson: v.string(),
+    schemaVersion: v.string(),
+  })
+    .index("by_call_id", ["callId"])
+    .index("by_owner_trial", ["ownerId", "trialId"])
+    .index("by_trial_time", ["trialId", "startedAt"]),
+
+  courtroomModelCallAttempts: defineTable({
+    callId: v.string(),
+    ownerId: v.string(),
+    trialId: v.string(),
+    attempt: v.number(),
+    mode: v.union(v.literal("initial"), v.literal("repair")),
+    status: courtroomModelCallAttemptStatus,
+    providerRequestId: v.union(v.string(), v.null()),
+    providerResponseId: v.union(v.string(), v.null()),
+    startedAt: v.number(),
+    completedAt: v.number(),
+    latencyMs: v.number(),
+    firstStructuredDeltaMs: v.union(v.number(), v.null()),
+    streamEventCount: v.number(),
+    structuredDeltaCount: v.number(),
+    streamedCharacterCount: v.number(),
+    outputHash: v.union(v.string(), v.null()),
+    proposedCitationCount: v.number(),
+    inputTokens: v.union(v.number(), v.null()),
+    outputTokens: v.union(v.number(), v.null()),
+    totalTokens: v.union(v.number(), v.null()),
+    cachedInputTokens: v.union(v.number(), v.null()),
+    cacheWriteTokens: v.union(v.number(), v.null()),
+    reasoningTokens: v.union(v.number(), v.null()),
+    safeErrorCode: v.union(v.string(), v.null()),
+    schemaVersion: v.string(),
+  }).index("by_call_attempt", ["callId", "attempt"]),
 
   actionReceipts: defineTable({
     receiptId: v.string(),
