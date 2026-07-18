@@ -18,6 +18,23 @@ export function hearingUrl(trialId: string): string {
   return `/hearing/?trial=${encodeURIComponent(trialId)}`;
 }
 
+export function seededHearingUrl(slug: string): string {
+  return `/hearing/?case=${encodeURIComponent(slug)}`;
+}
+
+export function ownedHearingUrl(uploadId: string): string {
+  return `/hearing/?upload=${encodeURIComponent(uploadId)}`;
+}
+
+export function ownedCaseWorkspaceUrl(
+  status: "draft" | "published",
+  uploadId: string,
+): string {
+  return status === "published"
+    ? ownedHearingUrl(uploadId)
+    : `/cases/new?draft=${encodeURIComponent(uploadId)}`;
+}
+
 export function hearingProgress(
   phase: HearingPhase | undefined,
   witnessAnswerCount: number,

@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   hearingProgress,
   hearingUrl,
+  ownedCaseWorkspaceUrl,
+  ownedHearingUrl,
+  seededHearingUrl,
   trialIdFromSearch,
 } from "./hearing-journey";
 
@@ -19,6 +22,24 @@ describe("hearing journey URL helpers", () => {
 
   it("builds a shareable hearing URL without dropping the current path", () => {
     expect(hearingUrl("trial_abc-123")).toBe("/hearing/?trial=trial_abc-123");
+  });
+
+  it("builds encoded seeded and private-case launch URLs", () => {
+    expect(seededHearingUrl("greenline-cold-chain")).toBe(
+      "/hearing/?case=greenline-cold-chain",
+    );
+    expect(ownedHearingUrl("upload:abc/123")).toBe(
+      "/hearing/?upload=upload%3Aabc%2F123",
+    );
+  });
+
+  it("sends published private cases to a hearing and drafts back to review", () => {
+    expect(ownedCaseWorkspaceUrl("published", "upload:abc")).toBe(
+      "/hearing/?upload=upload%3Aabc",
+    );
+    expect(ownedCaseWorkspaceUrl("draft", "upload:abc")).toBe(
+      "/cases/new?draft=upload%3Aabc",
+    );
   });
 });
 

@@ -7,6 +7,7 @@ import {
   OwnedCaseListResponseSchema,
   type OwnedCaseSummary,
 } from "@/domain/case-api";
+import { ownedCaseWorkspaceUrl } from "@/domain/hearing-journey";
 
 import styles from "./case-library.module.css";
 
@@ -57,7 +58,7 @@ export function OwnedCaseLibrary() {
         {cases.map((item) => (
           <Link
             className={styles.card}
-            href={`/cases/new?draft=${encodeURIComponent(item.uploadId)}`}
+            href={ownedCaseWorkspaceUrl(item.status, item.uploadId)}
             key={item.caseId}
           >
             <div className={styles.cardMeta}><span>private upload</span><span>{item.status}</span></div>

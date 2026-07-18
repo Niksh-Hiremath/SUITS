@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { seededHearingUrl } from "@/domain/hearing-journey";
 import { getSeededCaseBySlug, listSeededCases } from "@/domain/seeded-cases";
 
 import styles from "../case-library.module.css";
@@ -23,6 +24,7 @@ export default async function SeededCasePage({ params }: PageProps) {
   const { slug } = await params;
   const caseGraph = getSeededCaseBySlug(slug);
   if (!caseGraph) notFound();
+  const canonicalSlug = slug.trim().toLowerCase();
 
   return (
     <main className={styles.page}>
@@ -77,9 +79,9 @@ export default async function SeededCasePage({ params }: PageProps) {
         </article>
         <p className={styles.disclaimer}>{caseGraph.educationalDisclaimer}</p>
         <div className={styles.actions}>
-          <span className={`${styles.primary} ${styles.disabledPrimary}`} aria-disabled="true">
-            Trial room opens in the next milestone
-          </span>
+          <Link className={styles.primary} href={seededHearingUrl(canonicalSlug)}>
+            Begin hearing
+          </Link>
           <Link className={styles.secondary} href="/cases/new/">Compile another packet</Link>
         </div>
       </section>

@@ -12,6 +12,7 @@ import {
   type CasePublishResponse,
 } from "@/domain/case-api";
 import type { CaseGraph } from "@/domain/case-graph";
+import { ownedHearingUrl } from "@/domain/hearing-journey";
 
 import { CaseGraphReviewEditor } from "./case-graph-review-editor";
 import { CaseSourceReview } from "./case-source-review";
@@ -407,14 +408,20 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
         </section>
       )}
 
-      {stage === "published" && published && (
+      {stage === "published" && published && compiled && (
         <section className={styles.publishedPanel}>
           <span aria-hidden="true">✓</span>
           <p className={styles.kicker}>Case published</p>
           <h2>{compiled?.caseGraph.title}</h2>
           <p>Version {published.version} is ready for a fictional educational hearing.</p>
           <div className={styles.actions}>
-            <Link className={styles.primaryButton} href="/cases">View case library</Link>
+            <Link
+              className={styles.primaryButton}
+              href={ownedHearingUrl(compiled.upload.uploadId)}
+            >
+              Begin hearing
+            </Link>
+            <Link className={styles.secondaryButton} href="/cases">View case library</Link>
             <button className={styles.secondaryButton} onClick={reset} type="button">Compile another case</button>
           </div>
           <CaseSourceReview caseGraph={published.caseGraph} />

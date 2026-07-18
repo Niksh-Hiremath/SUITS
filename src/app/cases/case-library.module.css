@@ -94,7 +94,6 @@
 .primary,
 .secondary { display: inline-flex; min-height: 46px; align-items: center; padding: 0 18px; border-radius: 3px; font-weight: 900; text-decoration: none; }
 .primary { color: #fff; background: var(--wine); }
-.disabledPrimary { cursor: not-allowed; opacity: 0.64; }
 .secondary { color: var(--ink); border: 1px solid var(--line); }
 
 @media (max-width: 900px) {
