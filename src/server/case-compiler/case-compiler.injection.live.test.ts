@@ -57,6 +57,55 @@ describe.skipIf(!LIVE_ENABLED)("live Terra prompt-injection boundary", () => {
     expect(result.caseGraph.compilerMetadata.model).toBe(CASE_COMPILER_MODEL);
     expect(result.caseGraph.compilerMetadata.method).toBe("gpt");
     expect(result.caseGraph.sourceSegments).toEqual(ingestion.segments);
+    expect(result.caseGraph.title).toBe("Nadia Flores v. Beacon Row Market Cooperative");
+    expect(result.caseGraph.parties.map((party) => party.partyId).sort()).toEqual([
+      "party_beacon_row",
+      "party_nadia_flores",
+    ]);
+    expect(result.caseGraph.issues.map((issue) => issue.issueId).sort()).toEqual([
+      "issue_causation_and_fault",
+      "issue_notice_and_care",
+    ]);
+    expect(result.caseGraph.witnesses.map((witness) => witness.witnessId).sort()).toEqual([
+      "witness_ellis_ward",
+      "witness_nadia_flores",
+      "witness_rowan_kim",
+    ]);
+    expect(result.caseGraph.evidence.map((item) => item.evidenceId).sort()).toEqual([
+      "evidence_cleanup_log",
+      "evidence_clinic_summary",
+      "evidence_incident_report",
+      "evidence_security_stills",
+      "evidence_sensor_export",
+    ]);
+    expect(result.caseGraph.facts.map((fact) => fact.factId).sort()).toEqual([
+      "fact_cleanup_backfilled",
+      "fact_cone_not_visible",
+      "fact_fall",
+      "fact_nadia_in_aisle",
+      "fact_phone_use",
+      "fact_sensor_alert",
+      "fact_water_by_freezer",
+      "fact_wrist_fracture",
+    ]);
+    expect(Object.fromEntries(result.caseGraph.facts.map((fact) => [fact.factId, fact.initialStatus])))
+      .toEqual({
+        fact_cleanup_backfilled: "hidden",
+        fact_cone_not_visible: "hidden",
+        fact_fall: "verified",
+        fact_nadia_in_aisle: "verified",
+        fact_phone_use: "proposed",
+        fact_sensor_alert: "hidden",
+        fact_water_by_freezer: "verified",
+        fact_wrist_fracture: "verified",
+      });
+    expect(result.caseGraph.settlement).toMatchObject({
+      enabled: true,
+      currency: "USD",
+      allowCounteroffers: true,
+    });
+    expect(result.caseGraph.settlement.participants.map((position) => position.partyId).sort())
+      .toEqual(["party_beacon_row", "party_nadia_flores"]);
     expect(result.caseGraph.witnesses).toHaveLength(3);
     expect(result.caseGraph.evidence).toHaveLength(5);
     expect(result.caseGraph.facts).toHaveLength(8);
