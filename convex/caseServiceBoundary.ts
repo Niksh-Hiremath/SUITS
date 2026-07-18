@@ -5,6 +5,7 @@ import {
   CaseGraphV1Schema,
   SourceSegmentSchema,
   type CaseGraphV1,
+  type Provenance,
   type SourceSegment,
 } from "../src/domain/case-graph";
 import {
@@ -28,6 +29,11 @@ import {
 const MAX_SERVICE_SECRET_CHARACTERS = 512;
 const MAX_SERVICE_REQUEST_BYTES = 8 * 1024 * 1024;
 const OWNER_ID_PATTERN = /^owner:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export const CASE_COMPILATION_AUDIT_SCHEMA_VERSION = "case-compilation-audit.v1" as const;
+export const CASE_PUBLICATION_AUDIT_SCHEMA_VERSION = "case-publication-audit.v1" as const;
+export const CASE_HUMAN_REVIEW_AUDIT_SCHEMA_VERSION = "case-human-review-audit.v1" as const;
+export const MAX_RECORDED_HUMAN_REVIEW_CHANGES = 256;
 
 export const CaseServiceOwnerIdSchema = z
   .string()
@@ -257,6 +263,353 @@ export function caseGraphProvenanceSnapshot(graph: CaseGraphV1): string {
   });
 }
 
+export type HumanReviewEntityType =
+  | "case"
+  | "jurisdiction_profile"
+  | "party"
+  | "issue"
+  | "timeline_event"
+  | "fact"
+  | "evidence"
+  | "witness"
+  | "prior_statement"
+  | "contradiction"
+  | "settlement"
+  | "jury_instruction";
+
+export type HumanReviewChange = Readonly<{
+  path: string;
+  entityType: HumanReviewEntityType;
+  entityId: string;
+  changedFields: readonly string[];
+  provenanceId: string | null;
+}>;
+
+export type HumanReviewAudit = Readonly<{
+  schemaVersion: typeof CASE_HUMAN_REVIEW_AUDIT_SCHEMA_VERSION;
+  publicationGraphId: string;
+  draftVersion: 1;
+  publishedVersion: 2;
+  totalChangeCount: number;
+  annotatedEntityCount: number;
+  recordedChangeCount: number;
+  truncated: boolean;
+  changes: readonly HumanReviewChange[];
+}>;
+
+export type HumanReviewAnnotation = Readonly<{
+  caseGraph: CaseGraphV1;
+  audit: HumanReviewAudit;
+}>;
+
+function allProvenance(graph: CaseGraphV1): Provenance[] {
+  return [
+    ...graph.jurisdictionProfile.provenance,
+    ...graph.parties.flatMap((item) => item.provenance),
+    ...graph.issues.flatMap((item) => item.provenance),
+    ...graph.timeline.flatMap((item) => item.provenance),
+    ...graph.facts.flatMap((item) => item.provenance),
+    ...graph.evidence.flatMap((item) => item.provenance),
+    ...graph.witnesses.flatMap((item) => [
+      ...item.provenance,
+      ...item.priorStatements.flatMap((statement) => statement.provenance),
+    ]),
+    ...graph.contradictions.flatMap((item) => item.provenance),
+    ...graph.settlement.provenance,
+    ...graph.juryInstructions.flatMap((item) => item.provenance),
+  ];
+}
+
+function changedFields<T extends object>(
+  before: T,
+  after: T,
+  ignoredFields: readonly string[],
+): string[] {
+  const beforeRecord = before as Record<string, unknown>;
+  const afterRecord = after as Record<string, unknown>;
+  const ignored = new Set(ignoredFields);
+  return [...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)])]
+    .filter((field) =>
+      !ignored.has(field) && JSON.stringify(beforeRecord[field]) !== JSON.stringify(afterRecord[field]),
+    )
+    .sort();
+}
+
+function reviewProvenance(
+  provenanceId: string,
+  entityType: HumanReviewEntityType,
+  changed: readonly string[],
+): Provenance {
+  return {
+    provenanceId,
+    kind: "authoring",
+    sourceSegmentIds: [],
+    note: `Server-validated human review changed ${entityType.replaceAll("_", " ")} fields: ${changed.join(", ")}.`,
+    confidence: 1,
+  };
+}
+
+/**
+ * Applies only server-authored provenance. The reviewed input must still carry
+ * the draft provenance byte-for-byte; this prevents a browser from laundering
+ * an edit as source-grounded while preserving legitimate human corrections.
+ */
+export function annotateHumanReview(
+  draftInput: CaseGraphV1,
+  reviewedInput: CaseGraphV1,
+  publicationGraphId: string,
+): HumanReviewAnnotation {
+  const draft = CaseGraphV1Schema.parse(draftInput);
+  const reviewed = CaseGraphV1Schema.parse(reviewedInput);
+  CaseGraphEntityIdSchema.parse(publicationGraphId);
+
+  if (
+    draft.status !== "draft" ||
+    reviewed.status !== "published" ||
+    draft.caseId !== reviewed.caseId ||
+    draft.schemaVersion !== reviewed.schemaVersion ||
+    draft.version !== reviewed.version ||
+    draft.educationalDisclaimer !== reviewed.educationalDisclaimer ||
+    JSON.stringify(draft.sourceSegments) !== JSON.stringify(reviewed.sourceSegments) ||
+    JSON.stringify(draft.compilerMetadata) !== JSON.stringify(reviewed.compilerMetadata)
+  ) {
+    throw new CaseServiceBoundaryError("CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED", 409);
+  }
+  if (caseGraphProvenanceSnapshot(draft) !== caseGraphProvenanceSnapshot(reviewed)) {
+    throw new CaseServiceBoundaryError("CASE_PUBLISH_PROVENANCE_TAMPERED", 409);
+  }
+
+  const publicationToken = /^graph:published:([a-f0-9]{64})$/u.exec(publicationGraphId)?.[1];
+  if (!publicationToken) {
+    throw new CaseServiceBoundaryError("CASE_PUBLISH_CONFLICT", 409);
+  }
+
+  const annotated = structuredClone(reviewed);
+  const usedProvenanceIds = new Set(allProvenance(draft).map((item) => item.provenanceId));
+  const changes: HumanReviewChange[] = [];
+  let provenanceSequence = 0;
+
+  const nextProvenanceId = (): string => {
+    let candidate: string;
+    do {
+      provenanceSequence += 1;
+      candidate = `prov:review:${publicationToken.slice(0, 16)}:${String(provenanceSequence).padStart(4, "0")}`;
+    } while (usedProvenanceIds.has(candidate));
+    usedProvenanceIds.add(candidate);
+    return candidate;
+  };
+
+  const recordEntityEdit = <T extends object>(options: Readonly<{
+    before: T;
+    after: T;
+    ignoredFields: readonly string[];
+    entityType: HumanReviewEntityType;
+    entityId: string;
+    path: string;
+    append: (provenance: Provenance) => void;
+  }>): void => {
+    const fields = changedFields(options.before, options.after, options.ignoredFields);
+    if (fields.length === 0) return;
+    const provenanceId = nextProvenanceId();
+    options.append(reviewProvenance(provenanceId, options.entityType, fields));
+    changes.push({
+      path: options.path,
+      entityType: options.entityType,
+      entityId: options.entityId,
+      changedFields: fields,
+      provenanceId,
+    });
+  };
+
+  const caseFields = (["title", "summary"] as const).filter(
+    (field) => draft[field] !== reviewed[field],
+  );
+  if (caseFields.length > 0) {
+    changes.push({
+      path: "case",
+      entityType: "case",
+      entityId: reviewed.caseId,
+      changedFields: caseFields,
+      provenanceId: null,
+    });
+  }
+
+  recordEntityEdit({
+    before: draft.jurisdictionProfile,
+    after: reviewed.jurisdictionProfile,
+    ignoredFields: ["profileId", "provenance"],
+    entityType: "jurisdiction_profile",
+    entityId: reviewed.jurisdictionProfile.profileId,
+    path: "jurisdictionProfile",
+    append: (provenance) => annotated.jurisdictionProfile.provenance.push(provenance),
+  });
+
+  const recordArrayEdits = <T extends object>(options: Readonly<{
+    before: readonly T[];
+    after: readonly T[];
+    ignoredFields: readonly string[];
+    entityType: HumanReviewEntityType;
+    id: (item: T) => string;
+    path: (item: T) => string;
+    append: (index: number, provenance: Provenance) => void;
+  }>): void => {
+    options.before.forEach((before, index) => {
+      const after = options.after[index];
+      if (!after) throw new CaseServiceBoundaryError("CASE_PUBLISH_PROVENANCE_TAMPERED", 409);
+      recordEntityEdit({
+        before,
+        after,
+        ignoredFields: options.ignoredFields,
+        entityType: options.entityType,
+        entityId: options.id(after),
+        path: options.path(after),
+        append: (provenance) => options.append(index, provenance),
+      });
+    });
+  };
+
+  const appendAt = <T extends { provenance: Provenance[] }>(
+    items: T[],
+    index: number,
+    provenance: Provenance,
+  ): void => {
+    const item = items[index];
+    if (!item) throw new CaseServiceBoundaryError("CASE_PUBLISH_PROVENANCE_TAMPERED", 409);
+    item.provenance.push(provenance);
+  };
+
+  recordArrayEdits({
+    before: draft.parties,
+    after: reviewed.parties,
+    ignoredFields: ["partyId", "provenance"],
+    entityType: "party",
+    id: (item) => item.partyId,
+    path: (item) => `parties.${item.partyId}`,
+    append: (index, provenance) => appendAt(annotated.parties, index, provenance),
+  });
+  recordArrayEdits({
+    before: draft.issues,
+    after: reviewed.issues,
+    ignoredFields: ["issueId", "provenance"],
+    entityType: "issue",
+    id: (item) => item.issueId,
+    path: (item) => `issues.${item.issueId}`,
+    append: (index, provenance) => appendAt(annotated.issues, index, provenance),
+  });
+  recordArrayEdits({
+    before: draft.timeline,
+    after: reviewed.timeline,
+    ignoredFields: ["timelineEventId", "provenance"],
+    entityType: "timeline_event",
+    id: (item) => item.timelineEventId,
+    path: (item) => `timeline.${item.timelineEventId}`,
+    append: (index, provenance) => appendAt(annotated.timeline, index, provenance),
+  });
+  recordArrayEdits({
+    before: draft.facts,
+    after: reviewed.facts,
+    ignoredFields: ["factId", "provenance"],
+    entityType: "fact",
+    id: (item) => item.factId,
+    path: (item) => `facts.${item.factId}`,
+    append: (index, provenance) => appendAt(annotated.facts, index, provenance),
+  });
+  recordArrayEdits({
+    before: draft.evidence,
+    after: reviewed.evidence,
+    ignoredFields: ["evidenceId", "provenance"],
+    entityType: "evidence",
+    id: (item) => item.evidenceId,
+    path: (item) => `evidence.${item.evidenceId}`,
+    append: (index, provenance) => appendAt(annotated.evidence, index, provenance),
+  });
+  recordArrayEdits({
+    before: draft.witnesses,
+    after: reviewed.witnesses,
+    ignoredFields: ["witnessId", "provenance", "priorStatements"],
+    entityType: "witness",
+    id: (item) => item.witnessId,
+    path: (item) => `witnesses.${item.witnessId}`,
+    append: (index, provenance) => appendAt(annotated.witnesses, index, provenance),
+  });
+
+  draft.witnesses.forEach((witness, witnessIndex) => {
+    const reviewedWitness = reviewed.witnesses[witnessIndex];
+    if (!reviewedWitness) throw new CaseServiceBoundaryError("CASE_PUBLISH_PROVENANCE_TAMPERED", 409);
+    recordArrayEdits({
+      before: witness.priorStatements,
+      after: reviewedWitness.priorStatements,
+      ignoredFields: ["priorStatementId", "provenance"],
+      entityType: "prior_statement",
+      id: (item) => item.priorStatementId,
+      path: (item) => `witnesses.${reviewedWitness.witnessId}.priorStatements.${item.priorStatementId}`,
+      append: (statementIndex, provenance) => {
+        const annotatedWitness = annotated.witnesses[witnessIndex];
+        if (!annotatedWitness) {
+          throw new CaseServiceBoundaryError("CASE_PUBLISH_PROVENANCE_TAMPERED", 409);
+        }
+        appendAt(annotatedWitness.priorStatements, statementIndex, provenance);
+      },
+    });
+  });
+
+  recordArrayEdits({
+    before: draft.contradictions,
+    after: reviewed.contradictions,
+    ignoredFields: ["contradictionId", "provenance"],
+    entityType: "contradiction",
+    id: (item) => item.contradictionId,
+    path: (item) => `contradictions.${item.contradictionId}`,
+    append: (index, provenance) => appendAt(annotated.contradictions, index, provenance),
+  });
+  recordEntityEdit({
+    before: draft.settlement,
+    after: reviewed.settlement,
+    ignoredFields: ["provenance"],
+    entityType: "settlement",
+    entityId: "settlement",
+    path: "settlement",
+    append: (provenance) => annotated.settlement.provenance.push(provenance),
+  });
+  recordArrayEdits({
+    before: draft.juryInstructions,
+    after: reviewed.juryInstructions,
+    ignoredFields: ["instructionId", "provenance"],
+    entityType: "jury_instruction",
+    id: (item) => item.instructionId,
+    path: (item) => `juryInstructions.${item.instructionId}`,
+    append: (index, provenance) => appendAt(annotated.juryInstructions, index, provenance),
+  });
+
+  const parsedAnnotated = CaseGraphV1Schema.parse(annotated);
+  const recordedChanges = changes.slice(0, MAX_RECORDED_HUMAN_REVIEW_CHANGES);
+  return {
+    caseGraph: parsedAnnotated,
+    audit: {
+      schemaVersion: CASE_HUMAN_REVIEW_AUDIT_SCHEMA_VERSION,
+      publicationGraphId,
+      draftVersion: 1,
+      publishedVersion: 2,
+      totalChangeCount: changes.length,
+      annotatedEntityCount: changes.filter((change) => change.provenanceId !== null).length,
+      recordedChangeCount: recordedChanges.length,
+      truncated: recordedChanges.length !== changes.length,
+      changes: recordedChanges,
+    },
+  };
+}
+
+export function serializePublishedCompilerMetadata(
+  compilationAudit: unknown,
+  humanReview: HumanReviewAudit,
+): string {
+  return JSON.stringify({
+    schemaVersion: CASE_PUBLICATION_AUDIT_SCHEMA_VERSION,
+    compilation: compilationAudit,
+    humanReview,
+  });
+}
+
 async function secretsMatch(received: string, expected: string): Promise<boolean> {
   const [receivedHash, expectedHash] = await Promise.all([
     sha256Hex(`suits-service-secret:${received}`),
@@ -345,6 +698,8 @@ const INTERNAL_ERROR_STATUS = new Map<string, number>([
   ["CASE_DRAFT_SOURCE_COLLISION", 409],
   ["CASE_DRAFT_TOO_LARGE", 413],
   ["CASE_PUBLISH_CONFLICT", 409],
+  ["CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED", 409],
+  ["CASE_PUBLISH_PROVENANCE_TAMPERED", 409],
   ["CASE_UPLOAD_CONFLICT", 409],
   ["CASE_UPLOAD_DIGEST_MISMATCH", 422],
   ["CASE_UPLOAD_MIME_TYPE_MISMATCH", 422],

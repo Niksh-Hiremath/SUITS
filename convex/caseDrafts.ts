@@ -17,16 +17,25 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import {
+  CASE_COMPILATION_AUDIT_SCHEMA_VERSION,
   CaseServiceOwnerIdSchema,
   PublishCaseDraftRequestSchema,
   RegisterCaseDraftRequestSchema,
-  caseGraphProvenanceSnapshot,
+  annotateHumanReview,
+  serializePublishedCompilerMetadata,
   type RegisterCaseDraftRequest,
 } from "./caseServiceBoundary";
 
 const CASE_SOURCE_SCHEMA_VERSION = "case-source.v1";
-const CASE_COMPILATION_AUDIT_SCHEMA_VERSION = "case-compilation-audit.v1";
 const MAX_CASE_GRAPH_RECORD_BYTES = 900_000;
+
+const CaseCompilationAuditSchema = z
+  .object({
+    schemaVersion: z.literal(CASE_COMPILATION_AUDIT_SCHEMA_VERSION),
+    validationReport: RegisterCaseDraftRequestSchema.shape.validationReport,
+    observability: RegisterCaseDraftRequestSchema.shape.observability,
+  })
+  .strict();
 
 const promptInjectionFlag = v.object({
   patternId: v.union(
@@ -416,8 +425,6 @@ export const publishCompiledDraft = internalMutation({
     CaseServiceOwnerIdSchema.parse(request.ownerId);
     CaseGraphEntityIdSchema.parse(args.draftGraphId);
     CaseGraphEntityIdSchema.parse(args.publishedGraphId);
-    const graphJson = JSON.stringify(request.caseGraph);
-
     const existingPublications = await ctx.db
       .query("caseGraphs")
       .withIndex("by_graph_id", (index) => index.eq("graphId", args.publishedGraphId))
@@ -434,17 +441,23 @@ export const publishCompiledDraft = internalMutation({
     }
 
     const draftGraph = parseJson(CaseGraphV1Schema, draft.graphJson, "CASE_PUBLISH_CONFLICT");
-    if (
-      draftGraph.status !== "draft" ||
-      draftGraph.educationalDisclaimer !== request.caseGraph.educationalDisclaimer ||
-      caseGraphProvenanceSnapshot(draftGraph) !== caseGraphProvenanceSnapshot(request.caseGraph) ||
-      JSON.stringify(draftGraph.sourceSegments) !== JSON.stringify(request.caseGraph.sourceSegments) ||
-      JSON.stringify(draftGraph.compilerMetadata) !== JSON.stringify(request.caseGraph.compilerMetadata)
-    ) {
-      throw new Error("CASE_PUBLISH_CONFLICT");
-    }
     if (!draft.compilerMetadataJson) throw new Error("CASE_PUBLISH_CONFLICT");
-    assertGraphRecordSize(graphJson, draft.compilerMetadataJson);
+    const publication = annotateHumanReview(
+      draftGraph,
+      request.caseGraph,
+      args.publishedGraphId,
+    );
+    const graphJson = JSON.stringify(publication.caseGraph);
+    const compilationAudit = parseJson(
+      CaseCompilationAuditSchema,
+      draft.compilerMetadataJson,
+      "CASE_PUBLISH_CONFLICT",
+    );
+    const publishedCompilerMetadataJson = serializePublishedCompilerMetadata(
+      compilationAudit,
+      publication.audit,
+    );
+    assertGraphRecordSize(graphJson, publishedCompilerMetadataJson);
 
     const upload = await ctx.db
       .query("caseUploads")
@@ -467,8 +480,8 @@ export const publishCompiledDraft = internalMutation({
       if (
         existingPublications.length !== 1 ||
         !existing ||
-        !publicationMatches(existing, request.ownerId, request.caseGraph, graphJson) ||
-        existing.compilerMetadataJson !== draft.compilerMetadataJson
+        !publicationMatches(existing, request.ownerId, publication.caseGraph, graphJson) ||
+        existing.compilerMetadataJson !== publishedCompilerMetadataJson
       ) {
         throw new Error("CASE_PUBLISH_CONFLICT");
       }
@@ -486,15 +499,15 @@ export const publishCompiledDraft = internalMutation({
 
     await ctx.db.insert("caseGraphs", {
       graphId: args.publishedGraphId,
-      caseId: request.caseGraph.caseId,
+      caseId: publication.caseGraph.caseId,
       version: 2,
       lifecycle: "published",
       visibility: "private",
       ownerId: request.ownerId,
-      title: request.caseGraph.title,
+      title: publication.caseGraph.title,
       graphJson,
-      graphSchemaVersion: request.caseGraph.schemaVersion,
-      compilerMetadataJson: draft.compilerMetadataJson,
+      graphSchemaVersion: publication.caseGraph.schemaVersion,
+      compilerMetadataJson: publishedCompilerMetadataJson,
       sourceDigest: draft.sourceDigest,
       createdBy: "user",
       createdAt: Date.now(),

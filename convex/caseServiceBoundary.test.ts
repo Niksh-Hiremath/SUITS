@@ -11,12 +11,14 @@ import {
 import {
   CaseServiceBoundaryError,
   RegisterCaseDraftRequestSchema,
+  annotateHumanReview,
   authorizeCaseServiceRequest,
   caseGraphProvenanceSnapshot,
   caseServiceErrorResponse,
   caseServiceJson,
   deriveDraftGraphId,
   derivePublishedGraphId,
+  serializePublishedCompilerMetadata,
   sha256Hex,
   verifyRegisterCaseDraftIntegrity,
   type RegisterCaseDraftRequest,
@@ -194,6 +196,114 @@ describe("Convex case service boundary", () => {
     const tamperedGrounding = structuredClone(draft);
     tamperedGrounding.facts[0].provenance[0].note = "Client-authored replacement provenance.";
     expect(caseGraphProvenanceSnapshot(tamperedGrounding)).not.toBe(caseGraphProvenanceSnapshot(draft));
+  });
+
+  it("adds deterministic server provenance only to edited facts, witnesses, and settings", () => {
+    const draft = createThreeWitnessCaseGraphV1Fixture();
+    draft.status = "draft";
+    const reviewed = structuredClone(draft);
+    reviewed.status = "published";
+    reviewed.title = `${reviewed.title} — reviewed`;
+    reviewed.summary = `${reviewed.summary} Human-reviewed for the classroom exercise.`;
+    reviewed.facts[0].proposition = "The reviewer clarified the timing of the complaint.";
+    reviewed.witnesses[0].summary = "The reviewer clarified this witness's role in the safety escalation.";
+    reviewed.settlement.allowCounteroffers = !reviewed.settlement.allowCounteroffers;
+
+    const publicationGraphId = `graph:published:${"b".repeat(64)}`;
+    const result = annotateHumanReview(draft, reviewed, publicationGraphId);
+    const factReview = result.caseGraph.facts[0].provenance.at(-1);
+    const witnessReview = result.caseGraph.witnesses[0].provenance.at(-1);
+    const settlementReview = result.caseGraph.settlement.provenance.at(-1);
+
+    for (const provenance of [factReview, witnessReview, settlementReview]) {
+      expect(provenance).toMatchObject({
+        kind: "authoring",
+        sourceSegmentIds: [],
+        confidence: 1,
+      });
+      expect(provenance?.provenanceId).toMatch(/^prov:review:[a-f0-9]{16}:[0-9]{4}$/u);
+    }
+    expect(new Set([factReview?.provenanceId, witnessReview?.provenanceId, settlementReview?.provenanceId]).size).toBe(3);
+
+    expect(result.caseGraph.facts[1].provenance).toEqual(draft.facts[1].provenance);
+    expect(result.caseGraph.parties.map((party) => party.provenance)).toEqual(
+      draft.parties.map((party) => party.provenance),
+    );
+    expect(result.audit).toMatchObject({
+      publicationGraphId,
+      totalChangeCount: 4,
+      annotatedEntityCount: 3,
+      recordedChangeCount: 4,
+      truncated: false,
+    });
+    expect(result.audit.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: "case",
+        changedFields: ["title", "summary"],
+        provenanceId: null,
+      }),
+      expect.objectContaining({ entityType: "fact", changedFields: ["proposition"] }),
+      expect.objectContaining({ entityType: "witness", changedFields: ["summary"] }),
+      expect.objectContaining({ entityType: "settlement", changedFields: ["allowCounteroffers"] }),
+    ]));
+  });
+
+  it("rejects provenance tampering and changes to immutable compiler-owned fields", () => {
+    const draft = createThreeWitnessCaseGraphV1Fixture();
+    draft.status = "draft";
+    const publicationGraphId = `graph:published:${"c".repeat(64)}`;
+
+    const provenanceTamper = structuredClone(draft);
+    provenanceTamper.status = "published";
+    provenanceTamper.facts[0].provenance[0].note = "Browser-authored source claim.";
+    expect(() => annotateHumanReview(draft, provenanceTamper, publicationGraphId)).toThrowError(
+      expect.objectContaining({ code: "CASE_PUBLISH_PROVENANCE_TAMPERED" }),
+    );
+
+    const compilerTamper = structuredClone(draft);
+    compilerTamper.status = "published";
+    compilerTamper.compilerMetadata.promptVersion = "browser-rewrite.v1";
+    expect(() => annotateHumanReview(draft, compilerTamper, publicationGraphId)).toThrowError(
+      expect.objectContaining({ code: "CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED" }),
+    );
+
+    const sourceTamper = structuredClone(draft);
+    sourceTamper.status = "published";
+    sourceTamper.sourceSegments[0].excerpt = `${sourceTamper.sourceSegments[0].excerpt} Browser edit.`;
+    expect(() => annotateHumanReview(draft, sourceTamper, publicationGraphId)).toThrowError(
+      expect.objectContaining({ code: "CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED" }),
+    );
+
+    const disclaimerTamper = structuredClone(draft);
+    disclaimerTamper.status = "published";
+    disclaimerTamper.educationalDisclaimer = "This disclaimer was replaced.";
+    expect(() => annotateHumanReview(draft, disclaimerTamper, publicationGraphId)).toThrowError(
+      expect.objectContaining({ code: "CASE_PUBLISH_IMMUTABLE_FIELD_CHANGED" }),
+    );
+  });
+
+  it("rebuilds identical annotations and publication audit for an exact unannotated replay", () => {
+    const draft = createThreeWitnessCaseGraphV1Fixture();
+    draft.status = "draft";
+    const reviewed = structuredClone(draft);
+    reviewed.status = "published";
+    reviewed.facts[0].proposition = "A deterministic human-reviewed proposition.";
+    reviewed.witnesses[1].role = "A deterministic human-reviewed witness role.";
+    const publicationGraphId = `graph:published:${"d".repeat(64)}`;
+
+    const first = annotateHumanReview(draft, reviewed, publicationGraphId);
+    const replay = annotateHumanReview(draft, reviewed, publicationGraphId);
+    expect(replay).toEqual(first);
+
+    const compilationAudit = { schemaVersion: "case-compilation-audit.v1", marker: "immutable" };
+    const firstMetadata = serializePublishedCompilerMetadata(compilationAudit, first.audit);
+    const replayMetadata = serializePublishedCompilerMetadata(compilationAudit, replay.audit);
+    expect(replayMetadata).toBe(firstMetadata);
+    expect(JSON.parse(firstMetadata)).toMatchObject({
+      schemaVersion: "case-publication-audit.v1",
+      compilation: compilationAudit,
+      humanReview: first.audit,
+    });
   });
 
   it("returns compact no-store JSON and never reflects an unexpected internal error", async () => {
