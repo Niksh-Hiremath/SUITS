@@ -50,14 +50,25 @@ export interface CaseCompilerProvider {
   generate(request: CaseCompilerProviderRequest): Promise<CaseCompilerProviderResponse>;
 }
 
+export type CaseCompilerProviderErrorOptions = ErrorOptions & Readonly<{
+  retryAfterMs?: number | null;
+}>;
+
 export class CaseCompilerProviderError extends Error {
   readonly code: string;
   readonly retryable: boolean;
+  readonly retryAfterMs: number | null;
 
-  constructor(code: string, message: string, retryable: boolean, options?: ErrorOptions) {
+  constructor(
+    code: string,
+    message: string,
+    retryable: boolean,
+    options?: CaseCompilerProviderErrorOptions,
+  ) {
     super(message, options);
     this.name = "CaseCompilerProviderError";
     this.code = code;
     this.retryable = retryable;
+    this.retryAfterMs = options?.retryAfterMs ?? null;
   }
 }

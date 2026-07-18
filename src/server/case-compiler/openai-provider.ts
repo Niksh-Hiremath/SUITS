@@ -7,6 +7,11 @@ import {
   CASE_COMPILER_SCHEMA_NAME,
 } from "./constants";
 import {
+  classifyOpenAIRequestError,
+  classifyOpenAIResponseFailure,
+  createOpenAIProviderError,
+} from "./openai-errors";
+import {
   CaseCompilerProviderError,
   type CaseCompilerProvider,
   type CaseCompilerProviderRequest,
@@ -21,6 +26,7 @@ export type OpenAICaseCompilerProviderOptions = Readonly<{
   maxOutputTokens?: number;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   monotonicNow?: () => number;
+  wallClockNow?: () => number;
 }>;
 
 function assertServerRuntime(): void {
@@ -67,6 +73,7 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
   readonly #maxOutputTokens: number;
   readonly #reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
   readonly #monotonicNow: () => number;
+  readonly #wallClockNow: () => number;
 
   constructor(client: OpenAI, options: OpenAICaseCompilerProviderOptions = {}) {
     assertServerRuntime();
@@ -74,9 +81,14 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
     this.#maxOutputTokens = options.maxOutputTokens ?? 32_000;
     this.#reasoningEffort = options.reasoningEffort ?? "high";
     this.#monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.#wallClockNow = options.wallClockNow ?? Date.now;
 
     if (!Number.isInteger(this.#maxOutputTokens) || this.#maxOutputTokens < 4_000 || this.#maxOutputTokens > 100_000) {
-      throw new Error("maxOutputTokens must be an integer between 4000 and 100000");
+      throw new CaseCompilerProviderError(
+        "openai_configuration_error",
+        "OpenAI case compiler maxOutputTokens must be an integer between 4000 and 100000",
+        false,
+      );
     }
   }
 
@@ -96,6 +108,17 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
     const started = this.#monotonicNow();
     let streamEventCount = 0;
     let streamedCharacterCount = 0;
+    let textFormat: ReturnType<typeof zodTextFormat>;
+    try {
+      textFormat = zodTextFormat(CaseCompilerModelOutputSchema, CASE_COMPILER_SCHEMA_NAME);
+    } catch (error) {
+      throw createOpenAIProviderError(
+        "openai_schema_invalid",
+        "The OpenAI structured output schema is invalid",
+        false,
+        error,
+      );
+    }
 
     try {
       const stream = this.#client.responses.stream(
@@ -128,10 +151,10 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
             { role: "user", content: request.prompt.untrustedUserContent },
           ],
           text: {
-            format: zodTextFormat(CaseCompilerModelOutputSchema, CASE_COMPILER_SCHEMA_NAME),
+            format: textFormat,
           },
         },
-        { signal: request.signal },
+        { signal: request.signal, maxRetries: 0 },
       );
 
       for await (const event of stream) {
@@ -160,17 +183,13 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
 
       const response = await stream.finalResponse();
       if (response.status !== "completed" || response.error !== null) {
-        throw new CaseCompilerProviderError(
-          "response_incomplete",
-          "OpenAI did not complete the case compiler response",
-          true,
-        );
+        throw classifyOpenAIResponseFailure(response);
       }
       if (response.output_parsed === null) {
         throw new CaseCompilerProviderError(
-          "structured_output_missing",
+          "openai_structured_output_missing",
           "OpenAI returned no parsed case compiler output",
-          true,
+          false,
         );
       }
 
@@ -190,12 +209,7 @@ export class OpenAICaseCompilerProvider implements CaseCompilerProvider {
           cause: error,
         });
       }
-      throw new CaseCompilerProviderError(
-        "openai_request_failed",
-        "The OpenAI case compiler request failed",
-        true,
-        { cause: error },
-      );
+      throw classifyOpenAIRequestError(error, this.#wallClockNow());
     }
   }
 }
