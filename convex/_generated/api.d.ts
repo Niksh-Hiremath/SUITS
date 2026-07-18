@@ -10,6 +10,8 @@
 
 import type * as artifacts from "../artifacts.js";
 import type * as autonomous from "../autonomous.js";
+import type * as caseCompileQuota from "../caseCompileQuota.js";
+import type * as caseCompileReplay from "../caseCompileReplay.js";
 import type * as caseDrafts from "../caseDrafts.js";
 import type * as caseServiceBoundary from "../caseServiceBoundary.js";
 import type * as caseUploads from "../caseUploads.js";
@@ -33,6 +35,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   artifacts: typeof artifacts;
   autonomous: typeof autonomous;
+  caseCompileQuota: typeof caseCompileQuota;
+  caseCompileReplay: typeof caseCompileReplay;
   caseDrafts: typeof caseDrafts;
   caseServiceBoundary: typeof caseServiceBoundary;
   caseUploads: typeof caseUploads;
