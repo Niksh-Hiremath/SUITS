@@ -42,12 +42,10 @@ export function CaseWorkbench() {
   const [published, setPublished] = useState<CasePublishResponse | null>(null);
   const compileRequestId = useRef<string | null>(null);
 
-  const provenancePercent = useMemo(() => {
-    if (!compiled || compiled.report.provenance.factualFields === 0) return 100;
+  const sourceCoveragePercent = useMemo(() => {
+    if (!compiled || compiled.report.provenance.factualFields === 0) return null;
     return Math.round(
-      ((compiled.report.provenance.sourceLinked + compiled.report.provenance.explicitlyInferred) /
-        compiled.report.provenance.factualFields) *
-        100,
+      (compiled.report.provenance.sourceLinked / compiled.report.provenance.factualFields) * 100,
     );
   }, [compiled]);
 
@@ -259,8 +257,8 @@ export function CaseWorkbench() {
           <aside className={styles.reportPanel} aria-label="Compilation report">
             <p className={styles.kicker}>Compilation report</p>
             <div className={styles.coverageScore}>
-              <strong>{provenancePercent}%</strong>
-              <span>provenance accounted for</span>
+              <strong>{sourceCoveragePercent === null ? "—" : `${sourceCoveragePercent}%`}</strong>
+              <span>compiler fields directly source-linked</span>
             </div>
             <dl>
               <div><dt>Source segments</dt><dd>{compiled.upload.sourceSegmentCount}</dd></div>
