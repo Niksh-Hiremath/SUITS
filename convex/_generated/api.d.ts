@@ -10,13 +10,16 @@
 
 import type * as artifacts from "../artifacts.js";
 import type * as autonomous from "../autonomous.js";
+import type * as caseCompileClaims from "../caseCompileClaims.js";
 import type * as caseCompileQuota from "../caseCompileQuota.js";
 import type * as caseCompileReplay from "../caseCompileReplay.js";
 import type * as caseDrafts from "../caseDrafts.js";
 import type * as caseServiceBoundary from "../caseServiceBoundary.js";
+import type * as caseStorageReconciler from "../caseStorageReconciler.js";
 import type * as caseUploadCleanup from "../caseUploadCleanup.js";
 import type * as caseUploads from "../caseUploads.js";
 import type * as cases from "../cases.js";
+import type * as crons from "../crons.js";
 import type * as evals from "../evals.js";
 import type * as events from "../events.js";
 import type * as http from "../http.js";
@@ -38,13 +41,16 @@ import type {
 declare const fullApi: ApiFromModules<{
   artifacts: typeof artifacts;
   autonomous: typeof autonomous;
+  caseCompileClaims: typeof caseCompileClaims;
   caseCompileQuota: typeof caseCompileQuota;
   caseCompileReplay: typeof caseCompileReplay;
   caseDrafts: typeof caseDrafts;
   caseServiceBoundary: typeof caseServiceBoundary;
+  caseStorageReconciler: typeof caseStorageReconciler;
   caseUploadCleanup: typeof caseUploadCleanup;
   caseUploads: typeof caseUploads;
   cases: typeof cases;
+  crons: typeof crons;
   evals: typeof evals;
   events: typeof events;
   http: typeof http;
