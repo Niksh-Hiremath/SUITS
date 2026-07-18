@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 
 import type { CaseGraph } from "@/domain/case-graph";
 
+import { CaseGraphReviewEditor } from "./case-graph-review-editor";
 import styles from "./case-workbench.module.css";
 
 type ReviewIssue = {
@@ -252,62 +253,10 @@ export function CaseWorkbench() {
               />
             </label>
 
-            <div className={styles.entitySection}>
-              <div className={styles.sectionHeading}>
-                <h3>Factual propositions</h3>
-                <span>{compiled.caseGraph.facts.length}</span>
-              </div>
-              {compiled.caseGraph.facts.map((fact) => (
-                <label className={styles.entityEditor} key={fact.factId}>
-                  <span>
-                    <code>{fact.factId}</code>
-                    <i>{fact.initialStatus}</i>
-                  </span>
-                  <textarea
-                    maxLength={3_000}
-                    onChange={(event) => updateGraph((graph) => ({
-                      ...graph,
-                      facts: graph.facts.map((item) => item.factId === fact.factId ? { ...item, proposition: event.target.value } : item),
-                    }))}
-                    rows={3}
-                    value={fact.proposition}
-                  />
-                </label>
-              ))}
-            </div>
-
-            <div className={styles.entitySection}>
-              <div className={styles.sectionHeading}>
-                <h3>Witness roster</h3>
-                <span>{compiled.caseGraph.witnesses.length}</span>
-              </div>
-              {compiled.caseGraph.witnesses.map((witness) => (
-                <div className={styles.witnessRow} key={witness.witnessId}>
-                  <label>
-                    Name
-                    <input
-                      maxLength={200}
-                      onChange={(event) => updateGraph((graph) => ({
-                        ...graph,
-                        witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, name: event.target.value } : item),
-                      }))}
-                      value={witness.name}
-                    />
-                  </label>
-                  <label>
-                    Courtroom role
-                    <input
-                      maxLength={500}
-                      onChange={(event) => updateGraph((graph) => ({
-                        ...graph,
-                        witnesses: graph.witnesses.map((item) => item.witnessId === witness.witnessId ? { ...item, role: event.target.value } : item),
-                      }))}
-                      value={witness.role}
-                    />
-                  </label>
-                </div>
-              ))}
-            </div>
+            <CaseGraphReviewEditor
+              graph={compiled.caseGraph}
+              onChange={(caseGraph) => setCompiled((current) => current ? { ...current, caseGraph } : current)}
+            />
 
             {error && <p className={styles.error} role="alert">{error}</p>}
             <div className={styles.actions}>
