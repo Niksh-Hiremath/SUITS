@@ -182,7 +182,7 @@ const commandHearingReference = makeFunctionReference<
 >("hearingRuntime:command");
 const readHearingReference = makeFunctionReference<
   "action",
-  { ownerId: string; trialId: string; controlledActorId?: string },
+  { ownerId: string; trialId: string },
   HearingRuntimeViewV1
 >("hearingRuntime:read");
 
@@ -203,7 +203,6 @@ const HearingServiceReadRequestSchema = z
   .object({
     ownerId: CaseServiceOwnerIdSchema,
     trialId: z.string().trim().min(1).max(256),
-    controlledActorId: z.string().trim().min(1).max(256).optional(),
   })
   .strict();
 

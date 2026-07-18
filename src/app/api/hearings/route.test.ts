@@ -217,4 +217,34 @@ describe("hearing BFF routes", () => {
     expect(response.status).toBe(401);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects a browser-selected counsel actor before calling Convex", async () => {
+    configureEnvironment();
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const cookie = `${CASE_OWNER_COOKIE_NAME}=${sessionCookie()}`;
+    const response = await commandHearing(
+      new NextRequest(`${PUBLIC_ORIGIN}/api/hearings/${TRIAL_ID}/commands`, {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          "Content-Type": "application/json",
+          Origin: PUBLIC_ORIGIN,
+        },
+        body: JSON.stringify({
+          schemaVersion: HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
+          requestId: "423e4567-e89b-42d3-a456-426614174000",
+          requestedAt: "2026-07-19T03:02:00.000Z",
+          expectedStateVersion: VIEW.trial.version,
+          expectedLastEventId: VIEW.trial.lastEventId,
+          controlledActorId: "actor:counsel:party_other",
+          intent: { type: "call_witness", witnessId: "witness_rina_shah" },
+        }),
+      }),
+      { params: Promise.resolve({ trialId: TRIAL_ID }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

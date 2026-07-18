@@ -313,36 +313,27 @@ function actorByRole(
   state: TrialStateV3,
   role: ActorRef["role"],
   side?: ActorRef["side"],
-  controlledActorId?: string,
+  requiredActorId?: string,
 ): ActorRef {
   const matches = Object.values(state.actors)
     .filter(
       (actor) =>
         actor.role === role &&
         (side === undefined || actor.side === side) &&
-        (controlledActorId === undefined || actor.actorId === controlledActorId),
+        (requiredActorId === undefined || actor.actorId === requiredActorId),
     )
     .sort((left, right) => left.actorId.localeCompare(right.actorId));
   if (matches.length === 0) throw new Error(`RUNTIME_ACTOR_NOT_FOUND:${role}`);
   return matches[0];
 }
 
-function playerCounsel(
-  state: TrialStateV3,
-  controlledActorId?: string,
-): ActorRef {
-  return actorByRole(
-    state,
-    playerRole(state),
-    state.userSide,
-    controlledActorId,
-  );
+function playerCounsel(state: TrialStateV3): ActorRef {
+  return actorByRole(state, playerRole(state), state.userSide);
 }
 
 function playerCounselForWitness(
   state: TrialStateV3,
   witnessId: string,
-  controlledActorId?: string,
 ): ActorRef {
   const rule = state.policySnapshot.witnessCallability.find(
     (candidate) => candidate.witnessId === witnessId,
@@ -354,8 +345,7 @@ function playerCounselForWitness(
       (actor) =>
         actor.role === playerRole(state) &&
         actor.side === state.userSide &&
-        allowed.has(actor.actorId) &&
-        (controlledActorId === undefined || actor.actorId === controlledActorId),
+        allowed.has(actor.actorId),
     )
     .sort((left, right) => left.actorId.localeCompare(right.actorId));
   if (matches.length === 0) throw new Error("PLAYER_CANNOT_CALL_WITNESS");
@@ -439,7 +429,6 @@ async function loadHead(
   ctx: ActionCtx,
   ownerId: string,
   trialId: string,
-  controlledActorId?: string,
 ): Promise<{
   graph: CaseGraphV1;
   state: TrialStateV3;
@@ -461,7 +450,7 @@ async function loadHead(
     graphId: reload.graphId,
   });
   const graph = parseGraphJson(storedGraph.graphJson);
-  const actor = playerCounsel(state, controlledActorId);
+  const actor = playerCounsel(state);
   return {
     graph,
     state,
@@ -540,13 +529,10 @@ export const read = internalAction({
   args: {
     ownerId: v.string(),
     trialId: v.string(),
-    controlledActorId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<HearingRuntimeViewV1> => {
     const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
-    return (
-      await loadHead(ctx, ownerId, args.trialId, args.controlledActorId)
-    ).view;
+    return (await loadHead(ctx, ownerId, args.trialId)).view;
   },
 });
 
@@ -561,7 +547,6 @@ async function callWitness(
   const counsel = playerCounselForWitness(
     state,
     command.intent.witnessId,
-    command.controlledActorId,
   );
   const actionId = runtimeActionId(trialId, command.requestId, "call-witness");
   const callType =
@@ -616,7 +601,7 @@ async function askWitness(
 ): Promise<void> {
   if (command.intent.type !== "ask_question") throw new Error("INVALID_INTENT");
   const intent = command.intent;
-  const counsel = playerCounsel(head.state, command.controlledActorId);
+  const counsel = playerCounsel(head.state);
   const witnessActorId = Object.values(head.state.actors).find(
     (actor) => actor.witnessId === intent.witnessId,
   )?.actorId;
@@ -696,12 +681,7 @@ async function askWitness(
   ) {
     return;
   }
-  const responseHead = await loadHead(
-    ctx,
-    ownerId,
-    trialId,
-    command.controlledActorId,
-  );
+  const responseHead = await loadHead(ctx, ownerId, trialId);
   const witnessKnowledge = buildKnowledgeView(
     { caseGraph: responseHead.graph, trial: responseHead.state },
     witnessActor.actorId,
@@ -768,7 +748,6 @@ async function finishWitness(
     state,
     counselRoleForSide(leg.ownerSide),
     leg.ownerSide,
-    leg.ownerSide === state.userSide ? command.controlledActorId : undefined,
   );
   if (leg.ownerSide !== state.userSide) {
     throw new Error("PLAYER_DOES_NOT_OWN_EXAMINATION");
@@ -812,9 +791,6 @@ async function finishWitness(
       state,
       counselRoleForSide(nextLeg.ownerSide),
       nextLeg.ownerSide,
-      nextLeg.ownerSide === state.userSide
-        ? command.controlledActorId
-        : undefined,
     );
     const waiverActionId = runtimeActionId(
       trialId,
@@ -852,9 +828,6 @@ async function finishWitness(
     state,
     counselRoleForSide(appearance.callingSide),
     appearance.callingSide,
-    appearance.callingSide === state.userSide
-      ? command.controlledActorId
-      : undefined,
   );
   await appendRuntimeAction(
     ctx,
@@ -889,7 +862,7 @@ async function finishTrial(
   if (command.intent.type !== "finish_trial") throw new Error("INVALID_INTENT");
   const playerSide = state.userSide;
   const otherSide = opposingSide(playerSide);
-  const player = playerCounsel(state, command.controlledActorId);
+  const player = playerCounsel(state);
   const otherCounsel = actorByRole(
     state,
     counselRoleForSide(otherSide),
@@ -1083,12 +1056,7 @@ export const command = internalAction({
     const commandInput = HearingPlayerCommandSchema.parse(
       parseJson(args.commandJson, "hearing_player_command"),
     );
-    const head = await loadHead(
-      ctx,
-      ownerId,
-      args.trialId,
-      commandInput.controlledActorId,
-    );
+    const head = await loadHead(ctx, ownerId, args.trialId);
     switch (commandInput.intent.type) {
       case "call_witness":
         await callWitness(ctx, ownerId, args.trialId, commandInput, head.state);
@@ -1103,13 +1071,6 @@ export const command = internalAction({
         await finishTrial(ctx, ownerId, args.trialId, commandInput, head.state);
         break;
     }
-    return (
-      await loadHead(
-        ctx,
-        ownerId,
-        args.trialId,
-        commandInput.controlledActorId,
-      )
-    ).view;
+    return (await loadHead(ctx, ownerId, args.trialId)).view;
   },
 });

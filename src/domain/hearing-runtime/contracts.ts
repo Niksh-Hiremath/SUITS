@@ -90,7 +90,6 @@ export const HearingPlayerCommandSchema = z
     requestedAt: z.string().datetime({ offset: true }),
     expectedStateVersion: z.number().int().nonnegative(),
     expectedLastEventId: CaseGraphEntityIdSchema,
-    controlledActorId: CaseGraphEntityIdSchema.optional(),
     intent: HearingPlayerIntentSchema,
   })
   .strict();

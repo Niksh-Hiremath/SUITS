@@ -58,6 +58,12 @@ describe("hearing runtime contracts", () => {
     expect(
       HearingPlayerCommandSchema.safeParse({
         ...command,
+        controlledActorId: "actor:counsel:party_other",
+      }).success,
+    ).toBe(false);
+    expect(
+      HearingPlayerCommandSchema.safeParse({
+        ...command,
         actor: {
           actorId: "actor:judge",
           role: "judge",

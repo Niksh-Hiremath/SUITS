@@ -35,11 +35,7 @@ const commandReference = makeFunctionReference<
 >("hearingRuntime:command");
 const readReference = makeFunctionReference<
   "action",
-  Readonly<{
-    ownerId: string;
-    trialId: string;
-    controlledActorId?: string;
-  }>,
+  Readonly<{ ownerId: string; trialId: string }>,
   HearingRuntimeViewV1
 >("hearingRuntime:read");
 
