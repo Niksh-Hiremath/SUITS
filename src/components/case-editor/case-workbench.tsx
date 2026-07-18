@@ -2,48 +2,18 @@
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
+import {
+  CaseApiErrorResponseSchema,
+  CaseCompileResponseSchema,
+  CasePublishResponseSchema,
+  CaseSessionResponseSchema,
+  type CaseCompileResponse,
+  type CasePublishResponse,
+} from "@/domain/case-api";
 import type { CaseGraph } from "@/domain/case-graph";
 
 import { CaseGraphReviewEditor } from "./case-graph-review-editor";
 import styles from "./case-workbench.module.css";
-
-type ReviewIssue = {
-  code: string;
-  message: string;
-  sourceSegmentIds: string[];
-};
-
-type CompilationReport = {
-  schemaVersion: string;
-  warnings: ReviewIssue[];
-  uncertainties: ReviewIssue[];
-  provenance: {
-    factualFields: number;
-    sourceLinked: number;
-    explicitlyInferred: number;
-  };
-  injectionSignals: string[];
-};
-
-type CompiledUpload = {
-  uploadId: string;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  sourceSegmentCount: number;
-};
-
-type CompileResponse = {
-  caseGraph: CaseGraph;
-  report: CompilationReport;
-  upload: CompiledUpload;
-};
-
-type PublishResponse = {
-  caseId: string;
-  version: number;
-  published: boolean;
-};
 
 type WorkbenchStage = "select" | "compiling" | "review" | "publishing" | "published" | "error";
 
@@ -57,8 +27,8 @@ function formatBytes(bytes: number): string {
 
 async function errorMessage(response: Response): Promise<string> {
   try {
-    const body = (await response.json()) as { error?: { message?: string } };
-    return body.error?.message ?? `Request failed with status ${response.status}`;
+    const parsed = CaseApiErrorResponseSchema.safeParse(await response.json());
+    return parsed.success ? parsed.data.error.message : `Request failed with status ${response.status}`;
   } catch {
     return `Request failed with status ${response.status}`;
   }
@@ -67,9 +37,9 @@ async function errorMessage(response: Response): Promise<string> {
 export function CaseWorkbench() {
   const [stage, setStage] = useState<WorkbenchStage>("select");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [compiled, setCompiled] = useState<CompileResponse | null>(null);
+  const [compiled, setCompiled] = useState<CaseCompileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [published, setPublished] = useState<PublishResponse | null>(null);
+  const [published, setPublished] = useState<CasePublishResponse | null>(null);
   const compileRequestId = useRef<string | null>(null);
 
   const provenancePercent = useMemo(() => {
@@ -107,14 +77,17 @@ export function CaseWorkbench() {
         credentials: "same-origin",
       });
       if (!sessionResponse.ok) throw new Error(await errorMessage(sessionResponse));
+      const sessionPayload = CaseSessionResponseSchema.safeParse(await sessionResponse.json());
+      if (!sessionPayload.success) throw new Error("The server returned an invalid case session response.");
       const response = await fetch("/api/cases/compile", {
         method: "POST",
         body,
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error(await errorMessage(response));
-      const result = (await response.json()) as CompileResponse;
-      setCompiled(result);
+      const result = CaseCompileResponseSchema.safeParse(await response.json());
+      if (!result.success) throw new Error("The server returned an invalid compiled case.");
+      setCompiled(result.data);
       setStage("review");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Case compilation failed.");
@@ -140,8 +113,9 @@ export function CaseWorkbench() {
         }),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
-      const result = (await response.json()) as PublishResponse;
-      setPublished(result);
+      const result = CasePublishResponseSchema.safeParse(await response.json());
+      if (!result.success) throw new Error("The server returned an invalid publication result.");
+      setPublished(result.data);
       setStage("published");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Publishing failed.");
