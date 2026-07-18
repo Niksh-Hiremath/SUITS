@@ -1,4 +1,5 @@
 export * from "./convex-service";
+export * from "./bounded-body";
 export * from "./idempotency";
 export * from "./rate-limit";
 export * from "./report";
