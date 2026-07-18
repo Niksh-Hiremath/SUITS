@@ -290,6 +290,46 @@ function unique(values: readonly string[]): string[] {
 }
 
 /**
+ * The model can reliably identify a record by its stable entity ID even when
+ * it renders a JSON-Schema-style array placeholder instead of a numeric array
+ * index. Resolve only unambiguous, record-scoped IDs (or an already-exact
+ * owner path) to the server's canonical path. Provenance ownership is still
+ * validated independently, so this normalization cannot move citations
+ * between records.
+ */
+function canonicalizeGroundingOwnerPaths(
+  graph: CaseGraphV1,
+  groups: readonly CaseCompilerGroundingGroup[],
+): CaseCompilerGroundingGroup[] {
+  const owners = new Map<string, GroundableField>();
+  const ownersByEntityId = new Map<string, GroundableField[]>();
+  for (const field of collectGroundableFields(graph)) {
+    if (!owners.has(field.ownerPath)) owners.set(field.ownerPath, field);
+    if (field.entityId !== null && !ownersByEntityId.get(field.entityId)?.some(
+      (owner) => owner.ownerPath === field.ownerPath,
+    )) {
+      const matches = ownersByEntityId.get(field.entityId) ?? [];
+      matches.push(field);
+      ownersByEntityId.set(field.entityId, matches);
+    }
+  }
+
+  return groups.map((group) => {
+    const exact = owners.get(group.ownerPath);
+    const entityMatches = group.entityId === null
+      ? []
+      : ownersByEntityId.get(group.entityId) ?? [];
+    const owner = exact ?? (entityMatches.length === 1 ? entityMatches[0] : undefined);
+    if (!owner || owner.provenanceScope !== group.provenanceScope) return group;
+    return CaseCompilerGroundingGroupSchema.parse({
+      ...group,
+      ownerPath: owner.ownerPath,
+      entityId: group.entityId ?? owner.entityId,
+    });
+  });
+}
+
+/**
  * Builds a deterministic audit draft for mock providers and fixtures. Runtime
  * validation never calls this helper: GPT must return its own owner-bound audit.
  */
@@ -955,8 +995,16 @@ export function validateCaseCompilerCandidate(
 
   const graph = canonical.data;
 
-  const grounding = validateGrounding(graph, issues, output.review.fieldGrounding);
-  const validationReport = buildReport(issues, grounding, output);
+  const canonicalFieldGrounding = canonicalizeGroundingOwnerPaths(
+    graph,
+    output.review.fieldGrounding,
+  );
+  const normalizedOutput = CaseCompilerModelOutputSchema.parse({
+    ...output,
+    review: { ...output.review, fieldGrounding: canonicalFieldGrounding },
+  });
+  const grounding = validateGrounding(graph, issues, canonicalFieldGrounding);
+  const validationReport = buildReport(issues, grounding, normalizedOutput);
   if (issues.length > 0) {
     return { ok: false, issues, validationReport };
   }
@@ -974,7 +1022,7 @@ export function validateCaseCompilerCandidate(
 
   return {
     ok: true,
-    output,
+    output: normalizedOutput,
     caseGraph: normalizedGraph,
     validationReport,
     acceptedSourceCitationCount,

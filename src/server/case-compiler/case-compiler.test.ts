@@ -411,6 +411,33 @@ describe("deterministic factual grounding", () => {
     }
   });
 
+  it("canonicalizes unambiguous live-style record owner placeholders by stable entity ID", () => {
+    const input = createInput();
+    const output = createModelOutput(input);
+    const expectedOwnerPaths = output.review.fieldGrounding
+      .map((group) => group.ownerPath)
+      .sort();
+    for (const group of output.review.fieldGrounding) {
+      if (group.provenanceScope === "record" && group.entityId !== null) {
+        group.ownerPath = "caseGraph.schema.recordId.recordId.recordId";
+      }
+      if (
+        group.ownerPath === "caseGraph.jurisdictionProfile" ||
+        group.ownerPath === "caseGraph.settlement"
+      ) {
+        group.entityId = null;
+      }
+    }
+
+    const result = validateCaseCompilerCandidate(output, validationContext(input));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output.review.fieldGrounding.map((group) => group.ownerPath).sort())
+        .toEqual(expectedOwnerPaths);
+    }
+  });
+
   it("rejects a missing nested field audit instead of accepting entity-level coverage", () => {
     const input = createInput();
     const output = createModelOutput(input);
