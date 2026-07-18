@@ -23,6 +23,7 @@ import {
 } from "../src/domain/trial-engine";
 import type { Doc } from "./_generated/dataModel";
 import {
+  internalQuery,
   internalMutation,
   mutation,
   query,
@@ -610,28 +611,35 @@ async function persistCommit(
   };
 }
 
-/**
- * Starts an owner-bound event stream from an immutable published CaseGraph.
- * Owner identity is derived exclusively from Convex auth.
- */
-export const createTrial = mutation({
+const createTrialArgs = {
+  trialId: v.string(),
+  graphId: v.string(),
+  actionId: v.string(),
+  requestedAt: v.number(),
+  actorBindings: v.array(actorBinding),
+  userSide: v.optional(v.union(v.literal("user"), v.literal("opposing"))),
+};
+
+async function createTrialForOwner(
+  ctx: MutationCtx,
   args: {
-    trialId: v.string(),
-    graphId: v.string(),
-    actionId: v.string(),
-    requestedAt: v.number(),
-    actorBindings: v.array(actorBinding),
-    userSide: v.optional(v.union(v.literal("user"), v.literal("opposing"))),
+    trialId: string;
+    graphId: string;
+    actionId: string;
+    requestedAt: number;
+    actorBindings: TrialPolicyActorBindingInput[];
+    userSide?: "user" | "opposing";
   },
-  handler: async (ctx, args) => {
-    const ownerId = await requireOwnerId(ctx);
+  ownerId: string,
+) {
+    assertIdentifier(ownerId, "ownerId");
     assertIdentifier(args.trialId, "trialId");
     assertIdentifier(args.actionId, "actionId");
     if (!Number.isFinite(args.requestedAt) || args.requestedAt < 0) {
       throw new Error("requestedAt must be a non-negative timestamp");
     }
     const { graph } = await requirePublishedGraph(ctx, args.graphId, ownerId);
-    const bindings = args.actorBindings as TrialPolicyActorBindingInput[];
+    const bindings = args.actorBindings;
     const action = TrialActionV3Schema.parse(
       createStartTrialAction({
         trialId: args.trialId,
@@ -678,6 +686,41 @@ export const createTrial = mutation({
       commit: committed,
       writeSnapshot: true,
     });
+}
+
+/**
+ * Starts an owner-bound event stream from an immutable published CaseGraph.
+ * Owner identity is derived exclusively from Convex auth.
+ */
+export const createTrial = mutation({
+  args: createTrialArgs,
+  handler: async (ctx, args) => {
+    const ownerId = await requireOwnerId(ctx);
+    return await createTrialForOwner(
+      ctx,
+      {
+        ...args,
+        actorBindings: args.actorBindings as TrialPolicyActorBindingInput[],
+      },
+      ownerId,
+    );
+  },
+});
+
+/** Trusted server facade for an owner session verified outside Convex auth. */
+export const createForOwner = internalMutation({
+  args: { ownerId: v.string(), ...createTrialArgs },
+  handler: async (ctx, args) => {
+    const { ownerId, ...createArgs } = args;
+    return await createTrialForOwner(
+      ctx,
+      {
+        ...createArgs,
+        actorBindings:
+          createArgs.actorBindings as TrialPolicyActorBindingInput[],
+      },
+      ownerId,
+    );
   },
 });
 
@@ -786,6 +829,38 @@ export const append = mutation({
   },
 });
 
+/**
+ * Trusted service boundary for a player action whose owner session was verified
+ * by the server facade. Actor/source restrictions remain identical to append.
+ */
+export const appendPlayerForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    const action = TrialActionV3Schema.parse(
+      parseJsonObject(args.actionJson, "actionJson"),
+    );
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", action.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    return await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
+      projection,
+      playerControlledOnly: true,
+    });
+  },
+});
+
 /** Trusted server boundary for deterministic, AI, speech, and system actions. */
 export const appendTrusted = internalMutation({
   args: {
@@ -805,6 +880,40 @@ export const appendTrusted = internalMutation({
     return await appendActiveAction(ctx, {
       action,
       ownerId: projection.ownerId,
+      projection,
+      writeSnapshot: args.writeSnapshot,
+      playerControlledOnly: false,
+    });
+  },
+});
+
+/**
+ * Trusted generated/system append with an explicit owner guard for HTTP/server
+ * orchestration. This prevents a valid service request from crossing trials.
+ */
+export const appendTrustedForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+    writeSnapshot: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    const action = TrialActionV3Schema.parse(
+      parseJsonObject(args.actionJson, "actionJson"),
+    );
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", action.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    return await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
       projection,
       writeSnapshot: args.writeSnapshot,
       playerControlledOnly: false,
@@ -860,14 +969,22 @@ function publicEvent(row: Doc<"trialEvents">) {
  * returned verbatim for the explicit domain migrator; no historical row is
  * rewritten in place.
  */
-export const reload = query({
+const reloadArgs = {
+  trialId: v.string(),
+  afterSequence: v.optional(v.number()),
+  limit: v.optional(v.number()),
+};
+
+async function reloadForOwner(
+  ctx: QueryCtx,
   args: {
-    trialId: v.string(),
-    afterSequence: v.optional(v.number()),
-    limit: v.optional(v.number()),
+    trialId: string;
+    afterSequence?: number;
+    limit?: number;
   },
-  handler: async (ctx, args) => {
-    const ownerId = await requireOwnerId(ctx);
+  ownerId: string,
+) {
+    assertIdentifier(ownerId, "ownerId");
     assertIdentifier(args.trialId, "trialId");
     const afterSequence = args.afterSequence ?? 0;
     assertNonNegativeInteger(afterSequence, "afterSequence");
@@ -967,5 +1084,21 @@ export const reload = query({
       hasMore,
       nextAfterSequence: hasMore ? lastReturnedSequence : null,
     };
+}
+
+export const reload = query({
+  args: reloadArgs,
+  handler: async (ctx, args) => {
+    const ownerId = await requireOwnerId(ctx);
+    return await reloadForOwner(ctx, args, ownerId);
+  },
+});
+
+/** Trusted server read for an owner session verified outside Convex auth. */
+export const reloadForOwnerSession = internalQuery({
+  args: { ownerId: v.string(), ...reloadArgs },
+  handler: async (ctx, args) => {
+    const { ownerId, ...reloadInput } = args;
+    return await reloadForOwner(ctx, reloadInput, ownerId);
   },
 });

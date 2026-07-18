@@ -136,6 +136,11 @@ type ReloadResult = Readonly<{
 const createReference = makeFunctionReference<"mutation", CreateArgs, Receipt>(
   "trialEvents:createTrial",
 );
+const createForOwnerReference = makeFunctionReference<
+  "mutation",
+  CreateArgs & Readonly<{ ownerId: string }>,
+  Receipt
+>("trialEvents:createForOwner");
 const appendReference = makeFunctionReference<
   "mutation",
   Readonly<{ actionJson: string }>,
@@ -146,11 +151,35 @@ const appendTrustedReference = makeFunctionReference<
   Readonly<{ actionJson: string; writeSnapshot?: boolean }>,
   Receipt
 >("trialEvents:appendTrusted");
+const appendPlayerForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{ ownerId: string; actionJson: string }>,
+  Receipt
+>("trialEvents:appendPlayerForOwner");
+const appendTrustedForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    actionJson: string;
+    writeSnapshot?: boolean;
+  }>,
+  Receipt
+>("trialEvents:appendTrustedForOwner");
 const reloadReference = makeFunctionReference<
   "query",
   Readonly<{ trialId: string; afterSequence?: number; limit?: number }>,
   ReloadResult
 >("trialEvents:reload");
+const reloadForOwnerReference = makeFunctionReference<
+  "query",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    afterSequence?: number;
+    limit?: number;
+  }>,
+  ReloadResult
+>("trialEvents:reloadForOwnerSession");
 
 async function insertGraph(
   backend: TestBackend,
@@ -362,6 +391,73 @@ describe("owner-bound trial event persistence", () => {
       graphId: GRAPH_ID,
       stateVersion: 2,
       lastSequence: 2,
+    });
+  });
+
+  it("retains owner and player/trusted guards through the server facade", async () => {
+    const { backend } = await setup();
+    const trialId = "trial:server-owner-facade";
+    const created = await backend.mutation(createForOwnerReference, {
+      ownerId: OWNER_ID,
+      ...createArgs(trialId),
+    });
+    expect(created).toMatchObject({
+      trialId,
+      committedStateVersion: 1,
+      replayed: false,
+    });
+
+    await expect(
+      backend.query(reloadForOwnerReference, {
+        ownerId: OTHER_OWNER_ID,
+        trialId,
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.mutation(appendPlayerForOwnerReference, {
+        ownerId: OTHER_OWNER_ID,
+        actionJson: JSON.stringify(
+          settlementAction(trialId, "action:server-other-owner", 1),
+        ),
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.mutation(appendTrustedForOwnerReference, {
+        ownerId: OTHER_OWNER_ID,
+        actionJson: JSON.stringify(forgedJudgeAction(trialId)),
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.mutation(appendPlayerForOwnerReference, {
+        ownerId: OWNER_ID,
+        actionJson: JSON.stringify(forgedJudgeAction(trialId)),
+      }),
+    ).rejects.toThrow("PLAYER_ACTION_NOT_PERMITTED");
+
+    const player = await backend.mutation(appendPlayerForOwnerReference, {
+      ownerId: OWNER_ID,
+      actionJson: JSON.stringify(
+        settlementAction(trialId, "action:server-owner-player", 1),
+      ),
+    });
+    expect(player).toMatchObject({ committedStateVersion: 2 });
+    const trusted = await backend.mutation(appendTrustedForOwnerReference, {
+      ownerId: OWNER_ID,
+      actionJson: JSON.stringify({
+        ...forgedJudgeAction(trialId),
+        expectedStateVersion: 2,
+        causationId: player.eventIds[0],
+      }),
+    });
+    expect(trusted).toMatchObject({ committedStateVersion: 3 });
+
+    await expect(
+      backend.query(reloadForOwnerReference, { ownerId: OWNER_ID, trialId }),
+    ).resolves.toMatchObject({
+      trialId,
+      stateVersion: 3,
+      lastSequence: 3,
+      validated: true,
     });
   });
 
