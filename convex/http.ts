@@ -1,4 +1,5 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
+import type { z } from "zod";
 
 import {
   CasePublishResponseSchema,
@@ -30,6 +31,18 @@ import {
   verifyRegisterCaseDraftIntegrity,
 } from "./caseServiceBoundary";
 import {
+  AcquireCaseCompileClaimRequestSchema,
+  AcquireCaseCompileClaimResponseSchema,
+  HeartbeatCaseCompileClaimRequestSchema,
+  HeartbeatCaseCompileClaimResponseSchema,
+  ReleaseCaseCompileClaimRequestSchema,
+  ReleaseCaseCompileClaimResponseSchema,
+  type AcquireCaseCompileClaimRequest,
+  type AcquireCaseCompileClaimResponse,
+  type HeartbeatCaseCompileClaimRequest,
+  type ReleaseCaseCompileClaimRequest,
+} from "./caseCompileClaims";
+import {
   CaseUploadCleanupRequestSchema,
   CaseUploadCleanupResponseSchema,
 } from "./caseUploadCleanup";
@@ -45,6 +58,9 @@ type RegisterDraftMutationArgs = {
   mimeType: string;
   sizeBytes: number;
   contentDigest: string;
+  claimId: string;
+  generation: number;
+  leaseToken: string;
   extractionAdapterId: string;
   extractionCharacterCount: number;
   injectionFlags: Array<{
@@ -108,6 +124,13 @@ type CaseUploadCleanupMutationResult = {
   deleted: boolean;
 };
 
+type HeartbeatCaseCompileClaimResponse = z.infer<
+  typeof HeartbeatCaseCompileClaimResponseSchema
+>;
+type ReleaseCaseCompileClaimResponse = z.infer<
+  typeof ReleaseCaseCompileClaimResponseSchema
+>;
+
 const generateUploadUrlReference = makeFunctionReference<
   "mutation",
   Record<string, never>,
@@ -128,6 +151,21 @@ const consumeCaseCompilePermitReference = makeFunctionReference<
   CaseCompilePermitMutationArgs,
   CaseCompilePermitMutationResult
 >("caseCompileQuota:consumePermit");
+const acquireCaseCompileClaimReference = makeFunctionReference<
+  "mutation",
+  AcquireCaseCompileClaimRequest,
+  AcquireCaseCompileClaimResponse
+>("caseCompileClaims:acquire");
+const heartbeatCaseCompileClaimReference = makeFunctionReference<
+  "mutation",
+  HeartbeatCaseCompileClaimRequest,
+  HeartbeatCaseCompileClaimResponse
+>("caseCompileClaims:heartbeat");
+const releaseCaseCompileClaimReference = makeFunctionReference<
+  "mutation",
+  ReleaseCaseCompileClaimRequest,
+  ReleaseCaseCompileClaimResponse
+>("caseCompileClaims:release");
 const lookupCaseCompileReplayReference = makeFunctionReference<
   "query",
   CaseCompileReplayQueryArgs,
@@ -150,6 +188,39 @@ const consumeCaseCompilePermit = httpAction(async (ctx, request) => {
     const body = await parseCaseServiceJson(request, CaseCompilePermitRequestSchema);
     const result = await ctx.runMutation(consumeCaseCompilePermitReference, body);
     return caseServiceJson(CaseCompilePermitResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const acquireCaseCompileClaim = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, AcquireCaseCompileClaimRequestSchema);
+    const result = await ctx.runMutation(acquireCaseCompileClaimReference, body);
+    return caseServiceJson(AcquireCaseCompileClaimResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const heartbeatCaseCompileClaim = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, HeartbeatCaseCompileClaimRequestSchema);
+    const result = await ctx.runMutation(heartbeatCaseCompileClaimReference, body);
+    return caseServiceJson(HeartbeatCaseCompileClaimResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const releaseCaseCompileClaim = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, ReleaseCaseCompileClaimRequestSchema);
+    const result = await ctx.runMutation(releaseCaseCompileClaimReference, body);
+    return caseServiceJson(ReleaseCaseCompileClaimResponseSchema.parse(result));
   } catch (error) {
     return caseServiceErrorResponse(error);
   }
@@ -204,6 +275,9 @@ const registerDraft = httpAction(async (ctx, request) => {
       mimeType: body.mimeType,
       sizeBytes: body.sizeBytes,
       contentDigest: body.contentDigest,
+      claimId: body.claimId,
+      generation: body.generation,
+      leaseToken: body.leaseToken,
       extractionAdapterId: body.extractionAdapterId,
       extractionCharacterCount: body.extractionCharacterCount,
       injectionFlags: body.injectionFlags,
@@ -270,6 +344,9 @@ const listOwnedCases = httpAction(async (ctx, request) => {
 const http = httpRouter();
 
 http.route({ path: "/service/case-compile-permit", method: "POST", handler: consumeCaseCompilePermit });
+http.route({ path: "/service/case-compile-claim/acquire", method: "POST", handler: acquireCaseCompileClaim });
+http.route({ path: "/service/case-compile-claim/heartbeat", method: "POST", handler: heartbeatCaseCompileClaim });
+http.route({ path: "/service/case-compile-claim/release", method: "POST", handler: releaseCaseCompileClaim });
 http.route({ path: "/service/case-draft/lookup", method: "POST", handler: lookupCaseCompileReplay });
 http.route({ path: "/service/case-upload/cleanup", method: "POST", handler: cleanupCaseUpload });
 http.route({ path: "/service/case-upload-url", method: "POST", handler: generateUploadUrl });

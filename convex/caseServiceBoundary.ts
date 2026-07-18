@@ -31,6 +31,8 @@ import {
 const MAX_SERVICE_SECRET_CHARACTERS = 512;
 export const MAX_SERVICE_REQUEST_BYTES = 8 * 1024 * 1024;
 const OWNER_ID_PATTERN = /^owner:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const CASE_COMPILE_CLAIM_ID_PATTERN = /^claim:[a-f0-9]{64}$/u;
+const CASE_COMPILE_LEASE_TOKEN_PATTERN = /^[a-f0-9]{64}$/u;
 
 export const CASE_COMPILATION_AUDIT_SCHEMA_VERSION = "case-compilation-audit.v1" as const;
 export const CASE_PUBLICATION_AUDIT_SCHEMA_VERSION = "case-publication-audit.v1" as const;
@@ -43,6 +45,14 @@ export const CaseServiceOwnerIdSchema = z
 
 export const CaseServiceUploadUrlRequestSchema = z.object({}).strict();
 
+const CaseCompileClaimIdSchema = z.string().regex(CASE_COMPILE_CLAIM_ID_PATTERN);
+const CaseCompileLeaseTokenSchema = z.string().regex(CASE_COMPILE_LEASE_TOKEN_PATTERN);
+const CaseCompileClaimGenerationSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER);
+
 export const RegisterCaseDraftRequestSchema = z
   .object({
     ownerId: CaseServiceOwnerIdSchema,
@@ -53,6 +63,9 @@ export const RegisterCaseDraftRequestSchema = z
     mimeType: CaseUploadMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(20 * 1024 * 1024),
     contentDigest: Sha256DigestSchema,
+    claimId: CaseCompileClaimIdSchema,
+    generation: CaseCompileClaimGenerationSchema,
+    leaseToken: CaseCompileLeaseTokenSchema,
     extractionAdapterId: CaseIngestionEntityIdSchema,
     extractionCharacterCount: z.number().int().positive().max(MAX_EXTRACTED_CHARACTERS),
     injectionFlags: z.array(PromptInjectionFlagSchema).max(MAX_PROMPT_INJECTION_FLAGS),
@@ -801,6 +814,12 @@ export function caseServiceErrorResponse(error: unknown): Response {
     return caseServiceJson({ error: error.code }, error.status);
   }
   const message = error instanceof Error ? error.message : "";
+  if (
+    message.includes("CASE_COMPILE_CLAIM_CONFLICT") ||
+    message.includes("CASE_COMPILE_CLAIM_FENCE")
+  ) {
+    return caseServiceJson({ error: "CASE_COMPILE_CLAIM_REJECTED" }, 409);
+  }
   for (const [code, status] of INTERNAL_ERROR_STATUS) {
     if (message.includes(code)) return caseServiceJson({ error: code }, status);
   }

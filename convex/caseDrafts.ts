@@ -17,6 +17,11 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import {
+  CompleteCaseCompileClaimRequestSchema,
+  completeCaseCompileClaimInMutation,
+  type CompleteCaseCompileClaimRequest,
+} from "./caseCompileClaims";
+import {
   CASE_COMPILATION_AUDIT_SCHEMA_VERSION,
   CaseCompilationAuditSchema,
   CaseServiceOwnerIdSchema,
@@ -51,6 +56,23 @@ function parseJson<T>(schema: z.ZodType<T>, value: string, code: string): T {
   } catch {
     throw new Error(code);
   }
+}
+
+export function buildCaseCompileClaimCompletionRequest(
+  request: Pick<
+    RegisterCaseDraftRequest,
+    "ownerId" | "uploadId" | "caseId" | "contentDigest" | "claimId" | "generation" | "leaseToken"
+  >,
+): CompleteCaseCompileClaimRequest {
+  return CompleteCaseCompileClaimRequestSchema.parse({
+    ownerId: request.ownerId,
+    uploadId: request.uploadId,
+    caseId: request.caseId,
+    contentDigest: request.contentDigest,
+    claimId: request.claimId,
+    generation: request.generation,
+    leaseToken: request.leaseToken,
+  });
 }
 
 function serializeUploadMetadata(metadata: CaseUploadVersionMetadata): string {
@@ -232,6 +254,9 @@ export const registerCompiledDraft = internalMutation({
     mimeType: v.string(),
     sizeBytes: v.number(),
     contentDigest: v.string(),
+    claimId: v.string(),
+    generation: v.number(),
+    leaseToken: v.string(),
     extractionAdapterId: v.string(),
     extractionCharacterCount: v.number(),
     injectionFlags: v.array(promptInjectionFlag),
@@ -250,6 +275,9 @@ export const registerCompiledDraft = internalMutation({
       mimeType: args.mimeType,
       sizeBytes: args.sizeBytes,
       contentDigest: args.contentDigest,
+      claimId: args.claimId,
+      generation: args.generation,
+      leaseToken: args.leaseToken,
       extractionAdapterId: args.extractionAdapterId,
       extractionCharacterCount: args.extractionCharacterCount,
       injectionFlags: args.injectionFlags,
@@ -284,6 +312,10 @@ export const registerCompiledDraft = internalMutation({
       graphJson,
       compilerMetadataJson,
     )) {
+      await completeCaseCompileClaimInMutation(
+        ctx,
+        buildCaseCompileClaimCompletionRequest(request),
+      );
       return {
         uploadId: request.uploadId,
         caseId: request.caseId,
@@ -378,6 +410,10 @@ export const registerCompiledDraft = internalMutation({
       createdBy: "user",
       createdAt,
     });
+    await completeCaseCompileClaimInMutation(
+      ctx,
+      buildCaseCompileClaimCompletionRequest(request),
+    );
     return {
       uploadId: request.uploadId,
       caseId: request.caseId,

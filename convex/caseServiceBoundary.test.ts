@@ -26,12 +26,22 @@ import {
   verifyRegisterCaseDraftIntegrity,
   type RegisterCaseDraftRequest,
 } from "./caseServiceBoundary";
+import {
+  AcquireCaseCompileClaimRequestSchema,
+  AcquireCaseCompileClaimResponseSchema,
+  HeartbeatCaseCompileClaimRequestSchema,
+  HeartbeatCaseCompileClaimResponseSchema,
+  ReleaseCaseCompileClaimRequestSchema,
+  ReleaseCaseCompileClaimResponseSchema,
+} from "./caseCompileClaims";
 
 const SERVICE_SECRET = "suits-test-service-secret-with-more-than-thirty-two-characters";
 const OWNER_ID = "owner:123e4567-e89b-42d3-a456-426614174000";
 const UPLOAD_ID = "upload:123e4567-e89b-42d3-a456-426614174001";
 const CASE_ID = "case:123e4567-e89b-42d3-a456-426614174002";
 const CONTENT_DIGEST = "a".repeat(64);
+const CLAIM_ID = `claim:${"b".repeat(64)}`;
+const LEASE_TOKEN = "c".repeat(64);
 const COMPILED_AT = "2026-07-18T12:00:00.000Z";
 const REQUEST_ID = "fake-compiler-request-1";
 
@@ -91,6 +101,9 @@ async function validRegistration(): Promise<RegisterCaseDraftRequest> {
     mimeType: "text/plain",
     sizeBytes: 512,
     contentDigest: CONTENT_DIGEST,
+    claimId: CLAIM_ID,
+    generation: 1,
+    leaseToken: LEASE_TOKEN,
     extractionAdapterId: "plain-text.v1",
     extractionCharacterCount: sourceSegments.reduce((total, segment) => total + segment.excerpt.length, 0),
     injectionFlags: [],
@@ -161,8 +174,76 @@ describe("Convex case service boundary", () => {
   it("strictly validates the server-derived owner and excludes credentials from draft bodies", async () => {
     const registration = await validRegistration();
     expect(RegisterCaseDraftRequestSchema.parse(registration).ownerId).toBe(OWNER_ID);
+    expect(RegisterCaseDraftRequestSchema.parse(registration)).toMatchObject({
+      claimId: CLAIM_ID,
+      generation: 1,
+      leaseToken: LEASE_TOKEN,
+    });
+    expect(RegisterCaseDraftRequestSchema.safeParse({
+      ...registration,
+      claimId: undefined,
+    }).success).toBe(false);
     expect(RegisterCaseDraftRequestSchema.safeParse({ ...registration, serviceSecret: SERVICE_SECRET }).success).toBe(false);
     expect(RegisterCaseDraftRequestSchema.safeParse({ ...registration, ownerId: "owner:browser-choice" }).success).toBe(false);
+  });
+
+  it("strictly validates acquire, heartbeat, and release claim service messages", () => {
+    const identity = {
+      ownerId: OWNER_ID,
+      uploadId: UPLOAD_ID,
+      caseId: CASE_ID,
+      contentDigest: CONTENT_DIGEST,
+    };
+    const acquire = { ...identity, clientKeyHash: "d".repeat(64), leaseToken: LEASE_TOKEN };
+    const fence = { ...identity, claimId: CLAIM_ID, generation: 2, leaseToken: LEASE_TOKEN };
+
+    expect(AcquireCaseCompileClaimRequestSchema.parse(acquire)).toEqual(acquire);
+    expect(HeartbeatCaseCompileClaimRequestSchema.parse(fence)).toEqual(fence);
+    expect(ReleaseCaseCompileClaimRequestSchema.parse({
+      ...fence,
+      disposition: "retryable_failed",
+      failureCode: "OPENAI_TIMEOUT",
+    })).toMatchObject({ disposition: "retryable_failed", failureCode: "OPENAI_TIMEOUT" });
+    expect(() => AcquireCaseCompileClaimRequestSchema.parse({ ...acquire, rawIp: "203.0.113.2" })).toThrow();
+    expect(() => HeartbeatCaseCompileClaimRequestSchema.parse({ ...fence, generation: -1 })).toThrow();
+    expect(() => ReleaseCaseCompileClaimRequestSchema.parse({
+      ...fence,
+      disposition: "retryable_failed",
+      failureCode: "contains sensitive details",
+    })).toThrow();
+
+    expect(AcquireCaseCompileClaimResponseSchema.parse({
+      outcome: "acquired",
+      acquisition: "new",
+      claimId: CLAIM_ID,
+      generation: 1,
+      leaseToken: LEASE_TOKEN,
+      leaseExpiresAt: 120_000,
+      heartbeatIntervalMs: 15_000,
+    }).outcome).toBe("acquired");
+    expect(HeartbeatCaseCompileClaimResponseSchema.parse({
+      claimId: CLAIM_ID,
+      generation: 1,
+      leaseExpiresAt: 120_000,
+      heartbeatIntervalMs: 15_000,
+    }).generation).toBe(1);
+    expect(ReleaseCaseCompileClaimResponseSchema.parse({
+      claimId: CLAIM_ID,
+      generation: 1,
+      status: "terminal_failed",
+      replayed: false,
+    }).status).toBe("terminal_failed");
+    expect(() => AcquireCaseCompileClaimResponseSchema.parse({
+      outcome: "busy",
+      claimId: CLAIM_ID,
+      retryAfterSeconds: 61,
+    })).toThrow();
+    expect(() => HeartbeatCaseCompileClaimResponseSchema.parse({
+      claimId: CLAIM_ID,
+      generation: 1,
+      leaseExpiresAt: 120_000,
+      heartbeatIntervalMs: 10_000,
+    })).toThrow();
   });
 
   it("recomputes source IDs, excerpt hashes, and the compiler source hash", async () => {
@@ -350,6 +431,13 @@ describe("Convex case service boundary", () => {
     const error = caseServiceErrorResponse(new Error("database details: owner:secret"));
     expect(error.status).toBe(500);
     expect(await error.json()).toEqual({ error: "CASE_SERVICE_INTERNAL_ERROR" });
+    for (const code of ["CASE_COMPILE_CLAIM_CONFLICT", "CASE_COMPILE_CLAIM_FENCE"]) {
+      const claimError = caseServiceErrorResponse(
+        new Error(`${code}: owner=${OWNER_ID} claim=${CLAIM_ID} token=${LEASE_TOKEN}`),
+      );
+      expect(claimError.status).toBe(409);
+      expect(await claimError.json()).toEqual({ error: "CASE_COMPILE_CLAIM_REJECTED" });
+    }
     expect(caseServiceErrorResponse(new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400)).status).toBe(400);
   });
 });

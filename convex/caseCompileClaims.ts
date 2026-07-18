@@ -794,19 +794,6 @@ export const release = internalMutation({
   },
 });
 
-export const complete = internalMutation({
-  args: {
-    ownerId: v.string(),
-    uploadId: v.string(),
-    caseId: v.string(),
-    contentDigest: v.string(),
-    claimId: v.string(),
-    generation: v.number(),
-    leaseToken: v.string(),
-  },
-  handler: async (ctx, args) => completeCaseCompileClaimInMutation(ctx, args),
-});
-
 /**
  * Completes a claim inside the same Convex transaction that registered the
  * durable draft. Case registration should call this helper before returning;
