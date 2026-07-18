@@ -32,6 +32,7 @@ export function buildCaseCompilationReviewReport(
   injectionFlags: readonly PromptInjectionFlag[],
 ): CaseCompilationReviewReport {
   const grounding = compilation.validationReport.grounding;
+  const factualGrounding = grounding.filter((record) => record.grounding !== "authoring");
   return {
     schemaVersion: compilation.validationReport.schemaVersion,
     warnings: [
@@ -54,9 +55,9 @@ export function buildCaseCompilationReviewReport(
       sourceSegmentIds: [...uncertainty.sourceSegmentIds],
     })),
     provenance: {
-      factualFields: grounding.length,
-      sourceLinked: grounding.filter((record) => record.grounding === "source").length,
-      explicitlyInferred: grounding.filter((record) => record.grounding === "inferred").length,
+      factualFields: factualGrounding.length,
+      sourceLinked: factualGrounding.filter((record) => record.grounding === "source").length,
+      explicitlyInferred: factualGrounding.filter((record) => record.grounding === "inferred").length,
     },
     injectionSignals: [...new Set(injectionFlags.map((flag) => flag.patternId))].sort(),
   };

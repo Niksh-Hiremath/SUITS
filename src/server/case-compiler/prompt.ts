@@ -45,7 +45,11 @@ AUTHORITY AND SECURITY BOUNDARY
 
 GROUNDING RULES
 - Cite only supplied source segment IDs. Do not return sourceSegments, excerpts, locators, MIME types, or source hashes; the server attaches the exact trusted source records after validation.
-- Every factual party, issue, timeline event, fact, evidence item, witness statement, witness profile, or contradiction must cite one or more supplied source segment IDs.
+- In review.fieldGrounding, return exactly one compact group for each provenance-owning jurisdiction, party, issue, timeline event, fact, evidence item, witness, prior statement, contradiction, settlement configuration, and jury instruction, plus separate direct groups for title and summary. The server deterministically expands each accepted owner into its scalar field paths.
+- Each ownerPath must identify that exact CaseGraph record. A record-scoped group may cite only provenance owned by that schema record. Prior statements use their own provenance instead of inheriting witness provenance.
+- Record provenance covers recursively contained values only inside its owning schema record. It never flows to a sibling record or to root title/summary. Root title/summary use direct scope with no provenance IDs.
+- Source-grounded fields must cite one or more supplied source segment IDs. Inferred fields must have confidence below 1; inferred fact, evidence, and witness fields also require a linked compiler uncertainty.
+- Simulation-only jurisdiction, settlement, and jury-instruction values may use authoring grounding only when their owning provenance is explicitly authoring; authoring fields cannot claim packet sources.
 - If a claim is a necessary inference rather than directly supported, mark its provenance kind as inferred, keep confidence below 1, and expose it for review as an uncertainty.
 - Authoring provenance is only for simulation configuration such as fictional rules, settlement parameters, and jury instructions; it cannot support a packet-derived factual claim.
 - Treat allegations as allegations. Never convert a generated assertion into admitted or verified truth.

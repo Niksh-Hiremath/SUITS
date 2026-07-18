@@ -47,7 +47,9 @@ describe.skipIf(!LIVE_ENABLED)("live GPT-5.6 Terra CaseCompiler", () => {
     expect(result.validationReport.grounding.length).toBeGreaterThan(0);
     expect(
       result.validationReport.grounding.every((record) =>
-        record.grounding === "source" || record.grounding === "inferred"),
+        record.grounding === "source" ||
+        record.grounding === "inferred" ||
+        record.grounding === "authoring"),
     ).toBe(true);
     expect(streamEvents).toContain("response_started");
     expect(streamEvents).toContain("structured_delta");

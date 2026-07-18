@@ -3,8 +3,9 @@ import { z } from "zod";
 import { CaseCompileResponseSchema, type CaseCompileResponse } from "../../domain/case-api";
 import { CaseGraphV1Schema } from "../../domain/case-graph";
 import {
-  CaseCompilerValidationReportSchema,
+  CaseCompilerPersistedValidationReportSchema,
   MAX_CASE_COMPILER_SOURCE_SEGMENTS,
+  normalizePersistedCaseCompilerValidationReport,
 } from "../case-compiler";
 import {
   MAX_CASE_UPLOAD_SIZE_BYTES,
@@ -20,7 +21,7 @@ export const CaseCompileReplayResponseSchema = z.discriminatedUnion("found", [
     .object({
       found: z.literal(true),
       caseGraph: CaseGraphV1Schema,
-      validationReport: CaseCompilerValidationReportSchema,
+      validationReport: CaseCompilerPersistedValidationReportSchema,
       injectionFlags: z.array(PromptInjectionFlagSchema).max(MAX_PROMPT_INJECTION_FLAGS),
       upload: z
         .object({
@@ -42,19 +43,26 @@ export function buildCaseCompileReplayResponse(
   replay: CaseCompileReplayHit,
   expected: Readonly<{ uploadId: string; caseId?: string }>,
 ): CaseCompileResponse {
+  const validationReport = normalizePersistedCaseCompilerValidationReport(
+    replay.validationReport,
+    replay.caseGraph,
+  );
   if (
     replay.upload.uploadId !== expected.uploadId ||
     (expected.caseId !== undefined && replay.caseGraph.caseId !== expected.caseId) ||
     !/^case:[a-f0-9]{48}$/u.test(replay.caseGraph.caseId) ||
-    replay.caseGraph.status !== "draft" ||
+    (replay.caseGraph.status !== "draft" && replay.caseGraph.status !== "published") ||
     replay.caseGraph.sourceSegments.length !== replay.upload.sourceSegmentCount ||
-    replay.validationReport.status === "rejected"
+    validationReport.status === "rejected"
   ) {
     throw new ConvexCaseServiceError("CASE_COMPILE_REPLAY_MISMATCH", 502);
   }
   return CaseCompileResponseSchema.parse({
     caseGraph: replay.caseGraph,
-    report: buildCaseCompilationReviewReport(replay, replay.injectionFlags),
+    report: buildCaseCompilationReviewReport(
+      { caseGraph: replay.caseGraph, validationReport },
+      replay.injectionFlags,
+    ),
     upload: replay.upload,
   });
 }

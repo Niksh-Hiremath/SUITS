@@ -62,12 +62,72 @@ export const CaseCompilerModelCheckSchema = z
   })
   .strict();
 
+/**
+ * One path-bound audit record for a scalar CaseGraph value. `record` scope is
+ * permitted only when the value belongs to a schema record that owns the
+ * listed provenance records. Root fields without a provenance owner use
+ * `direct` scope and cite source segments (or declare an inference) directly.
+ *
+ * `value` is captured server-side from the canonical candidate during owner
+ * expansion. The model supplies compact owner groups, never duplicate field
+ * values that could drift from the graph being validated.
+ */
+export const CaseCompilerGroundingRecordSchema = z
+  .object({
+    entityId: CaseGraphEntityIdSchema.nullable(),
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .regex(
+        /^caseGraph(?:\.(?:[A-Za-z][A-Za-z0-9]*|\d+))+$/u,
+        "Expected a canonical caseGraph field path",
+      ),
+    value: z.string().max(8_000),
+    provenanceScope: z.enum(["direct", "record"]),
+    provenanceIds: z.array(CaseGraphEntityIdSchema).max(50),
+    grounding: z.enum(["source", "inferred", "authoring"]),
+    sourceSegmentIds: z.array(CaseGraphEntityIdSchema).max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
+    confidence: z.number().min(0).max(1),
+  })
+  .strict();
+
+/** Compact model-facing grouping. Shared citation metadata is emitted once
+ * per provenance owner while the server expands the owner into the precise
+ * per-path validation report above. */
+export const CaseCompilerGroundingGroupSchema = z
+  .object({
+    ownerPath: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .regex(
+        /^caseGraph(?:\.(?:[A-Za-z][A-Za-z0-9]*|\d+))+$/u,
+        "Expected a canonical caseGraph provenance-owner path",
+      ),
+    entityId: CaseGraphEntityIdSchema.nullable(),
+    provenanceScope: z.enum(["direct", "record"]),
+    provenanceIds: z.array(CaseGraphEntityIdSchema).max(50),
+    grounding: z.enum(["source", "inferred", "authoring"]),
+    sourceSegmentIds: z.array(CaseGraphEntityIdSchema).max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
+    confidence: z.number().min(0).max(1),
+  })
+  .strict();
+
+const CaseCompilerGroundingGroupListSchema = z
+  .array(CaseCompilerGroundingGroupSchema)
+  .min(1)
+  .max(500);
+
 export const CaseCompilerModelReviewSchema = z
   .object({
     overallStatus: z.enum(["ready_for_review", "needs_review"]),
     summary: z.string().trim().min(1).max(2_000),
     checks: z.array(CaseCompilerModelCheckSchema).min(1).max(50),
     uncertaintyIds: z.array(CaseGraphEntityIdSchema).max(100),
+    fieldGrounding: CaseCompilerGroundingGroupListSchema,
   })
   .strict();
 
@@ -94,16 +154,6 @@ export const CaseCompilerValidationIssueSchema = z
   })
   .strict();
 
-export const CaseCompilerGroundingRecordSchema = z
-  .object({
-    entityId: CaseGraphEntityIdSchema,
-    path: z.string().trim().min(1).max(500),
-    grounding: z.enum(["source", "inferred"]),
-    sourceSegmentIds: z.array(CaseGraphEntityIdSchema).max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
-    confidence: z.number().min(0).max(1),
-  })
-  .strict();
-
 export const CaseCompilerDeterministicCheckSchema = z
   .object({
     code: CaseGraphEntityIdSchema,
@@ -123,6 +173,36 @@ export const CaseCompilerValidationReportSchema = z
     modelReview: CaseCompilerModelReviewSchema.nullable(),
   })
   .strict();
+
+/** Persisted Milestone 2 reports created before field-level grounding. Keep
+ * this schema read-only so owner-bound v2 drafts/publications remain resumable;
+ * all new compilation writes use the v3 schema above. */
+export const CaseCompilerValidationReportV2Schema = z
+  .object({
+    schemaVersion: z.literal("case-compiler.validation.v2"),
+    status: z.enum(["ready_for_review", "needs_review", "rejected"]),
+    checks: z.array(CaseCompilerDeterministicCheckSchema).min(1).max(50),
+    issues: z.array(CaseCompilerValidationIssueSchema).max(MAX_CASE_COMPILER_VALIDATION_ISSUES),
+    grounding: z.array(
+      z
+        .object({
+          entityId: CaseGraphEntityIdSchema,
+          path: z.string().trim().min(1).max(500),
+          grounding: z.enum(["source", "inferred"]),
+          sourceSegmentIds: z.array(CaseGraphEntityIdSchema).max(MAX_CASE_COMPILER_SOURCE_SEGMENTS),
+          confidence: z.number().min(0).max(1),
+        })
+        .strict(),
+    ).max(2_000),
+    uncertainties: z.array(CompilerUncertaintySchema).max(500),
+    modelReview: CaseCompilerModelReviewSchema.omit({ fieldGrounding: true }).nullable(),
+  })
+  .strict();
+
+export const CaseCompilerPersistedValidationReportSchema = z.union([
+  CaseCompilerValidationReportSchema,
+  CaseCompilerValidationReportV2Schema,
+]);
 
 export const CaseCompilerTokenUsageSchema = z
   .object({
@@ -169,6 +249,15 @@ export const CaseCompilerObservabilitySchema = z
   })
   .strict();
 
+export const CaseCompilerObservabilityV2Schema = CaseCompilerObservabilitySchema.extend({
+  outputSchemaVersion: z.literal("case-compiler.output.v2"),
+}).strict();
+
+export const CaseCompilerPersistedObservabilitySchema = z.union([
+  CaseCompilerObservabilitySchema,
+  CaseCompilerObservabilityV2Schema,
+]);
+
 export const CaseCompilationResultSchema = z
   .object({
     caseGraph: CaseGraphV1Schema,
@@ -182,8 +271,16 @@ export type CaseCompilerModelOutput = z.infer<typeof CaseCompilerModelOutputSche
 export type CaseCompilerModelReview = z.infer<typeof CaseCompilerModelReviewSchema>;
 export type CaseCompilerValidationIssue = z.infer<typeof CaseCompilerValidationIssueSchema>;
 export type CaseCompilerGroundingRecord = z.infer<typeof CaseCompilerGroundingRecordSchema>;
+export type CaseCompilerGroundingGroup = z.infer<typeof CaseCompilerGroundingGroupSchema>;
 export type CaseCompilerValidationReport = z.infer<typeof CaseCompilerValidationReportSchema>;
+export type CaseCompilerValidationReportV2 = z.infer<typeof CaseCompilerValidationReportV2Schema>;
+export type CaseCompilerPersistedValidationReport = z.infer<
+  typeof CaseCompilerPersistedValidationReportSchema
+>;
 export type CaseCompilerTokenUsage = z.infer<typeof CaseCompilerTokenUsageSchema>;
 export type CaseCompilerAttemptTrace = z.infer<typeof CaseCompilerAttemptTraceSchema>;
 export type CaseCompilerObservability = z.infer<typeof CaseCompilerObservabilitySchema>;
+export type CaseCompilerPersistedObservability = z.infer<
+  typeof CaseCompilerPersistedObservabilitySchema
+>;
 export type CaseCompilationResult = z.infer<typeof CaseCompilationResultSchema>;

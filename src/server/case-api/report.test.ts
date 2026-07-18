@@ -9,6 +9,7 @@ import {
   CASE_COMPILER_VALIDATION_SCHEMA_VERSION,
   CaseCompilerModelOutputSchema,
   DeterministicCaseCompilerProvider,
+  buildCaseCompilerFieldGroundingDraft,
   compileCasePacket,
   computeSourceContentHash,
 } from "../case-compiler";
@@ -50,6 +51,7 @@ describe("case compilation review report", () => {
           },
         ],
         uncertaintyIds: fixture.compilerMetadata.uncertainties.map((item) => item.uncertaintyId),
+        fieldGrounding: buildCaseCompilerFieldGroundingDraft(fixture),
       },
     });
     const compilation = await compileCasePacket({
@@ -79,6 +81,12 @@ describe("case compilation review report", () => {
     expect(report.provenance.factualFields).toBeGreaterThan(0);
     expect(report.provenance.sourceLinked + report.provenance.explicitlyInferred).toBe(
       report.provenance.factualFields,
+    );
+    expect(compilation.validationReport.grounding.some(
+      (record) => record.grounding === "authoring",
+    )).toBe(true);
+    expect(report.provenance.factualFields).toBeLessThan(
+      compilation.validationReport.grounding.length,
     );
     expect(report.injectionSignals).toEqual(["instruction_override"]);
     expect(report.warnings.map((warning) => warning.code)).toContain("uncertainty_review");

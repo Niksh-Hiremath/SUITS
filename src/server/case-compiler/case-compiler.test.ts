@@ -27,7 +27,10 @@ import {
   type CaseCompilerInput,
   type CaseCompilerModelOutput,
 } from "./schemas";
-import { validateCaseCompilerCandidate } from "./validation";
+import {
+  buildCaseCompilerFieldGroundingDraft,
+  validateCaseCompilerCandidate,
+} from "./validation";
 
 const COMPILED_AT = "2026-07-18T13:00:00.000Z";
 
@@ -79,8 +82,20 @@ function createModelOutput(input: CaseCompilerInput): CaseCompilerModelOutput {
         },
       ],
       uncertaintyIds: graph.compilerMetadata.uncertainties.map((item) => item.uncertaintyId),
+      fieldGrounding: buildCaseCompilerFieldGroundingDraft(graph),
     },
   });
+}
+
+function refreshFieldGrounding(
+  output: CaseCompilerModelOutput,
+  input: CaseCompilerInput,
+): void {
+  const graph: CaseGraphV1 = {
+    ...output.caseGraph,
+    sourceSegments: cloneSegments(input.sourceSegments),
+  };
+  output.review.fieldGrounding = buildCaseCompilerFieldGroundingDraft(graph);
 }
 
 function validationContext(input: CaseCompilerInput) {
@@ -279,9 +294,140 @@ describe("deterministic factual grounding", () => {
     expect(result.caseGraph.sourceSegments).toEqual(input.sourceSegments);
     expect(result.validationReport.issues).toEqual([]);
     expect(result.validationReport.grounding.length).toBeGreaterThan(0);
-    expect(result.validationReport.grounding.every((record) => record.grounding === "source")).toBe(true);
+    expect(result.validationReport.grounding).toContainEqual(
+      expect.objectContaining({
+        path: "caseGraph.title",
+        provenanceScope: "direct",
+        grounding: "inferred",
+      }),
+    );
+    expect(result.validationReport.grounding).toContainEqual(
+      expect.objectContaining({
+        path: "caseGraph.parties.0.description",
+        entityId: output.caseGraph.parties[0].partyId,
+        provenanceScope: "record",
+        grounding: "source",
+      }),
+    );
     expect(result.observability.acceptedSourceCitationCount).toBeGreaterThan(0);
     expect(result.observability.estimatedCostUsd).toBeNull();
+  });
+
+  it("audits root and material nested scalar fields at exact CaseGraph paths", () => {
+    const input = createInput();
+    const output = createModelOutput(input);
+
+    const result = validateCaseCompilerCandidate(output, validationContext(input));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const paths = result.validationReport.grounding.map((record) => record.path);
+      expect(new Set(paths).size).toBe(paths.length);
+      expect(paths).toEqual(expect.arrayContaining([
+        "caseGraph.title",
+        "caseGraph.summary",
+        "caseGraph.jurisdictionProfile.name",
+        "caseGraph.jurisdictionProfile.governingLaw",
+        "caseGraph.jurisdictionProfile.permittedObjectionGrounds.0",
+        "caseGraph.parties.0.name",
+        "caseGraph.parties.0.description",
+        "caseGraph.parties.0.counselName",
+        "caseGraph.issues.0.question",
+        "caseGraph.issues.0.standard",
+        "caseGraph.timeline.0.occurredAt",
+        "caseGraph.timeline.0.summary",
+        "caseGraph.facts.0.proposition",
+        "caseGraph.facts.0.classification",
+        "caseGraph.facts.0.relatedEvidenceIds.0",
+        "caseGraph.evidence.0.name",
+        "caseGraph.evidence.0.description",
+        "caseGraph.evidence.0.kind",
+        "caseGraph.witnesses.0.role",
+        "caseGraph.witnesses.0.summary",
+        "caseGraph.witnesses.0.knowledgeBoundary.knownFactIds.0",
+        "caseGraph.witnesses.0.knowledgeBoundary.allowedTopics.0",
+        "caseGraph.witnesses.0.priorStatements.0.madeAt",
+        "caseGraph.witnesses.0.priorStatements.0.text",
+        "caseGraph.contradictions.0.summary",
+        "caseGraph.contradictions.0.left.kind",
+        "caseGraph.contradictions.0.left.priorStatementId",
+        "caseGraph.contradictions.0.severity",
+        "caseGraph.settlement.enabled",
+        "caseGraph.settlement.participants.0.minimumAuthority",
+        "caseGraph.settlement.participants.0.confidentialPriorities.0",
+        "caseGraph.settlement.participants.0.permittedNonMonetaryTerms.0",
+        "caseGraph.juryInstructions.0.title",
+        "caseGraph.juryInstructions.0.text",
+      ]));
+      expect(paths.some((path) => /^caseGraph\.(?:parties|facts|witnesses)\.\d+$/u.test(path))).toBe(false);
+      expect(result.validationReport.grounding.find(
+        (record) => record.path === "caseGraph.parties.0.counselName",
+      )?.value).toBe("null");
+      for (const authoringPath of [
+        "caseGraph.jurisdictionProfile.governingLaw",
+        "caseGraph.settlement.participants.0.confidentialPriorities.0",
+        "caseGraph.juryInstructions.0.text",
+      ]) {
+        expect(result.validationReport.grounding).toContainEqual(expect.objectContaining({
+          path: authoringPath,
+          grounding: "authoring",
+          provenanceScope: "record",
+          sourceSegmentIds: [],
+        }));
+      }
+    }
+  });
+
+  it("rejects an unsupported nested field that tries to ride an unrelated record citation", () => {
+    const input = createInput();
+    const output = createModelOutput(input);
+    const unsupportedValue = "A confidential merger discussion absent from the packet";
+    output.caseGraph.witnesses[0].knowledgeBoundary.allowedTopics[0] = unsupportedValue;
+    const groundingGroup = output.review.fieldGrounding.find((group) =>
+      group.ownerPath === "caseGraph.witnesses.0",
+    );
+    const unrelatedProvenance = output.caseGraph.parties[1].provenance[0];
+    expect(groundingGroup).toBeDefined();
+    if (!groundingGroup) return;
+    groundingGroup.provenanceIds = [unrelatedProvenance.provenanceId];
+    groundingGroup.grounding = "source";
+    groundingGroup.sourceSegmentIds = [...unrelatedProvenance.sourceSegmentIds];
+    groundingGroup.confidence = unrelatedProvenance.confidence;
+
+    const result = validateCaseCompilerCandidate(output, validationContext(input));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(expect.objectContaining({
+        code: "field_provenance_mismatch",
+        path: ["caseGraph", "witnesses", 0, "name"],
+        entityId: output.caseGraph.witnesses[0].witnessId,
+      }));
+      expect(result.validationReport.grounding).toContainEqual(expect.objectContaining({
+        path: "caseGraph.witnesses.0.knowledgeBoundary.allowedTopics.0",
+        value: unsupportedValue,
+        sourceSegmentIds: unrelatedProvenance.sourceSegmentIds,
+      }));
+    }
+  });
+
+  it("rejects a missing nested field audit instead of accepting entity-level coverage", () => {
+    const input = createInput();
+    const output = createModelOutput(input);
+    output.review.fieldGrounding = output.review.fieldGrounding.filter(
+      (group) => group.ownerPath !== "caseGraph.witnesses.0.priorStatements.0",
+    );
+
+    const result = validateCaseCompilerCandidate(output, validationContext(input));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(expect.objectContaining({
+        code: "missing_field_grounding",
+        path: ["caseGraph", "witnesses", 0, "priorStatements", 0, "text"],
+        entityId: output.caseGraph.witnesses[0].priorStatements[0].priorStatementId,
+      }));
+    }
   });
 
   it("rejects a factual entity supported only by authoring provenance", () => {
@@ -303,7 +449,7 @@ describe("deterministic factual grounding", () => {
     if (!result.ok) {
       expect(result.issues).toContainEqual(
         expect.objectContaining({
-          code: "ungrounded_factual_entity",
+          code: "field_provenance_mismatch",
           entityId: output.caseGraph.parties[0].partyId,
         }),
       );
@@ -336,6 +482,7 @@ describe("deterministic factual grounding", () => {
     output.review.uncertaintyIds = output.caseGraph.compilerMetadata.uncertainties.map(
       (uncertainty) => uncertainty.uncertaintyId,
     );
+    refreshFieldGrounding(output, input);
 
     const result = validateCaseCompilerCandidate(output, validationContext(input));
 
@@ -345,6 +492,7 @@ describe("deterministic factual grounding", () => {
       expect(result.validationReport.grounding).toContainEqual(
         expect.objectContaining({
           entityId: inferredFact.factId,
+          path: "caseGraph.facts.0.proposition",
           grounding: "inferred",
           confidence: 0.55,
         }),
