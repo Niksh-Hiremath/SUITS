@@ -4,7 +4,6 @@ import { PDF_EXTRACTION_ADAPTER } from "./pdf";
 
 export * from "./docx";
 export * from "./pdf";
-export * from "./shared";
 
 export const DEFAULT_DOCUMENT_EXTRACTION_ADAPTERS: readonly DocumentExtractionAdapter[] =
   Object.freeze([PDF_EXTRACTION_ADAPTER, DOCX_EXTRACTION_ADAPTER]);
