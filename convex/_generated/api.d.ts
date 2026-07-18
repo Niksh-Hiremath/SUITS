@@ -13,8 +13,10 @@ import type * as autonomous from "../autonomous.js";
 import type * as cases from "../cases.js";
 import type * as evals from "../evals.js";
 import type * as events from "../events.js";
+import type * as migrations from "../migrations.js";
 import type * as participatory from "../participatory.js";
 import type * as traces from "../traces.js";
+import type * as trialEvents from "../trialEvents.js";
 import type * as trials from "../trials.js";
 import type * as voice from "../voice.js";
 
@@ -30,8 +32,10 @@ declare const fullApi: ApiFromModules<{
   cases: typeof cases;
   evals: typeof evals;
   events: typeof events;
+  migrations: typeof migrations;
   participatory: typeof participatory;
   traces: typeof traces;
+  trialEvents: typeof trialEvents;
   trials: typeof trials;
   voice: typeof voice;
 }>;
