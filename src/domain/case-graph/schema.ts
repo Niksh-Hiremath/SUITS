@@ -435,6 +435,15 @@ const CaseGraphV1ObjectSchema = z
   })
   .strict();
 
+/**
+ * Structural CaseGraph shape for boundaries that must keep extracted source
+ * payloads server-owned. Canonical CaseGraph validation still happens through
+ * CaseGraphV1Schema after trusted source segments are attached.
+ */
+export const CaseGraphV1WithoutSourceSegmentsSchema = CaseGraphV1ObjectSchema.omit({
+  sourceSegments: true,
+}).strict();
+
 export const CaseGraphV1Schema = CaseGraphV1ObjectSchema.superRefine((graph, ctx) => {
   type Path = Array<string | number>;
   const addIssue = (path: Path, message: string) => ctx.addIssue({ code: "custom", path, message });
@@ -793,6 +802,7 @@ export const CaseGraphV1Schema = CaseGraphV1ObjectSchema.superRefine((graph, ctx
 });
 
 export type CaseGraphV1 = z.infer<typeof CaseGraphV1Schema>;
+export type CaseGraphV1WithoutSourceSegments = z.infer<typeof CaseGraphV1WithoutSourceSegmentsSchema>;
 export const CaseGraphSchema = CaseGraphV1Schema;
 export type CaseGraph = CaseGraphV1;
 

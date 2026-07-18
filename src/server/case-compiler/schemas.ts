@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   CaseGraphEntityIdSchema,
   CaseGraphV1Schema,
+  CaseGraphV1WithoutSourceSegmentsSchema,
   CompilerUncertaintySchema,
   SourceSegmentSchema,
 } from "../../domain/case-graph";
@@ -71,14 +72,14 @@ export const CaseCompilerModelReviewSchema = z
   .strict();
 
 /**
- * The model-facing Structured Output contract. CaseGraphV1Schema is embedded
- * directly so the SDK emits a strict JSON schema from the canonical domain
- * contract rather than a parallel compiler-only graph shape.
+ * The model-facing Structured Output contract deliberately excludes trusted
+ * source payloads. The server attaches the exact input source segments before
+ * validating the result with the canonical CaseGraphV1Schema.
  */
 export const CaseCompilerModelOutputSchema = z
   .object({
     schemaVersion: z.literal(CASE_COMPILER_OUTPUT_SCHEMA_VERSION),
-    caseGraph: CaseGraphV1Schema,
+    caseGraph: CaseGraphV1WithoutSourceSegmentsSchema,
     review: CaseCompilerModelReviewSchema,
   })
   .strict();

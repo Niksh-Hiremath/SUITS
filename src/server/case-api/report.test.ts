@@ -6,6 +6,7 @@ import {
   CASE_COMPILER_OUTPUT_SCHEMA_VERSION,
   CASE_COMPILER_PENDING_REQUEST_ID,
   CASE_COMPILER_PROMPT_VERSION,
+  CASE_COMPILER_VALIDATION_SCHEMA_VERSION,
   CaseCompilerModelOutputSchema,
   DeterministicCaseCompilerProvider,
   compileCasePacket,
@@ -30,9 +31,10 @@ describe("case compilation review report", () => {
       sourceContentHash: computeSourceContentHash(fixture.sourceSegments),
       sourceSegmentCount: fixture.sourceSegments.length,
     };
+    const { sourceSegments, ...modelGraph } = fixture;
     const modelOutput = CaseCompilerModelOutputSchema.parse({
       schemaVersion: CASE_COMPILER_OUTPUT_SCHEMA_VERSION,
-      caseGraph: fixture,
+      caseGraph: modelGraph,
       review: {
         overallStatus: fixture.compilerMetadata.uncertainties.length > 0
           ? "needs_review"
@@ -44,7 +46,7 @@ describe("case compilation review report", () => {
             status: "pass",
             summary: "Grounded.",
             entityIds: [],
-            sourceSegmentIds: fixture.sourceSegments.map((segment) => segment.sourceSegmentId),
+            sourceSegmentIds: sourceSegments.map((segment) => segment.sourceSegmentId),
           },
         ],
         uncertaintyIds: fixture.compilerMetadata.uncertainties.map((item) => item.uncertaintyId),
@@ -52,7 +54,7 @@ describe("case compilation review report", () => {
     });
     const compilation = await compileCasePacket({
       provider: new DeterministicCaseCompilerProvider([{ type: "output", output: modelOutput }]),
-      input: { caseId: fixture.caseId, sourceSegments: fixture.sourceSegments },
+      input: { caseId: fixture.caseId, sourceSegments },
       maxAttempts: 1,
       clock: () => new Date(compiledAt),
     });
@@ -73,7 +75,7 @@ describe("case compilation review report", () => {
       },
     ]);
 
-    expect(report.schemaVersion).toBe("case-compiler.validation.v1");
+    expect(report.schemaVersion).toBe(CASE_COMPILER_VALIDATION_SCHEMA_VERSION);
     expect(report.provenance.factualFields).toBeGreaterThan(0);
     expect(report.provenance.sourceLinked + report.provenance.explicitlyInferred).toBe(
       report.provenance.factualFields,

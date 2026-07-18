@@ -1,4 +1,9 @@
-import { parseCaseGraphV1, type CaseGraphV1, type Provenance } from "../../domain/case-graph";
+import {
+  CaseGraphV1Schema,
+  parseCaseGraphV1,
+  type CaseGraphV1,
+  type Provenance,
+} from "../../domain/case-graph";
 
 import {
   CASE_COMPILER_EDUCATIONAL_DISCLAIMER,
@@ -222,10 +227,6 @@ function validateGrounding(
   return records;
 }
 
-function sourceSegmentsMatch(expected: CaseCompilerInput["sourceSegments"], actual: CaseGraphV1["sourceSegments"]): boolean {
-  return JSON.stringify(expected) === JSON.stringify(actual);
-}
-
 function equalStringSets(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   const sortedLeft = [...left].sort();
@@ -264,10 +265,8 @@ function buildReport(
       },
       {
         code: "source_integrity",
-        status: rejected && issues.some((issue) => issue.code === "source_segments_changed") ? "fail" : "pass",
-        message: rejected && issues.some((issue) => issue.code === "source_segments_changed")
-          ? "The source segment set was changed by the candidate."
-          : "The source segment set is preserved exactly.",
+        status: "pass",
+        message: "Trusted source segments were attached server-side and validated with the canonical graph.",
       },
       {
         code: "factual_grounding",
@@ -320,7 +319,7 @@ export function validateCaseCompilerCandidate(
   }
 
   const output = parsed.data;
-  const graph = output.caseGraph;
+  const modelGraph = output.caseGraph;
   const issues: CaseCompilerValidationIssue[] = [];
 
   const trustedChecks: Array<Readonly<{
@@ -330,61 +329,61 @@ export function validateCaseCompilerCandidate(
     message: string;
   }>> = [
     {
-      matches: graph.caseId === context.input.caseId,
+      matches: modelGraph.caseId === context.input.caseId,
       code: "trusted_case_id_changed",
       path: ["caseGraph", "caseId"],
       message: "The candidate changed the trusted case ID",
     },
     {
-      matches: graph.status === "draft",
+      matches: modelGraph.status === "draft",
       code: "trusted_status_changed",
       path: ["caseGraph", "status"],
       message: "A compiler candidate must remain a draft for human review",
     },
     {
-      matches: graph.educationalDisclaimer === CASE_COMPILER_EDUCATIONAL_DISCLAIMER,
+      matches: modelGraph.educationalDisclaimer === CASE_COMPILER_EDUCATIONAL_DISCLAIMER,
       code: "trusted_disclaimer_changed",
       path: ["caseGraph", "educationalDisclaimer"],
       message: "The candidate changed the required educational disclaimer",
     },
     {
-      matches: graph.compilerMetadata.method === "gpt",
+      matches: modelGraph.compilerMetadata.method === "gpt",
       code: "trusted_compiler_method_changed",
       path: ["caseGraph", "compilerMetadata", "method"],
       message: "The compiler method must be recorded as GPT",
     },
     {
-      matches: graph.compilerMetadata.model === CASE_COMPILER_MODEL,
+      matches: modelGraph.compilerMetadata.model === CASE_COMPILER_MODEL,
       code: "trusted_model_changed",
       path: ["caseGraph", "compilerMetadata", "model"],
       message: "The candidate changed the server-selected compiler model",
     },
     {
-      matches: graph.compilerMetadata.requestId === CASE_COMPILER_PENDING_REQUEST_ID,
+      matches: modelGraph.compilerMetadata.requestId === CASE_COMPILER_PENDING_REQUEST_ID,
       code: "trusted_request_id_changed",
       path: ["caseGraph", "compilerMetadata", "requestId"],
       message: "The model must leave the provider request ID placeholder unchanged",
     },
     {
-      matches: graph.compilerMetadata.promptVersion === CASE_COMPILER_PROMPT_VERSION,
+      matches: modelGraph.compilerMetadata.promptVersion === CASE_COMPILER_PROMPT_VERSION,
       code: "trusted_prompt_version_changed",
       path: ["caseGraph", "compilerMetadata", "promptVersion"],
       message: "The candidate changed the compiler prompt version",
     },
     {
-      matches: graph.compilerMetadata.compiledAt === context.compiledAt,
+      matches: modelGraph.compilerMetadata.compiledAt === context.compiledAt,
       code: "trusted_compiled_at_changed",
       path: ["caseGraph", "compilerMetadata", "compiledAt"],
       message: "The candidate changed the server compilation timestamp",
     },
     {
-      matches: graph.compilerMetadata.sourceContentHash === context.sourceContentHash,
+      matches: modelGraph.compilerMetadata.sourceContentHash === context.sourceContentHash,
       code: "trusted_source_hash_changed",
       path: ["caseGraph", "compilerMetadata", "sourceContentHash"],
       message: "The candidate changed the trusted source content hash",
     },
     {
-      matches: graph.compilerMetadata.sourceSegmentCount === context.input.sourceSegments.length,
+      matches: modelGraph.compilerMetadata.sourceSegmentCount === context.input.sourceSegments.length,
       code: "trusted_source_count_changed",
       path: ["caseGraph", "compilerMetadata", "sourceSegmentCount"],
       message: "The candidate changed the trusted source segment count",
@@ -395,18 +394,7 @@ export function validateCaseCompilerCandidate(
     if (!check.matches) addIssue(issues, makeIssue(check.code, check.path, check.message));
   }
 
-  if (!sourceSegmentsMatch(context.input.sourceSegments, graph.sourceSegments)) {
-    addIssue(
-      issues,
-      makeIssue(
-        "source_segments_changed",
-        ["caseGraph", "sourceSegments"],
-        "The candidate must preserve every supplied source segment exactly and in order",
-      ),
-    );
-  }
-
-  const expectedUncertaintyIds = graph.compilerMetadata.uncertainties.map((item) => item.uncertaintyId);
+  const expectedUncertaintyIds = modelGraph.compilerMetadata.uncertainties.map((item) => item.uncertaintyId);
   if (!equalStringSets(expectedUncertaintyIds, output.review.uncertaintyIds)) {
     addIssue(
       issues,
@@ -417,6 +405,35 @@ export function validateCaseCompilerCandidate(
       ),
     );
   }
+
+  const canonical = CaseGraphV1Schema.safeParse({
+    ...modelGraph,
+    sourceSegments: context.input.sourceSegments,
+  });
+  if (!canonical.success) {
+    for (const issue of canonical.error.issues.slice(0, MAX_CASE_COMPILER_VALIDATION_ISSUES - issues.length)) {
+      addIssue(
+        issues,
+        makeIssue(
+          "strict_schema_invalid",
+          [
+            "caseGraph",
+            ...issue.path.map((segment) =>
+              typeof segment === "symbol" ? segment.description ?? "symbol" : segment,
+            ),
+          ],
+          issue.message,
+        ),
+      );
+    }
+    return {
+      ok: false,
+      issues,
+      validationReport: buildReport(issues, [], output),
+    };
+  }
+
+  const graph = canonical.data;
 
   const grounding = validateGrounding(graph, issues);
   const validationReport = buildReport(issues, grounding, output);

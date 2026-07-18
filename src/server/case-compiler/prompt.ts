@@ -44,7 +44,7 @@ AUTHORITY AND SECURITY BOUNDARY
 - Do not provide legal advice, assess a real dispute, or predict a real outcome. Compile only the supplied fictional or anonymized educational packet.
 
 GROUNDING RULES
-- Preserve every supplied source segment exactly, including IDs, locators, excerpts, MIME types, and hashes. Do not invent source segments.
+- Cite only supplied source segment IDs. Do not return sourceSegments, excerpts, locators, MIME types, or source hashes; the server attaches the exact trusted source records after validation.
 - Every factual party, issue, timeline event, fact, evidence item, witness statement, witness profile, or contradiction must cite one or more supplied source segment IDs.
 - If a claim is a necessary inference rather than directly supported, mark its provenance kind as inferred, keep confidence below 1, and expose it for review as an uncertainty.
 - Authoring provenance is only for simulation configuration such as fictional rules, settlement parameters, and jury instructions; it cannot support a packet-derived factual claim.
@@ -79,7 +79,10 @@ export function computeSourceContentHash(sourceSegments: readonly SourceSegment[
 function serializeUntrustedValue(value: unknown): { serialized: string; truncated: boolean } {
   let serialized: string;
   try {
-    serialized = JSON.stringify(value) ?? "null";
+    serialized = JSON.stringify(
+      value,
+      (key, nestedValue: unknown) => key === "sourceSegments" ? undefined : nestedValue,
+    ) ?? "null";
   } catch {
     serialized = "[unserializable prior candidate omitted]";
   }
