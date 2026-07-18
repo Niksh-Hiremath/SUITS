@@ -358,6 +358,14 @@ export default defineSchema({
     .index("by_case_version", ["caseId", "caseVersion"])
     .index("by_owner", ["ownerId"]),
 
+  caseCompileQuotas: defineTable({
+    clientKeyHash: v.string(),
+    attemptedAt: v.array(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_client_key_hash", ["clientKeyHash"])
+    .index("by_updated_at", ["updatedAt"]),
+
   trialEvents: defineTable({
     eventId: v.string(),
     trialId: v.string(),

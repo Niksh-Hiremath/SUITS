@@ -2,6 +2,10 @@ import { httpRouter, makeFunctionReference } from "convex/server";
 
 import { httpAction } from "./_generated/server";
 import {
+  CaseCompilePermitRequestSchema,
+  CaseCompilePermitResponseSchema,
+} from "./caseCompileQuota";
+import {
   PublishCaseDraftRequestSchema,
   RegisterCaseDraftRequestSchema,
   CaseServiceUploadUrlRequestSchema,
@@ -62,6 +66,15 @@ type PublishDraftMutationResult = {
   replayed: boolean;
 };
 
+type CaseCompilePermitMutationArgs = {
+  clientKeyHash: string;
+};
+
+type CaseCompilePermitMutationResult = {
+  allowed: boolean;
+  retryAfterSeconds: number;
+};
+
 const generateUploadUrlReference = makeFunctionReference<
   "mutation",
   Record<string, never>,
@@ -77,6 +90,22 @@ const publishDraftReference = makeFunctionReference<
   PublishDraftMutationArgs,
   PublishDraftMutationResult
 >("caseDrafts:publishCompiledDraft");
+const consumeCaseCompilePermitReference = makeFunctionReference<
+  "mutation",
+  CaseCompilePermitMutationArgs,
+  CaseCompilePermitMutationResult
+>("caseCompileQuota:consumePermit");
+
+const consumeCaseCompilePermit = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(request, CaseCompilePermitRequestSchema);
+    const result = await ctx.runMutation(consumeCaseCompilePermitReference, body);
+    return caseServiceJson(CaseCompilePermitResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
 
 const generateUploadUrl = httpAction(async (ctx, request) => {
   try {
@@ -158,6 +187,7 @@ const publishDraft = httpAction(async (ctx, request) => {
 
 const http = httpRouter();
 
+http.route({ path: "/service/case-compile-permit", method: "POST", handler: consumeCaseCompilePermit });
 http.route({ path: "/service/case-upload-url", method: "POST", handler: generateUploadUrl });
 http.route({ path: "/service/case-draft/register", method: "POST", handler: registerDraft });
 http.route({ path: "/service/case-draft/publish", method: "POST", handler: publishDraft });
