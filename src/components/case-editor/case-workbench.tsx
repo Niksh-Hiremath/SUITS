@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import type { CaseGraph } from "@/domain/case-graph";
 
@@ -70,6 +70,7 @@ export function CaseWorkbench() {
   const [compiled, setCompiled] = useState<CompileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [published, setPublished] = useState<PublishResponse | null>(null);
+  const compileRequestId = useRef<string | null>(null);
 
   const provenancePercent = useMemo(() => {
     if (!compiled || compiled.report.provenance.factualFields === 0) return 100;
@@ -95,10 +96,22 @@ export function CaseWorkbench() {
 
     setError(null);
     setStage("compiling");
+    const requestId = compileRequestId.current ?? crypto.randomUUID();
+    compileRequestId.current = requestId;
     const body = new FormData();
     body.set("packet", selectedFile);
+    body.set("requestId", requestId);
     try {
-      const response = await fetch("/api/cases/compile", { method: "POST", body });
+      const sessionResponse = await fetch("/api/cases/session", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!sessionResponse.ok) throw new Error(await errorMessage(sessionResponse));
+      const response = await fetch("/api/cases/compile", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+      });
       if (!response.ok) throw new Error(await errorMessage(response));
       const result = (await response.json()) as CompileResponse;
       setCompiled(result);
@@ -142,6 +155,7 @@ export function CaseWorkbench() {
     setCompiled(null);
     setPublished(null);
     setError(null);
+    compileRequestId.current = null;
   }
 
   return (
@@ -193,6 +207,7 @@ export function CaseWorkbench() {
               name="packet"
               onChange={(event) => {
                 setSelectedFile(event.target.files?.[0] ?? null);
+                compileRequestId.current = null;
                 setError(null);
               }}
               type="file"
