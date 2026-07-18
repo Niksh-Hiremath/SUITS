@@ -42,14 +42,37 @@ describe("V3 hearing page boundary", () => {
     expect(sources.startRoute).toContain('path: "/service/hearings/start"');
     expect(sources.readRoute).toContain('path: "/service/hearings/read"');
     expect(sources.commandRoute).toContain(
-      'path: "/service/hearings/command"',
+      'path: "/service/hearings/command/prepare"',
+    );
+    expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/command/commit"',
+    );
+    expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/model-call/terminal"',
     );
     expect(sources.convexHttp).toContain('>("hearingRuntime:start")');
     expect(sources.convexHttp).toContain('>("hearingRuntime:read")');
-    expect(sources.convexHttp).toContain('>("hearingRuntime:command")');
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:prepareCommand")',
+    );
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:commitWitnessGeneration")',
+    );
+    expect(sources.convexHttp).not.toContain(
+      '>("hearingRuntime:command")',
+    );
+    expect(sources.convexHttp).not.toContain(
+      'path: "/service/hearings/command"',
+    );
     expect(sources.runtime).toContain("export const start = internalAction");
     expect(sources.runtime).toContain("export const read = internalAction");
-    expect(sources.runtime).toContain("export const command = internalAction");
+    expect(sources.runtime).toContain(
+      "export const prepareCommand = internalAction",
+    );
+    expect(sources.runtime).toContain(
+      "export const commitWitnessGeneration = internalAction",
+    );
+    expect(sources.runtime).not.toContain("createDeterministicWitnessAnswer");
 
     for (const forbidden of [
       "convex/react",

@@ -6,6 +6,7 @@ import {
   hearingRouteError,
   parseHearingJson,
 } from "./http";
+import { HearingCommandOrchestrationError } from "./witness-command";
 
 describe("hearing HTTP boundary", () => {
   it("accepts only bounded uncompressed JSON", async () => {
@@ -62,6 +63,25 @@ describe("hearing HTTP boundary", () => {
       error: {
         code: "HEARING_REQUEST_INVALID",
         message: "The hearing request is invalid.",
+      },
+    });
+  });
+
+  it("returns a retryable safe witness-generation response", async () => {
+    const response = hearingRouteError(
+      new HearingCommandOrchestrationError(
+        "HEARING_WITNESS_GENERATION_FAILED",
+        "recorded",
+      ),
+      "The hearing could not be updated.",
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "HEARING_WITNESS_GENERATION_FAILED",
+        message:
+          "The witness could not answer right now. Retry the pending question.",
       },
     });
   });

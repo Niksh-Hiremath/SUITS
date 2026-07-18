@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 
 import {
+  HearingCommandPreparationSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
 } from "@/domain/hearing-runtime";
@@ -10,16 +12,31 @@ import {
   isTrustedRequestOrigin,
   verifyCaseOwnerSession,
 } from "@/server/case-api";
+import { EnvironmentCourtroomModelProvider } from "@/server/courtroom-ai";
 import {
   HearingTrialIdSchema,
   hearingJsonError,
   hearingRouteError,
   parseHearingJson,
 } from "@/server/hearing-api/http";
+import {
+  HearingCommandOrchestrationError,
+  orchestrateHearingCommand,
+  type HearingCommandDurableService,
+} from "@/server/hearing-api/witness-command";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 type RouteContext = { params: Promise<{ trialId: string }> };
+
+const TerminalModelCallResponseSchema = z
+  .object({
+    callId: z.string().trim().min(1).max(240),
+    attemptCount: z.number().int().nonnegative(),
+    replayed: z.boolean(),
+  })
+  .strict();
 
 export async function POST(
   request: NextRequest,
@@ -74,14 +91,36 @@ export async function POST(
   }
 
   try {
-    const view = await callConvexCaseService({
-      path: "/service/hearings/command",
-      body: {
-        ownerId: ownerSession.ownerId,
-        trialId: parsedTrialId.data,
-        command: body,
+    const ownerId = ownerSession.ownerId;
+    const trialId = parsedTrialId.data;
+    const durableService: HearingCommandDurableService = {
+      prepare: async (command, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/command/prepare",
+          body: { ownerId, trialId, command },
+          responseSchema: HearingCommandPreparationSchema,
+          signal,
+        }),
+      commit: async (generation, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/command/commit",
+          body: { ownerId, trialId, generation },
+          responseSchema: HearingRuntimeViewV1Schema,
+          signal,
+        }),
+      recordTerminalTrace: async (trace, signal) => {
+        await callConvexCaseService({
+          path: "/service/hearings/model-call/terminal",
+          body: { ownerId, trialId, trace },
+          responseSchema: TerminalModelCallResponseSchema,
+          signal,
+        });
       },
-      responseSchema: HearingRuntimeViewV1Schema,
+    };
+    const view = await orchestrateHearingCommand({
+      command: body,
+      provider: new EnvironmentCourtroomModelProvider(),
+      durableService,
       signal: request.signal,
     });
     return NextResponse.json(view, {
@@ -90,6 +129,13 @@ export async function POST(
   } catch (error) {
     console.error("hearing_command_failed", {
       name: error instanceof Error ? error.name : "UnknownError",
+      ...(error instanceof HearingCommandOrchestrationError
+        ? {
+            code: error.code,
+            category: error.category,
+            terminalTracePersistence: error.terminalTracePersistence,
+          }
+        : {}),
     });
     return hearingRouteError(error, "The courtroom action could not be committed.");
   }

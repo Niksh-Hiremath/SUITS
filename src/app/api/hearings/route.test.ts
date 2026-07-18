@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_START_SCHEMA_VERSION,
   HearingRuntimeViewV1Schema,
@@ -158,7 +159,15 @@ describe("hearing BFF routes", () => {
           path: new URL(rawUrl).pathname,
           body: JSON.parse(String(init?.body)) as unknown,
         });
-        return Response.json(VIEW);
+        return Response.json(
+          new URL(rawUrl).pathname === "/service/hearings/command/prepare"
+            ? {
+                schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+                status: "completed",
+                view: VIEW,
+              }
+            : VIEW,
+        );
       }),
     );
     const cookie = `${CASE_OWNER_COOKIE_NAME}=${sessionCookie()}`;
@@ -197,7 +206,7 @@ describe("hearing BFF routes", () => {
         body: { ownerId: `owner:${SESSION_ID}`, trialId: TRIAL_ID },
       },
       {
-        path: "/service/hearings/command",
+        path: "/service/hearings/command/prepare",
         body: {
           ownerId: `owner:${SESSION_ID}`,
           trialId: TRIAL_ID,

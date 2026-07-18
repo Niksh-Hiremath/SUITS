@@ -7,6 +7,7 @@ import {
   RequestBodyLimitError,
   readBoundedRequestBody,
 } from "../case-api";
+import { HearingCommandOrchestrationError } from "./witness-command";
 
 const MAX_HEARING_REQUEST_BYTES = 32 * 1024;
 
@@ -103,6 +104,15 @@ export function hearingRouteError(
     const status =
       error.status >= 400 && error.status < 500 ? error.status : 503;
     return hearingJsonError(status, error.code, fallbackMessage);
+  }
+  if (error instanceof HearingCommandOrchestrationError) {
+    return hearingJsonError(
+      503,
+      error.code,
+      error.category === "cancelled"
+        ? "The witness response was cancelled. Retry the pending question."
+        : "The witness could not answer right now. Retry the pending question.",
+    );
   }
   return hearingJsonError(500, "HEARING_REQUEST_FAILED", fallbackMessage);
 }
