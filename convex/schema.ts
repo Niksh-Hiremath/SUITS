@@ -369,6 +369,35 @@ export default defineSchema({
     .index("by_client_key_hash", ["clientKeyHash"])
     .index("by_updated_at", ["updatedAt"]),
 
+  caseCompileClaims: defineTable({
+    claimId: v.string(),
+    ownerId: v.string(),
+    uploadId: v.string(),
+    caseId: v.string(),
+    contentDigest: v.string(),
+    clientKeyHash: v.string(),
+    status: v.union(
+      v.literal("leased"),
+      v.literal("retryable_failed"),
+      v.literal("terminal_failed"),
+      v.literal("completed"),
+    ),
+    generation: v.number(),
+    leaseToken: v.union(v.string(), v.null()),
+    leaseExpiresAt: v.union(v.number(), v.null()),
+    lastHeartbeatAt: v.union(v.number(), v.null()),
+    failureCode: v.union(v.string(), v.null()),
+    completedAt: v.union(v.number(), v.null()),
+    quotaConsumedAt: v.union(v.number(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_claim_id", ["claimId"])
+    .index("by_upload_id", ["uploadId"])
+    .index("by_case_id", ["caseId"])
+    .index("by_owner", ["ownerId"])
+    .index("by_status_lease_expiry", ["status", "leaseExpiresAt"]),
+
   trialEvents: defineTable({
     eventId: v.string(),
     trialId: v.string(),
