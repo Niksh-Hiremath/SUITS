@@ -50,6 +50,11 @@ const VIEW = HearingRuntimeViewV1Schema.parse({
   },
   activeAppearance: null,
   activeQuestion: null,
+  capabilities: {
+    canAskQuestion: false,
+    canFinishExamination: false,
+    canFinishTrial: true,
+  },
   witnesses: [],
   player: {
     actorId: "actor:counsel:party_rina_shah",

@@ -10,6 +10,10 @@ import {
   type TrialStateV3,
 } from "../trial-engine/schemas";
 import {
+  canActorCallWitness,
+  canActorRecallWitness,
+} from "../trial-policy";
+import {
   HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
   HearingRuntimeViewV1Schema,
   type HearingRuntimeViewV1,
@@ -207,10 +211,17 @@ export function buildHearingRuntimeView(
   if (activeQuestion && !questioningActor) {
     throw new Error(`QUESTION_ACTOR_NOT_FOUND:${activeQuestion.askedByActorId}`);
   }
-
-  const alignedSideByPartyId = new Map(
-    caseGraph.parties.map((party) => [party.partyId, party.simulationSide]),
+  const playerOwnsActiveLeg = activeLeg?.ownerSide === trialState.userSide;
+  const canUseActiveLeg =
+    trialState.status === "active" &&
+    trialState.phase === "case_in_chief" &&
+    playerOwnsActiveLeg &&
+    activeLeg?.status === "in_progress" &&
+    activeQuestion === undefined;
+  const hasPendingStrikeMotion = Object.values(trialState.strikeMotions).some(
+    (motion) => motion.status === "pending",
   );
+
   const witnesses = caseGraph.witnesses.map((profile) => {
     const witnessState = trialState.witnesses[profile.witnessId];
     if (!witnessState) {
@@ -222,11 +233,18 @@ export function buildHearingRuntimeView(
       name: profile.name,
       kind: profile.kind,
       role: profile.role,
-      alignedSide: profile.alignedPartyId
-        ? (alignedSideByPartyId.get(profile.alignedPartyId) ?? "neutral")
-        : "neutral",
       status: witnessState.status,
       callCount: witnessState.callCount,
+      callableByPlayer: canActorCallWitness(
+        trialState.policySnapshot,
+        playerActor.actorId,
+        profile.witnessId,
+      ),
+      recallableByPlayer: canActorRecallWitness(
+        trialState.policySnapshot,
+        playerActor.actorId,
+        profile.witnessId,
+      ),
       currentAppearanceId: isActive ? activeAppearance.appearanceId : null,
       currentExaminationLeg: isActive ? activeExaminationKind : null,
     };
@@ -344,6 +362,17 @@ export function buildHearingRuntimeView(
             status: activeQuestion.status,
           }
         : null,
+    capabilities: {
+      canAskQuestion: canUseActiveLeg,
+      canFinishExamination: canUseActiveLeg,
+      canFinishTrial:
+        trialState.status === "active" &&
+        trialState.phase === "case_in_chief" &&
+        activeAppearance === undefined &&
+        activeQuestion === undefined &&
+        trialState.restedSides.length === 0 &&
+        !hasPendingStrikeMotion,
+    },
     witnesses,
     player: {
       actorId: playerActor.actorId,

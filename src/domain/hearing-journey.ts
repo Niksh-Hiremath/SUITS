@@ -1,4 +1,5 @@
 import type { HearingPhase } from "./workflow";
+import { HearingTrialIdSchema } from "./hearing-runtime/contracts";
 
 export type HearingProgress = {
   step: number;
@@ -7,15 +8,14 @@ export type HearingProgress = {
   next: string;
 };
 
-const SAFE_TRIAL_ID = /^[a-zA-Z0-9_-]+$/;
-
 export function trialIdFromSearch(search: string): string | undefined {
   const trialId = new URLSearchParams(search).get("trial")?.trim();
-  return trialId && SAFE_TRIAL_ID.test(trialId) ? trialId : undefined;
+  const parsed = HearingTrialIdSchema.safeParse(trialId);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function hearingUrl(trialId: string): string {
-  return `/hearing/?trial=${encodeURIComponent(trialId)}`;
+  return `/hearing/?trial=${encodeURIComponent(HearingTrialIdSchema.parse(trialId))}`;
 }
 
 export function seededHearingUrl(slug: string): string {

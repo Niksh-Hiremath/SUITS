@@ -6,6 +6,7 @@ import {
   Suspense,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -14,8 +15,10 @@ import {
   HEARING_START_SCHEMA_VERSION,
   HearingCaseSelectorSchema,
   HearingRuntimeViewV1Schema,
+  type HearingPlayerCommand,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
+  type StartHearingRequest,
 } from "@/domain/hearing-runtime";
 import { hearingUrl, trialIdFromSearch } from "@/domain/hearing-journey";
 
@@ -50,9 +53,10 @@ function actorLabel(
   }
   switch (turn.actor.role) {
     case "user_counsel":
-      return "Your counsel";
     case "opposing_counsel":
-      return "Opposing counsel";
+      return turn.actor.side === view.trial.userSide
+        ? "Your counsel"
+        : "Opposing counsel";
     case "judge":
       return "Judge";
     case "jury":
@@ -68,12 +72,16 @@ function actorLabel(
   }
 }
 
-function turnClass(role: HearingRuntimeViewV1["transcript"][number]["actor"]["role"]): string {
-  switch (role) {
+function turnClass(
+  turn: HearingRuntimeViewV1["transcript"][number],
+  view: HearingRuntimeViewV1,
+): string {
+  switch (turn.actor.role) {
     case "user_counsel":
-      return "user_advocate";
     case "opposing_counsel":
-      return "opposing_advocate";
+      return turn.actor.side === view.trial.userSide
+        ? "user_advocate"
+        : "opposing_advocate";
     case "witness":
       return "witness";
     default:
@@ -120,6 +128,13 @@ function HearingPageContent() {
   const [error, setError] = useState<string>();
   const [question, setQuestion] = useState("");
   const [closing, setClosing] = useState("");
+  const [pendingStart, setPendingStart] = useState(false);
+  const [pendingIntent, setPendingIntent] =
+    useState<HearingPlayerIntent | null>(null);
+  const pendingStartRequest = useRef<StartHearingRequest | undefined>(
+    undefined,
+  );
+  const pendingCommand = useRef<HearingPlayerCommand | undefined>(undefined);
   const trialId = createdTrialId ?? initialTrialId;
 
   const caseSelector = useMemo(() => {
@@ -184,13 +199,17 @@ function HearingPageContent() {
   async function beginHearing(): Promise<void> {
     await execute(async () => {
       if (!caseSelector.success) throw new Error("Choose a valid published case.");
-      const request = {
-        schemaVersion: HEARING_START_SCHEMA_VERSION,
-        requestId: crypto.randomUUID(),
-        requestedAt: new Date().toISOString(),
-        case: caseSelector.data,
-        userSide: "user" as const,
-      };
+      const request =
+        pendingStartRequest.current ??
+        ({
+          schemaVersion: HEARING_START_SCHEMA_VERSION,
+          requestId: crypto.randomUUID(),
+          requestedAt: new Date().toISOString(),
+          case: caseSelector.data,
+          userSide: "user",
+        } satisfies StartHearingRequest);
+      pendingStartRequest.current = request;
+      setPendingStart(true);
       const response = await fetch("/api/hearings", {
         method: "POST",
         credentials: "same-origin",
@@ -200,6 +219,8 @@ function HearingPageContent() {
       if (!response.ok) throw new Error(await responseError(response));
       const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
       if (!parsed.success) throw new Error("The new hearing response was invalid.");
+      pendingStartRequest.current = undefined;
+      setPendingStart(false);
       setView(parsed.data);
       setCreatedTrialId(parsed.data.trial.trialId);
       window.history.replaceState(
@@ -213,27 +234,67 @@ function HearingPageContent() {
   async function commitIntent(intent: HearingPlayerIntent): Promise<boolean> {
     return execute(async () => {
       if (!view) throw new Error("The hearing is not ready.");
-      const command = {
-        schemaVersion: HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
-        requestId: crypto.randomUUID(),
-        requestedAt: new Date().toISOString(),
-        expectedStateVersion: view.trial.version,
-        expectedLastEventId: view.trial.lastEventId,
-        intent,
-      };
-      const response = await fetch(
-        `/api/hearings/${encodeURIComponent(view.trial.trialId)}/commands`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(command),
-        },
-      );
-      if (!response.ok) throw new Error(await responseError(response));
-      const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
-      if (!parsed.success) throw new Error("The updated hearing response was invalid.");
-      setView(parsed.data);
+      const retained = pendingCommand.current;
+      if (
+        retained &&
+        JSON.stringify(retained.intent) !== JSON.stringify(intent)
+      ) {
+        throw new Error(
+          "A previous courtroom action is awaiting confirmation. Retry it before starting another.",
+        );
+      }
+      const command =
+        retained ??
+        ({
+          schemaVersion: HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
+          requestId: crypto.randomUUID(),
+          requestedAt: new Date().toISOString(),
+          expectedStateVersion: view.trial.version,
+          expectedLastEventId: view.trial.lastEventId,
+          intent,
+        } satisfies HearingPlayerCommand);
+      pendingCommand.current = command;
+      setPendingIntent(command.intent);
+      try {
+        const response = await fetch(
+          `/api/hearings/${encodeURIComponent(view.trial.trialId)}/commands`,
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(command),
+          },
+        );
+        if (!response.ok) throw new Error(await responseError(response));
+        const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
+        if (!parsed.success) {
+          throw new Error("The updated hearing response was invalid.");
+        }
+        pendingCommand.current = undefined;
+        setPendingIntent(null);
+        setView(parsed.data);
+      } catch (caught) {
+        try {
+          const recovery = await fetch(
+            `/api/hearings/${encodeURIComponent(view.trial.trialId)}`,
+            { credentials: "same-origin", cache: "no-store" },
+          );
+          if (!recovery.ok) throw new Error(await responseError(recovery));
+          const refreshed = HearingRuntimeViewV1Schema.safeParse(
+            await recovery.json(),
+          );
+          if (!refreshed.success) {
+            throw new Error("The refreshed hearing response was invalid.");
+          }
+          setView(refreshed.data);
+        } catch (recoveryError) {
+          throw new Error(
+            "The action is still pending and the durable record could not be refreshed. Retry when the service is available.",
+            { cause: recoveryError },
+          );
+        }
+        throw caught;
+      }
     });
   }
 
@@ -244,14 +305,12 @@ function HearingPageContent() {
     : undefined;
   const activeLeg = view?.activeAppearance?.examinationLeg;
   const playerOwnsFloor =
-    Boolean(activeLeg) && activeLeg?.ownerSide === view?.trial.userSide;
+    Boolean(activeLeg) &&
+    activeLeg?.ownerSide === view?.trial.userSide &&
+    view?.capabilities.canAskQuestion;
   const witnessAnswerCount =
     view?.transcript.filter((turn) => turn.actor.role === "witness").length ?? 0;
-  const canFinishTrial =
-    Boolean(view) &&
-    !view?.activeAppearance &&
-    view?.trial.phase === "case_in_chief" &&
-    witnessAnswerCount > 0;
+  const canFinishTrial = Boolean(view?.capabilities.canFinishTrial);
 
   return (
     <main className="hearing-shell">
@@ -261,7 +320,7 @@ function HearingPageContent() {
           <span>SUITS</span>
         </Link>
         <div className="phase-chip">{phaseLabel(view)}</div>
-        <Link className="text-link" href="/records/">Court Records</Link>
+        <Link className="text-link" href="/cases/">Case library</Link>
       </header>
 
       {loading ? (
@@ -302,7 +361,11 @@ function HearingPageContent() {
               disabled={busy || !caseSelector.success}
               onClick={() => void beginHearing()}
             >
-              {busy ? "Creating the event stream…" : "Begin V3 hearing"}
+              {busy
+                ? "Creating the event stream…"
+                : pendingStart
+                  ? "Retry same hearing request"
+                  : "Begin V3 hearing"}
             </button>
           )}
         </section>
@@ -319,7 +382,7 @@ function HearingPageContent() {
             <span>{witnessAnswerCount} answers</span>
             <span>state v{view.trial.version}</span>
           </div>
-          <Link className="primary-button" href="/records/">Inspect Court Records</Link>
+          <Link className="primary-button" href="/cases/">Return to case library</Link>
           {error && <div className="error-banner" role="alert">{error}</div>}
         </section>
       ) : (
@@ -342,7 +405,7 @@ function HearingPageContent() {
               )}
               {view.transcript.map((turn) => (
                 <article
-                  className={`turn turn-${turnClass(turn.actor.role)}`}
+                  className={`turn turn-${turnClass(turn, view)}`}
                   key={turn.turnId}
                 >
                   <div className="turn-meta">
@@ -375,6 +438,7 @@ function HearingPageContent() {
                   they have seen. The server will reject knowledge leakage.
                 </p>
                 <textarea
+                  disabled={Boolean(pendingIntent)}
                   id="question"
                   value={question}
                   onChange={(event) => setQuestion(event.target.value)}
@@ -384,7 +448,13 @@ function HearingPageContent() {
                 <div className="input-actions">
                   <button
                     className="primary-button"
-                    disabled={busy || question.trim().length < 3 || Boolean(view.activeQuestion)}
+                    disabled={
+                      busy ||
+                      Boolean(pendingIntent) ||
+                      !view.capabilities.canAskQuestion ||
+                      question.trim().length < 3 ||
+                      Boolean(view.activeQuestion)
+                    }
                     onClick={() => void (async () => {
                       const committed = await commitIntent({
                         type: "ask_question",
@@ -400,7 +470,12 @@ function HearingPageContent() {
                   </button>
                   <button
                     className="quiet-button"
-                    disabled={busy || Boolean(view.activeQuestion)}
+                    disabled={
+                      busy ||
+                      Boolean(pendingIntent) ||
+                      Boolean(view.activeQuestion) ||
+                      !view.capabilities.canFinishExamination
+                    }
                     onClick={() =>
                       void commitIntent({
                         type: "finish_witness",
@@ -419,6 +494,7 @@ function HearingPageContent() {
               <div className="advocacy-box closing-box">
                 <label htmlFor="closing">Closing argument</label>
                 <textarea
+                  disabled={Boolean(pendingIntent)}
                   id="closing"
                   value={closing}
                   onChange={(event) => setClosing(event.target.value)}
@@ -428,7 +504,9 @@ function HearingPageContent() {
                 <div className="input-actions">
                   <button
                     className="primary-button"
-                    disabled={busy || closing.trim().length < 12}
+                    disabled={
+                      busy || Boolean(pendingIntent) || closing.trim().length < 12
+                    }
                     onClick={() =>
                       void commitIntent({
                         type: "finish_trial",
@@ -441,7 +519,20 @@ function HearingPageContent() {
                 </div>
               </div>
             )}
-            {error && <div className="error-banner" role="alert">{error}</div>}
+            {error && (
+              <div className="error-banner" role="alert">
+                <span>{error}</span>
+                {pendingIntent && (
+                  <button
+                    className="quiet-button"
+                    disabled={busy}
+                    onClick={() => void commitIntent(pendingIntent)}
+                  >
+                    Retry pending action
+                  </button>
+                )}
+              </div>
+            )}
           </section>
 
           <aside className="case-rail" aria-label="Case and witness controls">
@@ -450,7 +541,8 @@ function HearingPageContent() {
               {view.witnesses.map((witness) => {
                 const canCall =
                   !view.activeAppearance &&
-                  (witness.status === "available" || witness.status === "released");
+                  ((witness.status === "available" && witness.callableByPlayer) ||
+                    (witness.status === "released" && witness.recallableByPlayer));
                 return (
                   <div className="case-timeline" key={witness.witnessId}>
                     <strong>{witness.name}</strong>
@@ -461,7 +553,7 @@ function HearingPageContent() {
                     {canCall && (
                       <button
                         className="quiet-button"
-                        disabled={busy}
+                        disabled={busy || Boolean(pendingIntent)}
                         onClick={() =>
                           void commitIntent({
                             type: "call_witness",

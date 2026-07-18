@@ -9,6 +9,10 @@ import {
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
 } from "../src/domain/hearing-runtime";
+import {
+  TRIAL_ACTION_SCHEMA_VERSION,
+  TrialActionV3Schema,
+} from "../src/domain/trial-engine";
 import schema from "./schema";
 
 const modules = {
@@ -38,6 +42,11 @@ const readReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string }>,
   HearingRuntimeViewV1
 >("hearingRuntime:read");
+const appendPlayerForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{ ownerId: string; actionJson: string }>,
+  Readonly<{ committedStateVersion: number; replayed: boolean }>
+>("trialEvents:appendPlayerForOwner");
 
 function startRequest() {
   return {
@@ -140,6 +149,83 @@ describe("V3 hearing runtime facade", () => {
     ]);
     expect(stored.legacyTrials).toEqual([]);
     expect(stored.legacyTurns).toEqual([]);
+  });
+
+  it("continues a partially appended command when the exact request is retried", async () => {
+    const backend = convexTest({ schema, modules });
+    const started = await start(backend);
+    const request = playerCommand(
+      started,
+      "21212121-2121-4121-8121-212121212121",
+      "2026-07-19T03:00:30.000Z",
+      { type: "call_witness", witnessId: "witness_rina_shah" },
+    );
+    const actionId = `action:${started.trial.trialId}:${request.requestId}:call-witness`;
+    const partialAction = TrialActionV3Schema.parse({
+      schemaVersion: TRIAL_ACTION_SCHEMA_VERSION,
+      actionId,
+      trialId: started.trial.trialId,
+      expectedStateVersion: request.expectedStateVersion,
+      actor: {
+        actorId: started.player.actorId,
+        role: started.player.actorRole,
+        side: started.player.side,
+        witnessId: null,
+      },
+      source: "user",
+      requestedAt: request.requestedAt,
+      causationId: request.expectedLastEventId,
+      correlationId: started.trial.trialId,
+      responseId: null,
+      interruptId: null,
+      modelMetadata: null,
+      type: "CALL_WITNESS",
+      payload: {
+        witnessId: "witness_rina_shah",
+        calledBySide: started.trial.userSide,
+      },
+    });
+    await expect(
+      backend.mutation(appendPlayerForOwnerReference, {
+        ownerId: OWNER_ID,
+        actionJson: JSON.stringify(partialAction),
+      }),
+    ).resolves.toMatchObject({ committedStateVersion: 4, replayed: false });
+
+    const partialView = HearingRuntimeViewV1Schema.parse(
+      await backend.action(readReference, {
+        ownerId: OWNER_ID,
+        trialId: started.trial.trialId,
+      }),
+    );
+    expect(partialView.activeAppearance).toMatchObject({
+      witnessId: "witness_rina_shah",
+      stage: "awaiting_oath",
+    });
+
+    const recovered = HearingRuntimeViewV1Schema.parse(
+      await backend.action(commandReference, {
+        ownerId: OWNER_ID,
+        trialId: started.trial.trialId,
+        commandJson: JSON.stringify(request),
+      }),
+    );
+    expect(recovered.activeAppearance).toMatchObject({
+      witnessId: "witness_rina_shah",
+      stage: "direct",
+    });
+    expect(recovered.trial.version).toBe(5);
+
+    const events = await backend.run(async (ctx) =>
+      ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", started.trial.trialId),
+        )
+        .collect(),
+    );
+    expect(events.filter((event) => event.eventType === "CALL_WITNESS")).toHaveLength(1);
+    expect(events.filter((event) => event.eventType === "SWEAR_WITNESS")).toHaveLength(1);
   });
 
   it("calls, questions, releases, switches witnesses, completes, and resumes only from V3 events", async () => {

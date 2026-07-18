@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createThreeWitnessCaseGraphV1Fixture } from "../case-graph";
+import {
+  CaseGraphV1Schema,
+  createThreeWitnessCaseGraphV1Fixture,
+  type CaseGraph,
+} from "../case-graph";
 import {
   TRIAL_ACTION_SCHEMA_VERSION,
   TrialActionV3Schema,
@@ -21,8 +25,11 @@ import { HearingRuntimeViewV1Schema } from "./schema";
 
 const BASE_TIME = Date.parse("2026-07-19T06:00:00.000Z");
 
-function createHarness(userSide: "user" | "opposing" = "user") {
-  const caseGraph = createThreeWitnessCaseGraphV1Fixture();
+function createHarness(
+  userSide: "user" | "opposing" = "user",
+  graph: CaseGraph = createThreeWitnessCaseGraphV1Fixture(),
+) {
+  const caseGraph = CaseGraphV1Schema.parse(graph);
   const bindings = deriveTrialActorBindings(caseGraph);
   const trialId = `trial:hearing-view:${userSide}`;
   let identity = 0;
@@ -159,6 +166,11 @@ describe("V3 hearing runtime projection", () => {
       "witness_theo_morgan",
       "witness_maya_ortiz",
     ]);
+    expect(
+      activeView.witnesses.every(
+        (witness) => witness.callableByPlayer && witness.recallableByPlayer,
+      ),
+    ).toBe(true);
     expect(activeView.activeAppearance).toMatchObject({
       witnessId: "witness_rina_shah",
       invocation: "call",
@@ -175,6 +187,11 @@ describe("V3 hearing runtime projection", () => {
       witnessId: "witness_rina_shah",
       askedBy: actors.userCounsel,
       status: "open",
+    });
+    expect(activeView.capabilities).toEqual({
+      canAskQuestion: false,
+      canFinishExamination: false,
+      canFinishTrial: false,
     });
     expect(activeView.transcript).toHaveLength(1);
     expect(activeView.transcript[0]).toMatchObject({
@@ -279,6 +296,40 @@ describe("V3 hearing runtime projection", () => {
       "turn:rina:question",
       "turn:rina:answer",
     ]);
+  });
+
+  it("projects witness call controls from the pinned player-counsel policy", () => {
+    const baseGraph = createThreeWitnessCaseGraphV1Fixture();
+    const restrictedGraph = CaseGraphV1Schema.parse({
+      ...baseGraph,
+      witnesses: baseGraph.witnesses.map((witness) =>
+        witness.witnessId === "witness_maya_ortiz"
+          ? {
+              ...witness,
+              callableByPartyIds: ["party_redwood_signal"],
+            }
+          : witness,
+      ),
+    });
+    const harness = createHarness("user", restrictedGraph);
+    const player = harness.actor(
+      (actor) => actor.role === "user_counsel",
+      "USER_COUNSEL_NOT_FOUND",
+    );
+
+    const view = buildHearingRuntimeView({
+      caseGraph: harness.caseGraph,
+      trialState: harness.state,
+      playerActorId: player.actorId,
+    });
+    expect(
+      view.witnesses.find(
+        (witness) => witness.witnessId === "witness_maya_ortiz",
+      ),
+    ).toMatchObject({
+      callableByPlayer: false,
+      recallableByPlayer: false,
+    });
   });
 
   it("omits hidden truth, witness boundaries, strategy memory, and settlement authority", () => {

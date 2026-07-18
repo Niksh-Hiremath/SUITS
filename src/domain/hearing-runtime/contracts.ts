@@ -6,6 +6,10 @@ export const HEARING_START_SCHEMA_VERSION = "hearing-start.v1" as const;
 export const HEARING_PLAYER_COMMAND_SCHEMA_VERSION =
   "hearing-player-command.v1" as const;
 
+export const HearingTrialIdSchema = z
+  .string()
+  .regex(/^trial_[a-f0-9]{32}$/u, "Expected a V3 hearing trial ID");
+
 const UuidV4Schema = z
   .string()
   .uuid()

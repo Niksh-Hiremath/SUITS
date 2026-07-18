@@ -10,18 +10,22 @@ import {
 } from "./hearing-journey";
 
 describe("hearing journey URL helpers", () => {
+  const trialId = "trial_123e4567e89b42d3a456426614174000";
+
   it("reads a valid trial ID so a refresh can resume the hearing", () => {
-    expect(trialIdFromSearch("?trial=trial_abc-123&source=home")).toBe("trial_abc-123");
+    expect(trialIdFromSearch(`?trial=${trialId}&source=home`)).toBe(trialId);
   });
 
   it("rejects missing or malformed trial IDs", () => {
     expect(trialIdFromSearch("")).toBeUndefined();
     expect(trialIdFromSearch("?trial=%20%20")).toBeUndefined();
     expect(trialIdFromSearch("?trial=trial/unsafe")).toBeUndefined();
+    expect(trialIdFromSearch("?trial=trial_legacy")).toBeUndefined();
   });
 
-  it("builds a shareable hearing URL without dropping the current path", () => {
-    expect(hearingUrl("trial_abc-123")).toBe("/hearing/?trial=trial_abc-123");
+  it("builds only a V3 hearing resume URL", () => {
+    expect(hearingUrl(trialId)).toBe(`/hearing/?trial=${trialId}`);
+    expect(() => hearingUrl("trial_legacy")).toThrow();
   });
 
   it("builds encoded seeded and private-case launch URLs", () => {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { HearingTrialIdSchema } from "../../domain/hearing-runtime";
 import {
   ConvexCaseServiceError,
   RequestBodyLimitError,
@@ -9,9 +10,7 @@ import {
 
 const MAX_HEARING_REQUEST_BYTES = 32 * 1024;
 
-export const HearingTrialIdSchema = z
-  .string()
-  .regex(/^trial_[a-f0-9]{32}$/u, "Expected a V3 hearing trial ID");
+export { HearingTrialIdSchema };
 
 export class HearingHttpError extends Error {
   readonly status: number;

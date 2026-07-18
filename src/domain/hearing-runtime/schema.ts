@@ -8,7 +8,6 @@ import {
   FactStatusSchema,
   SettlementOfferStatusSchema,
   TrialPhaseSchema,
-  TrialSideSchema,
   TrialStatusSchema,
 } from "../trial-engine/schemas";
 
@@ -124,11 +123,20 @@ const WitnessRosterEntrySchema = z
     name: NonEmptyTextSchema,
     kind: z.enum(["fact", "expert", "character"]),
     role: NonEmptyTextSchema,
-    alignedSide: TrialSideSchema,
     status: z.enum(["available", "called", "sworn", "testifying", "released"]),
     callCount: z.number().int().nonnegative(),
+    callableByPlayer: z.boolean(),
+    recallableByPlayer: z.boolean(),
     currentAppearanceId: IdentifierSchema.nullable(),
     currentExaminationLeg: ExaminationKindSchema.nullable(),
+  })
+  .strict();
+
+const HearingCapabilitiesSchema = z
+  .object({
+    canAskQuestion: z.boolean(),
+    canFinishExamination: z.boolean(),
+    canFinishTrial: z.boolean(),
   })
   .strict();
 
@@ -199,6 +207,7 @@ export const HearingRuntimeViewV1Schema = z
     trial: TrialViewSchema,
     activeAppearance: ActiveAppearanceViewSchema.nullable(),
     activeQuestion: ActiveQuestionViewSchema.nullable(),
+    capabilities: HearingCapabilitiesSchema,
     witnesses: z.array(WitnessRosterEntrySchema),
     player: PlayerViewSchema,
     transcript: z.array(TranscriptTurnViewSchema),

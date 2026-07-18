@@ -339,17 +339,11 @@ function playerCounselForWitness(
     (candidate) => candidate.witnessId === witnessId,
   );
   if (!rule) throw new Error("UNKNOWN_WITNESS");
-  const allowed = new Set(rule.callableByActorIds);
-  const matches = Object.values(state.actors)
-    .filter(
-      (actor) =>
-        actor.role === playerRole(state) &&
-        actor.side === state.userSide &&
-        allowed.has(actor.actorId),
-    )
-    .sort((left, right) => left.actorId.localeCompare(right.actorId));
-  if (matches.length === 0) throw new Error("PLAYER_CANNOT_CALL_WITNESS");
-  return matches[0];
+  const counsel = playerCounsel(state);
+  if (!rule.callableByActorIds.includes(counsel.actorId)) {
+    throw new Error("PLAYER_CANNOT_CALL_WITNESS");
+  }
+  return counsel;
 }
 
 function runtimeActionId(

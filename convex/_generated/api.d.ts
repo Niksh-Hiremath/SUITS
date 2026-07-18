@@ -22,6 +22,7 @@ import type * as cases from "../cases.js";
 import type * as crons from "../crons.js";
 import type * as evals from "../evals.js";
 import type * as events from "../events.js";
+import type * as hearingRuntime from "../hearingRuntime.js";
 import type * as http from "../http.js";
 import type * as migrations from "../migrations.js";
 import type * as participatory from "../participatory.js";
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   evals: typeof evals;
   events: typeof events;
+  hearingRuntime: typeof hearingRuntime;
   http: typeof http;
   migrations: typeof migrations;
   participatory: typeof participatory;
