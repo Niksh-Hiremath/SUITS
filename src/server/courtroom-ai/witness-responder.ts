@@ -35,6 +35,7 @@ import {
   type CourtroomModelProviderResponse,
   type CourtroomModelStreamEvent,
 } from "./provider";
+import { estimateCourtroomModelCostUsd } from "./pricing";
 import {
   WITNESS_ANSWER_PROMPT_VERSION,
   buildWitnessAnswerPrompt,
@@ -373,7 +374,10 @@ function makeTrace(
     validationFailureCount: attempts.filter(
       (attempt) => attempt.status === "validation_failed",
     ).length,
-    estimatedCostUsd: null,
+    estimatedCostUsd:
+      usage === null
+        ? null
+        : estimateCourtroomModelCostUsd(COURTROOM_RUNTIME_MODEL, usage),
     usage,
     acceptedAttempt:
       options.status === "accepted" ? (options.acceptedAttempt ?? null) : null,

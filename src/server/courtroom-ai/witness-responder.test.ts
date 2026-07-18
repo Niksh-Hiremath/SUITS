@@ -306,7 +306,7 @@ describe("generateWitnessAnswer", () => {
       latencyMs: result.trace.latencyMs,
       inputTokens: USAGE_ONE.inputTokens,
       outputTokens: USAGE_ONE.outputTokens,
-      estimatedCostUsd: null,
+      estimatedCostUsd: 0.000184,
       retryCount: 0,
       validationFailureCount: 0,
     });
@@ -417,6 +417,7 @@ describe("generateWitnessAnswer", () => {
       requestId: "request:witness:repair:002",
       inputTokens: 220,
       outputTokens: 50,
+      estimatedCostUsd: 0.000439,
       retryCount: 1,
       validationFailureCount: 1,
     });
