@@ -40,6 +40,12 @@ function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
+function configuredPublicOrigin(value: string): string | null {
+  const origin = normalizedHttpOrigin(value);
+  if (!origin) return null;
+  return isLoopbackOrigin(origin) || new URL(origin).protocol === "https:" ? origin : null;
+}
+
 /**
  * Accept browser requests only from the externally visible application origin.
  * NextRequest.nextUrl can retain an internal proxy hostname, so the request Host
@@ -57,7 +63,7 @@ export function isTrustedRequestOrigin(
   if (!suppliedOrigin) return false;
 
   const configured = source.SUITS_PUBLIC_ORIGIN?.trim();
-  const expectedOrigin = configured ? normalizedHttpOrigin(configured) : requestOrigin(request);
+  const expectedOrigin = configured ? configuredPublicOrigin(configured) : requestOrigin(request);
   if (!configured && (expectedOrigin === null || !isLoopbackOrigin(expectedOrigin))) return false;
   return expectedOrigin !== null && suppliedOrigin === expectedOrigin;
 }

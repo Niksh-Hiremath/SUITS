@@ -95,6 +95,16 @@ describe("isTrustedRequestOrigin", () => {
     );
   });
 
+  it("requires HTTPS for configured non-loopback origins", () => {
+    const insecure = request("http://internal:3000/api/cases/session", {
+      host: "internal:3000",
+      origin: "http://suits.example",
+    });
+    expect(isTrustedRequestOrigin(insecure, { SUITS_PUBLIC_ORIGIN: "http://suits.example" })).toBe(
+      false,
+    );
+  });
+
   it("normalizes a loopback default port", () => {
     expect(
       isTrustedRequestOrigin(
