@@ -83,6 +83,7 @@ class PhraseQueue:
         self._active_job_id: str | None = None
         self._next_sequence_by_response: dict[str, int] = {}
         self._response_live_jobs: dict[str, int] = {}
+        self._idle_response_order: deque[str] = deque()
         self._closed_responses: set[str] = set()
         self._closed_response_order: deque[str] = deque()
         self._closed = False
@@ -103,6 +104,10 @@ class PhraseQueue:
                 )
             if len(self._pending) >= self._max_depth:
                 raise TtsBackpressureError("TTS phrase queue is full")
+            try:
+                self._idle_response_order.remove(job.response_id)
+            except ValueError:
+                pass
             self._next_sequence_by_response[job.response_id] = expected_sequence + 1
             self._response_live_jobs[job.response_id] = (
                 self._response_live_jobs.get(job.response_id, 0) + 1
@@ -196,6 +201,12 @@ class PhraseQueue:
                     if entry.status in {"queued", "generating", "streaming"}
                 )
             self._closed_responses.update(responses_to_close)
+            if responses_to_close:
+                self._idle_response_order = deque(
+                    response_id
+                    for response_id in self._idle_response_order
+                    if response_id not in responses_to_close
+                )
             cancellations: list[QueueCancellation] = []
             for job_id, entry in list(self._entries.items()):
                 matches = (
@@ -274,6 +285,8 @@ class PhraseQueue:
             if response_id in self._closed_responses:
                 self._next_sequence_by_response.pop(response_id, None)
                 self._record_closed_response(response_id)
+            else:
+                self._record_idle_response(response_id)
         else:
             self._response_live_jobs[response_id] = remaining_jobs
         self._terminal_order.append(job_id)
@@ -293,6 +306,15 @@ class PhraseQueue:
         while len(self._closed_response_order) > self._tombstone_limit:
             expired_response_id = self._closed_response_order.popleft()
             self._closed_responses.discard(expired_response_id)
+
+    def _record_idle_response(self, response_id: str) -> None:
+        if response_id not in self._idle_response_order:
+            self._idle_response_order.append(response_id)
+        while len(self._idle_response_order) > self._tombstone_limit:
+            expired_response_id = self._idle_response_order.popleft()
+            self._next_sequence_by_response.pop(expired_response_id, None)
+            self._closed_responses.add(expired_response_id)
+            self._record_closed_response(expired_response_id)
 
 
 @dataclass(frozen=True, slots=True)

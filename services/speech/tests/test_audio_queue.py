@@ -355,6 +355,27 @@ async def test_final_response_retires_sequence_state_and_scrubs_repr() -> None:
         await queue.enqueue(_job("job:late"))
 
 
+async def test_abandoned_nonfinal_response_sequence_state_is_bounded() -> None:
+    queue = PhraseQueue(max_depth=1, tombstone_limit=1)
+    first = _job("job:first", response_id="response:first")
+    await queue.enqueue(first)
+    assert await queue.finish(await queue.next()) is True
+
+    second = _job("job:second", response_id="response:second")
+    await queue.enqueue(second)
+    assert await queue.finish(await queue.next()) is True
+
+    with pytest.raises(ValueError, match="already final"):
+        await queue.enqueue(
+            _job(
+                "job:first:late",
+                response_id="response:first",
+                sequence=1,
+                is_final=True,
+            )
+        )
+
+
 async def test_input_credit_window_is_bounded_and_replenished() -> None:
     credits = InputCreditWindow(max_frames=1, max_bytes=640)
     await credits.reserve(utterance_id="utterance:1", sequence=0, byte_length=640)
