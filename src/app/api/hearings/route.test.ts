@@ -19,6 +19,7 @@ import {
   FINAL_BOUND_INTERRUPTION_LEASE_DURATION_MS,
 } from "@/domain/objections/final-bound-lease";
 import {
+  OpponentPlannerRequestSchema,
   WITNESS_ANSWER_REQUEST_SCHEMA_VERSION,
   WitnessAnswerRequestSchema,
 } from "@/domain/courtroom-ai";
@@ -40,7 +41,10 @@ import {
   createObjectionRulingOutputFixture,
   createObjectionRulingRequestFixture,
 } from "@/server/courtroom-ai/judicial-response.test-fixtures";
-import { createOpponentPlannerRequestFixture } from "@/server/courtroom-ai/opponent-planner.test-fixtures";
+import {
+  createOpponentPlannerOutputFixture,
+  createOpponentPlannerRequestFixture,
+} from "@/server/courtroom-ai/opponent-planner.test-fixtures";
 
 const courtroomProviderHarness = vi.hoisted(() => ({
   steps: [] as import("@/server/courtroom-ai").ScriptedCourtroomModelStep[],
@@ -76,6 +80,7 @@ vi.mock("@/server/courtroom-ai", async (importOriginal) => {
 
 import { GET as readHearing } from "./[trialId]/route";
 import { POST as commandHearing } from "./[trialId]/commands/route";
+import { POST as recoverContinuation } from "./[trialId]/continuation/recover/route";
 import { POST as interruptHearing } from "./[trialId]/interruptions/route";
 import { POST as recoverInterruption } from "./[trialId]/interruptions/recover/route";
 import { POST as startHearing } from "./route";
@@ -691,6 +696,137 @@ describe("hearing BFF routes", () => {
     ]);
     expect(JSON.stringify(requests)).not.toContain("appendTrusted");
     expect(JSON.stringify(requests)).not.toContain("actor:judge");
+  });
+
+  it("recovers the canonical continuation without browser-selected authority", async () => {
+    configureEnvironment();
+    const fixture = createOpponentPlannerRequestFixture();
+    const continuationRequest = OpponentPlannerRequestSchema.parse({
+      ...fixture,
+      trialId: TRIAL_ID,
+      expectedStateVersion: VIEW.trial.version,
+      expectedLastEventId: VIEW.trial.lastEventId,
+      knowledgeView: {
+        ...fixture.knowledgeView,
+        trialId: TRIAL_ID,
+        stateVersion: VIEW.trial.version,
+        publicRecord: {
+          ...fixture.knowledgeView.publicRecord,
+          trialId: TRIAL_ID,
+          stateVersion: VIEW.trial.version,
+        },
+      },
+    });
+    courtroomProviderHarness.steps.push({
+      type: "output",
+      output: createOpponentPlannerOutputFixture(),
+    });
+    const forwarded: Array<Readonly<{ path: string; body: unknown }>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        const rawUrl =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        const path = new URL(rawUrl).pathname;
+        const body = JSON.parse(String(init?.body)) as unknown;
+        forwarded.push({ path, body });
+        if (path === "/service/hearings/continuation/prepare") {
+          return Response.json({
+            schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+            status: "model_required",
+            request: continuationRequest,
+          });
+        }
+        if (path === "/service/hearings/opponent-plan/commit") {
+          return Response.json({
+            schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+            status: "completed",
+            view: VIEW,
+          });
+        }
+        throw new Error(`Unexpected service path ${path}`);
+      }),
+    );
+    const cookie = `${CASE_OWNER_COOKIE_NAME}=${sessionCookie()}`;
+
+    const response = await recoverContinuation(
+      new NextRequest(
+        `${PUBLIC_ORIGIN}/api/hearings/${TRIAL_ID}/continuation/recover`,
+        {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            "Content-Type": "application/json",
+            Origin: PUBLIC_ORIGIN,
+          },
+          body: JSON.stringify({
+            actorId: "actor:judge",
+            command: { intent: { type: "finish_trial" } },
+          }),
+        },
+      ),
+      { params: Promise.resolve({ trialId: TRIAL_ID }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(VIEW);
+    expect(forwarded[0]).toEqual({
+      path: "/service/hearings/continuation/prepare",
+      body: { ownerId: `owner:${SESSION_ID}`, trialId: TRIAL_ID },
+    });
+    expect(forwarded[1]).toMatchObject({
+      path: "/service/hearings/opponent-plan/commit",
+      body: {
+        ownerId: `owner:${SESSION_ID}`,
+        trialId: TRIAL_ID,
+        generation: {
+          trialId: TRIAL_ID,
+          callId: continuationRequest.callId,
+          decisionId: continuationRequest.decisionId,
+        },
+      },
+    });
+    expect(JSON.stringify(forwarded[0])).not.toContain("actor");
+    expect(JSON.stringify(forwarded[0])).not.toContain("command");
+    expect(courtroomProviderHarness.providers).toHaveLength(1);
+    expect(
+      courtroomProviderHarness.providers[0]?.requests.map(({ task }) => task),
+    ).toEqual(["plan_opponent"]);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rejects untrusted or unsigned continuation recovery before Convex", async () => {
+    configureEnvironment();
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const cookie = `${CASE_OWNER_COOKIE_NAME}=${sessionCookie()}`;
+
+    const crossOriginResponse = await recoverContinuation(
+      new NextRequest(
+        `${PUBLIC_ORIGIN}/api/hearings/${TRIAL_ID}/continuation/recover`,
+        {
+          method: "POST",
+          headers: { Cookie: cookie, Origin: "https://attacker.test" },
+        },
+      ),
+      { params: Promise.resolve({ trialId: TRIAL_ID }) },
+    );
+    const unsignedResponse = await recoverContinuation(
+      new NextRequest(
+        `${PUBLIC_ORIGIN}/api/hearings/${TRIAL_ID}/continuation/recover`,
+        { method: "POST", headers: { Origin: PUBLIC_ORIGIN } },
+      ),
+      { params: Promise.resolve({ trialId: TRIAL_ID }) },
+    );
+
+    expect(crossOriginResponse.status).toBe(403);
+    expect(unsignedResponse.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(courtroomProviderHarness.providers).toHaveLength(0);
   });
 
   it("rejects resume without the signed owner session before calling Convex", async () => {

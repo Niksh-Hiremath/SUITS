@@ -105,6 +105,17 @@ function readable(value: string): string {
   return value.replaceAll("_", " ").replaceAll("-", " ");
 }
 
+function sameHearingHead(
+  left: HearingRuntimeViewV1 | null,
+  right: HearingRuntimeViewV1,
+): boolean {
+  return (
+    left?.trial.trialId === right.trial.trialId &&
+    left.trial.version === right.trial.version &&
+    left.trial.lastEventId === right.trial.lastEventId
+  );
+}
+
 function phaseLabel(view: HearingRuntimeViewV1 | null): string {
   if (!view) return "Case briefing";
   if (view.trial.phase === "complete") return "Record complete";
@@ -226,6 +237,12 @@ function HearingPageContent() {
   const interruptionRecoveryRunRef = useRef<symbol | null>(null);
   const requestSpeechDrainRef = useRef<() => void>(() => undefined);
   const recoverDurableInterruptionRef = useRef<
+    (
+      previous: HearingRuntimeViewV1,
+      signal?: AbortSignal,
+    ) => Promise<void>
+  >(async () => undefined);
+  const recoverDurableContinuationRef = useRef<
     (
       previous: HearingRuntimeViewV1,
       signal?: AbortSignal,
@@ -421,8 +438,20 @@ function HearingPageContent() {
         viewRef.current = parsed.data;
         setView(parsed.data);
         speechControllerRef.current?.baselineView(parsed.data);
-        void recoverDurableInterruptionRef.current(
+        await recoverDurableInterruptionRef.current(
           parsed.data,
+          controller.signal,
+        );
+        const recoveredHead = viewRef.current;
+        if (
+          controller.signal.aborted ||
+          recoveredHead === null ||
+          recoveredHead.trial.trialId !== parsed.data.trial.trialId
+        ) {
+          return;
+        }
+        await recoverDurableContinuationRef.current(
+          recoveredHead,
           controller.signal,
         );
       } catch (caught) {
@@ -635,6 +664,7 @@ function HearingPageContent() {
   useEffect(() => {
     requestSpeechDrainRef.current = requestSpeechDrain;
     recoverDurableInterruptionRef.current = recoverDurableInterruption;
+    recoverDurableContinuationRef.current = recoverDurableContinuation;
   });
 
   function setPendingIntentState(intent: HearingPlayerIntent | null): void {
@@ -669,6 +699,61 @@ function HearingPageContent() {
     } catch {
       return false;
     }
+  }
+
+  async function recoverDurableContinuation(
+    previous: HearingRuntimeViewV1,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (signal?.aborted || !sameHearingHead(viewRef.current, previous)) return;
+    await executeOrThrow(async () => {
+      if (signal?.aborted || !sameHearingHead(viewRef.current, previous)) return;
+      try {
+        const response = await fetch(
+          `/api/hearings/${encodeURIComponent(
+            previous.trial.trialId,
+          )}/continuation/recover`,
+          {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            ...(signal === undefined ? {} : { signal }),
+          },
+        );
+        if (!response.ok) throw new Error(await responseError(response));
+        const parsed = HearingRuntimeViewV1Schema.safeParse(
+          await response.json(),
+        );
+        if (!parsed.success) {
+          throw new Error("The recovered courtroom response was invalid.");
+        }
+        if (signal?.aborted || !sameHearingHead(viewRef.current, previous)) {
+          return;
+        }
+        const next = parsed.data;
+        if (
+          next.trial.trialId !== previous.trial.trialId ||
+          next.trial.version < previous.trial.version ||
+          (next.trial.version === previous.trial.version &&
+            next.trial.lastEventId !== previous.trial.lastEventId)
+        ) {
+          throw new Error(
+            "The recovered courtroom record moved behind the current head.",
+          );
+        }
+        if (sameHearingHead(next, previous)) return;
+        publishView(next);
+        queueSpeech({
+          kind: "view",
+          previous,
+          next,
+          source: "recovery",
+        });
+      } catch (caught) {
+        if (signal?.aborted) return;
+        throw caught;
+      }
+    });
   }
 
   async function beginHearing(): Promise<void> {

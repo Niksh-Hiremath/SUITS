@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { HearingCommandPreparationSchema } from "@/domain/hearing-runtime";
+import {
+  HearingCommandPreparationSchema,
+  type HearingCommandPreparation,
+} from "@/domain/hearing-runtime";
 import { callConvexCaseService } from "@/server/case-api";
 
 import type { CourtroomCommandDurableService } from "./courtroom-command";
@@ -12,6 +15,20 @@ const TerminalModelCallResponseSchema = z
     replayed: z.boolean(),
   })
   .strict();
+
+/** Fetch the canonical pending continuation without accepting browser authority. */
+export async function prepareCourtroomContinuationForOwner(input: Readonly<{
+  ownerId: string;
+  trialId: string;
+  signal?: AbortSignal;
+}>): Promise<HearingCommandPreparation> {
+  return await callConvexCaseService({
+    path: "/service/hearings/continuation/prepare",
+    body: { ownerId: input.ownerId, trialId: input.trialId },
+    responseSchema: HearingCommandPreparationSchema,
+    signal: input.signal,
+  });
+}
 
 /** Build the owner-bound durable adapter shared by protected hearing routes. */
 export function createCourtroomCommandDurableService(input: Readonly<{

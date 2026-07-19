@@ -24,6 +24,12 @@ const SOURCE_PATHS = {
   commandRoute: fileURLToPath(
     new URL("../api/hearings/[trialId]/commands/route.ts", import.meta.url),
   ),
+  continuationRecoveryRoute: fileURLToPath(
+    new URL(
+      "../api/hearings/[trialId]/continuation/recover/route.ts",
+      import.meta.url,
+    ),
+  ),
   durableService: fileURLToPath(
     new URL("../../server/hearing-api/durable-service.ts", import.meta.url),
   ),
@@ -76,6 +82,9 @@ describe("V3 hearing page boundary", () => {
       'path: "/service/hearings/command/prepare"',
     );
     expect(sources.durableService).toContain(
+      'path: "/service/hearings/continuation/prepare"',
+    );
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/command/commit"',
     );
     expect(sources.durableService).toContain(
@@ -91,10 +100,18 @@ describe("V3 hearing page boundary", () => {
       'path: "/service/hearings/debrief/commit"',
     );
     expect(sources.commandRoute).toContain("orchestrateCourtroomCommand");
+    expect(sources.continuationRecoveryRoute).toContain(
+      "orchestratePreparedCourtroomCommand",
+    );
+    expect(sources.continuationRecoveryRoute).toContain(
+      "prepareCourtroomContinuationForOwner",
+    );
     expect(sources.durableService).toContain(
       'path: "/service/hearings/model-call/terminal"',
     );
     expect(sources.page).toContain("/interruptions");
+    expect(sources.page).toContain("/continuation/recover");
+    expect(sources.page).toContain("recoverDurableContinuation");
     expect(sources.page).toContain("interruptFinal:");
     expect(sources.interruptionService).toContain(
       'path: "/service/hearings/interruption/prepare"',
@@ -129,6 +146,9 @@ describe("V3 hearing page boundary", () => {
       '>("hearingRuntime:prepareCommand")',
     );
     expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:prepareContinuation")',
+    );
+    expect(sources.convexHttp).toContain(
       '>("hearingRuntime:commitWitnessGeneration")',
     );
     expect(sources.convexHttp).toContain(
@@ -153,6 +173,9 @@ describe("V3 hearing page boundary", () => {
     expect(sources.runtime).toContain("export const read = internalAction");
     expect(sources.runtime).toContain(
       "export const prepareCommand = internalAction",
+    );
+    expect(sources.runtime).toContain(
+      "export const prepareContinuation = internalAction",
     );
     expect(sources.runtime).toContain(
       "export const commitWitnessGeneration = internalAction",
