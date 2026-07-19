@@ -1,0 +1,1714 @@
+import type {
+  HearingPlayerIntent,
+  HearingRuntimeViewV1,
+} from "@/domain/hearing-runtime";
+
+import {
+  BrowserAudioCaptureController,
+  AudioCaptureError,
+  CAPTURE_SAMPLE_RATE_HZ,
+  type AudioCaptureControllerOptions,
+  type AudioCaptureFrame,
+  type AudioCaptureSnapshot,
+  type AudioCaptureStatus,
+} from "./audio-capture";
+import {
+  BrowserAudioPlaybackController,
+  AudioPlaybackError,
+  type AudioPlaybackCompletion,
+  type AudioPlaybackControllerOptions,
+  type AudioPlaybackJobIdentity,
+  type AudioPlaybackStatus,
+  type AudioPlaybackTimingBatch,
+} from "./audio-playback";
+import {
+  LocalSpeechClient,
+  SpeechClientError,
+  type CancelSynthesisRequest,
+  type SpeechClientEvent,
+  type SpeechClientOptions,
+  type SpeechConnectionInfo,
+  type StartUtteranceOptions,
+  type SynthesisRequest,
+} from "./client";
+import {
+  freezeHearingVoiceContext,
+  HearingVoicePolicyError,
+  selectSpeakableTranscriptDelta,
+  splitSpeechPhrases,
+  validateHearingVoiceContext,
+  voiceContextToIntent,
+  type HearingSpeechViewSource,
+  type HearingVoiceContext,
+  type HearingVoiceInputMode,
+} from "./hearing-policy";
+import {
+  assertSpeechIdentifier,
+  type SpeechCapabilitiesEvent,
+} from "./protocol";
+
+const MAX_JOBS_PER_RESPONSE = 64;
+const DEFAULT_FINAL_TIMEOUT_MS = 20_000;
+const DEFAULT_TTS_TIMEOUT_MS = 30_000;
+const MIN_TIMEOUT_MS = 100;
+const SPEAKER_TEST_CLIP_ID = "courtroom.sustained.v1";
+const SPEAKER_TEST_PHRASE = "Sustained. Local courtroom audio is ready.";
+const TRANSCRIPT_DIVERGED_MESSAGE =
+  "The courtroom transcript changed unexpectedly; earlier turns will not be replayed.";
+
+export type HearingControllerLifecycle =
+  | "idle"
+  | "preparing"
+  | "ready"
+  | "recording"
+  | "processing"
+  | "speaking"
+  | "recoverable_error"
+  | "fatal_error"
+  | "closed";
+
+export type HearingCapabilityProviderSummary = Readonly<{
+  providerId: string;
+  kind: "stt" | "tts" | "vad";
+  ready: boolean;
+  loaded: boolean;
+  device: "cuda" | "cpu" | "fake" | "unavailable";
+  supportsStreaming: boolean;
+  supportsTimings: boolean;
+  warmupLatencyMs: number | null;
+}>;
+
+export type HearingCapabilitySummary = Readonly<{
+  serviceMode: "fake" | "cpu" | "cuda";
+  cuda: Readonly<{
+    available: boolean;
+    deviceName: string | null;
+  }>;
+  providers: readonly HearingCapabilityProviderSummary[];
+  warmupCompleted: boolean;
+  warmupLatencyMs: number | null;
+  cachedClipIds: readonly string[];
+  maxTtsQueueDepth: number;
+}>;
+
+export type HearingControllerSnapshot = Readonly<{
+  lifecycle: HearingControllerLifecycle;
+  code: string | null;
+  message: string | null;
+  partialText: string;
+  activeMode: HearingVoiceInputMode | null;
+  capabilities: HearingCapabilitySummary | null;
+  captureStatus: AudioCaptureStatus;
+  playbackStatus: AudioPlaybackStatus;
+}>;
+
+export type HearingFinalSubmission = Readonly<{
+  context: HearingVoiceContext;
+  text: string;
+  intent: HearingPlayerIntent;
+}>;
+
+export interface HearingSpeechClientPort {
+  subscribe(listener: (event: SpeechClientEvent) => void): () => void;
+  connect(): Promise<SpeechConnectionInfo>;
+  loadModels(options?: {
+    readonly requestId?: string;
+    readonly sttProvider?: string;
+    readonly ttsProvider?: string;
+    readonly warmup?: boolean;
+  }): Promise<SpeechCapabilitiesEvent>;
+  startUtterance(options: StartUtteranceOptions): void;
+  sendPcmFrame(utteranceId: string, samples: Int16Array): number;
+  endUtterance(utteranceId: string): void;
+  cancelUtterance(utteranceId: string, reason?: string): void;
+  synthesize(request: SynthesisRequest): void;
+  cancelSynthesis(request: CancelSynthesisRequest): void;
+  disconnect(reason?: string): void;
+}
+
+export interface HearingAudioCapturePort {
+  readonly state: AudioCaptureSnapshot;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export interface HearingAudioPlaybackPort {
+  readonly status: AudioPlaybackStatus;
+  activateResponse(responseId: string): Promise<void>;
+  startJob(identity: AudioPlaybackJobIdentity): Promise<AudioPlaybackCompletion>;
+  enqueueFrame(frame: {
+    readonly jobId: string;
+    readonly responseId: string;
+    readonly actor: string;
+    readonly sequence: number;
+    readonly frameSequence: number;
+    readonly byteLength: number;
+    readonly durationMs: number;
+    readonly sampleRateHz: number;
+    readonly channels: 1;
+    readonly encoding: "pcm_s16le";
+    readonly pcm: ArrayBuffer;
+  }): unknown;
+  addTiming(batch: AudioPlaybackTimingBatch): void;
+  finishJob(identity: AudioPlaybackJobIdentity): Promise<AudioPlaybackCompletion>;
+  bargeIn(): void;
+  close(): Promise<void>;
+}
+
+export type HearingSpeechClientFactory = (
+  options: SpeechClientOptions,
+) => HearingSpeechClientPort;
+export type HearingAudioCaptureFactory = (
+  options: AudioCaptureControllerOptions,
+) => HearingAudioCapturePort;
+export type HearingAudioPlaybackFactory = (
+  options: AudioPlaybackControllerOptions,
+) => HearingAudioPlaybackPort;
+
+export type HearingControllerOptions = Readonly<{
+  url: string;
+  getView: () => HearingRuntimeViewV1 | null;
+  getActivity: () => Readonly<{ busy: boolean; pending: boolean }>;
+  commitFinal: (submission: HearingFinalSubmission) => Promise<void>;
+  clientId?: string;
+  idFactory?: (prefix: string) => string;
+  onStateChange?: (snapshot: HearingControllerSnapshot) => void;
+  clientFactory?: HearingSpeechClientFactory;
+  captureFactory?: HearingAudioCaptureFactory;
+  playbackFactory?: HearingAudioPlaybackFactory;
+  handshakeTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  finalTimeoutMs?: number;
+  ttsTimeoutMs?: number;
+}>;
+
+export class HearingControllerError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HearingControllerError";
+  }
+}
+
+type DeferredResult = Readonly<{
+  promise: Promise<HearingControllerError | null>;
+  resolve: (error: HearingControllerError | null) => void;
+}>;
+
+type RecordingState = {
+  generation: number;
+  utteranceId: string;
+  mode: HearingVoiceInputMode;
+  context: HearingVoiceContext;
+  finalReceived: DeferredResult;
+  completion: DeferredResult;
+  lastRevision: number;
+  finalHandled: boolean;
+  commitStarted: boolean;
+  postCommitRecovery: HearingControllerError | null;
+  stopPromise: Promise<void> | null;
+};
+
+type PlaybackJobState = {
+  generation: number;
+  playbackFence: number;
+  identity: AudioPlaybackJobIdentity;
+  completion: DeferredResult;
+  started: boolean;
+};
+
+type PreparationFailure = Readonly<{
+  generation: number;
+  error: HearingControllerError;
+}>;
+
+type DeveloperSubmissionState = {
+  generation: number;
+  failure: HearingControllerError | null;
+};
+
+type SpeechUnit = Readonly<{
+  actor: string;
+  text?: string;
+  clipId?: string;
+}>;
+
+const SAFE_MESSAGES = Object.freeze({
+  CLOSED: "The local hearing audio controller is closed.",
+  NOT_READY: "Local courtroom audio is not ready.",
+  INVALID_TIMEOUT: "A local courtroom audio timeout is invalid.",
+  CAPABILITIES_UNAVAILABLE:
+    "The local speech companion is not ready for streaming recognition and speech.",
+  PREPARE_FAILED: "Local courtroom audio could not be prepared.",
+  RECORDING_FAILED: "Microphone input could not be recorded safely.",
+  STT_BACKPRESSURE:
+    "The local speech companion could not accept microphone input quickly enough.",
+  FINAL_TIMEOUT: "The local speech companion did not finish recognition in time.",
+  STALE_FINAL: "The courtroom changed before that spoken action could be committed.",
+  COMMIT_FAILED: "The spoken courtroom action could not be committed.",
+  PLAYBACK_FAILED: "Local courtroom speech could not be played.",
+  PLAYBACK_TIMEOUT: "Local courtroom speech did not finish in time.",
+  SPEECH_CANCELLED: "Local courtroom speech was cancelled.",
+  SPEECH_DISCONNECTED: "The local speech companion disconnected.",
+  SPEECH_SERVICE_ERROR: "The local speech companion reported an error.",
+  INVALID_IDENTIFIER: "A local speech operation identifier was invalid.",
+  INVALID_TEXT: "The spoken courtroom text was empty or too long.",
+  BUSY: "Another local courtroom audio operation is already active.",
+  BARGED_IN: "Courtroom speech was interrupted by microphone input.",
+  CLOSE_FAILED: "Local courtroom audio could not be fully released.",
+});
+
+function createDeferredResult(): DeferredResult {
+  let settled = false;
+  let settle: ((error: HearingControllerError | null) => void) | null = null;
+  const promise = new Promise<HearingControllerError | null>((resolve) => {
+    settle = resolve;
+  });
+  return Object.freeze({
+    promise,
+    resolve(error: HearingControllerError | null): void {
+      if (settled || settle === null) return;
+      settled = true;
+      settle(error);
+    },
+  });
+}
+
+function defaultIdFactory(prefix: string): string {
+  const suffix =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`;
+  return `${prefix}-${suffix}`;
+}
+
+function freezeSnapshot(
+  value: HearingControllerSnapshot,
+): HearingControllerSnapshot {
+  return Object.freeze({ ...value });
+}
+
+function summarizeCapabilities(
+  connection: SpeechConnectionInfo,
+  capabilities: SpeechCapabilitiesEvent,
+): HearingCapabilitySummary {
+  const providers = Object.freeze(
+    capabilities.providers.map((provider) =>
+      Object.freeze({
+        providerId: provider.providerId,
+        kind: provider.kind,
+        ready: provider.ready,
+        loaded: provider.loaded,
+        device: provider.device,
+        supportsStreaming: provider.supportsStreaming,
+        supportsTimings: provider.supportsTimings,
+        warmupLatencyMs: provider.warmupLatencyMs ?? null,
+      }),
+    ),
+  );
+  const requiredProviders = providers.filter(
+    (provider) => provider.kind === "stt" || provider.kind === "tts",
+  );
+  const warmups = requiredProviders
+    .map((provider) => provider.warmupLatencyMs)
+    .filter((value): value is number => value !== null);
+  return Object.freeze({
+    serviceMode: connection.ready.mode,
+    cuda: Object.freeze({
+      available: capabilities.cuda.available,
+      deviceName: capabilities.cuda.deviceName ?? null,
+    }),
+    providers,
+    warmupCompleted: requiredProviders.every(
+      (provider) => provider.loaded && provider.ready,
+    ),
+    warmupLatencyMs: warmups.length === 0 ? null : Math.max(...warmups),
+    cachedClipIds: Object.freeze([...capabilities.cachedClipIds]),
+    maxTtsQueueDepth: capabilities.maxTtsQueueDepth,
+  });
+}
+
+function supportsRequiredSpeech(capabilities: SpeechCapabilitiesEvent): boolean {
+  const streamingStt = capabilities.providers.some(
+    (provider) =>
+      provider.kind === "stt" &&
+      provider.loaded &&
+      provider.ready &&
+      provider.supportsStreaming,
+  );
+  const readyTts = capabilities.providers.some(
+    (provider) =>
+      provider.kind === "tts" &&
+      provider.loaded &&
+      provider.ready &&
+      provider.supportsStreaming,
+  );
+  return streamingStt && readyTts;
+}
+
+function safeActorId(actor: HearingRuntimeViewV1["transcript"][number]["actor"]): string {
+  let hash = 2_166_136_261;
+  for (const character of actor.actorId) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `actor.${actor.role}.${(hash >>> 0).toString(36)}`;
+}
+
+function normalizeText(text: string, mode: HearingVoiceInputMode): string {
+  const normalized = text.trim().replace(/\s+/gu, " ");
+  const maximum = mode === "question" ? 8_000 : 20_000;
+  if (normalized.length === 0 || normalized.length > maximum) {
+    throw new HearingControllerError("INVALID_TEXT", SAFE_MESSAGES.INVALID_TEXT);
+  }
+  return normalized;
+}
+
+function sameBaseline(
+  expected: HearingRuntimeViewV1 | null,
+  supplied: HearingRuntimeViewV1 | null,
+): boolean {
+  if (expected === null || supplied === null) return expected === supplied;
+  if (
+    expected.trial.trialId !== supplied.trial.trialId ||
+    expected.trial.version !== supplied.trial.version ||
+    expected.trial.lastEventId !== supplied.trial.lastEventId ||
+    expected.transcript.length !== supplied.transcript.length
+  ) {
+    return false;
+  }
+  return expected.transcript.every(
+    (turn, index) => turn.turnId === supplied.transcript[index]?.turnId,
+  );
+}
+
+function controllerError(cause: unknown): HearingControllerError {
+  if (cause instanceof HearingControllerError) return cause;
+  if (
+    cause instanceof HearingVoicePolicyError ||
+    cause instanceof AudioCaptureError ||
+    cause instanceof AudioPlaybackError
+  ) {
+    return new HearingControllerError(cause.code, cause.message);
+  }
+  if (cause instanceof SpeechClientError && cause.code === "STT_BACKPRESSURE") {
+    return new HearingControllerError(
+      "STT_BACKPRESSURE",
+      SAFE_MESSAGES.STT_BACKPRESSURE,
+    );
+  }
+  if (cause instanceof SpeechClientError) {
+    return new HearingControllerError(
+      cause.code,
+      SAFE_MESSAGES.SPEECH_SERVICE_ERROR,
+    );
+  }
+  return new HearingControllerError("CONTROLLER_FAILURE", SAFE_MESSAGES.PREPARE_FAILED);
+}
+
+function assertTimeout(value: number): number {
+  if (!Number.isSafeInteger(value) || value < MIN_TIMEOUT_MS) {
+    throw new HearingControllerError("INVALID_TIMEOUT", SAFE_MESSAGES.INVALID_TIMEOUT);
+  }
+  return value;
+}
+
+export class HearingController {
+  private readonly options: HearingControllerOptions;
+  private readonly idFactory: (prefix: string) => string;
+  private readonly client: HearingSpeechClientPort;
+  private readonly capture: HearingAudioCapturePort;
+  private readonly playback: HearingAudioPlaybackPort;
+  private readonly finalTimeoutMs: number;
+  private readonly ttsTimeoutMs: number;
+  private readonly listeners = new Set<
+    (snapshot: HearingControllerSnapshot) => void
+  >();
+
+  private snapshotValue: HearingControllerSnapshot;
+  private generation = 0;
+  private playbackFence = 0;
+  private unsubscribeClient: (() => void) | null = null;
+  private recording: RecordingState | null = null;
+  private activePlaybackJob: PlaybackJobState | null = null;
+  private activePlaybackResponseId: string | null = null;
+  private frameForwarding = false;
+  private baseline: HearingRuntimeViewV1 | null = null;
+  private clientSessionReady = false;
+  private preparingGeneration: number | null = null;
+  private preparationFailure: PreparationFailure | null = null;
+  private developerSubmission: DeveloperSubmissionState | null = null;
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
+
+  constructor(options: HearingControllerOptions) {
+    this.options = options;
+    this.idFactory = options.idFactory ?? defaultIdFactory;
+    this.finalTimeoutMs = assertTimeout(
+      options.finalTimeoutMs ?? DEFAULT_FINAL_TIMEOUT_MS,
+    );
+    this.ttsTimeoutMs = assertTimeout(
+      options.ttsTimeoutMs ?? DEFAULT_TTS_TIMEOUT_MS,
+    );
+
+    const clientFactory =
+      options.clientFactory ??
+      ((clientOptions: SpeechClientOptions) =>
+        new LocalSpeechClient(clientOptions));
+    const captureFactory =
+      options.captureFactory ??
+      ((captureOptions: AudioCaptureControllerOptions) =>
+        new BrowserAudioCaptureController(captureOptions));
+    const playbackFactory =
+      options.playbackFactory ??
+      ((playbackOptions: AudioPlaybackControllerOptions) =>
+        new BrowserAudioPlaybackController(playbackOptions));
+
+    const clientId = assertSpeechIdentifier(
+      options.clientId ?? this.createId("hearing-client"),
+    );
+    this.client = clientFactory({
+      url: options.url,
+      clientId,
+      idFactory: this.idFactory,
+      ...(options.handshakeTimeoutMs === undefined
+        ? {}
+        : { handshakeTimeoutMs: options.handshakeTimeoutMs }),
+      ...(options.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: options.requestTimeoutMs }),
+    });
+    this.capture = captureFactory({
+      onFrame: (frame) => this.handleCaptureFrame(frame),
+      onStateChange: (snapshot) => this.handleCaptureState(snapshot),
+    });
+    this.playback = playbackFactory({
+      maxJobsPerResponse: MAX_JOBS_PER_RESPONSE,
+      onStatusChange: (status) => this.handlePlaybackStatus(status),
+    });
+    this.snapshotValue = freezeSnapshot({
+      lifecycle: "idle",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: null,
+      capabilities: null,
+      captureStatus: this.capture.state.status,
+      playbackStatus: this.playback.status,
+    });
+  }
+
+  get snapshot(): HearingControllerSnapshot {
+    return this.snapshotValue;
+  }
+
+  subscribe(listener: (snapshot: HearingControllerSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  async prepare(): Promise<HearingControllerSnapshot> {
+    this.assertOpen();
+    if (
+      this.preparingGeneration !== null ||
+      this.developerSubmission !== null
+    ) {
+      throw new HearingControllerError("BUSY", SAFE_MESSAGES.BUSY);
+    }
+    if (
+      this.snapshotValue.lifecycle !== "idle" &&
+      this.snapshotValue.lifecycle !== "recoverable_error"
+    ) {
+      if (this.snapshotValue.lifecycle === "ready") return this.snapshotValue;
+      throw new HearingControllerError("BUSY", SAFE_MESSAGES.BUSY);
+    }
+
+    const generation = ++this.generation;
+    this.preparingGeneration = generation;
+    this.preparationFailure = null;
+    this.unsubscribeClient?.();
+    this.unsubscribeClient = this.client.subscribe((event) => {
+      if (generation !== this.generation || this.closed) return;
+      this.handleClientEvent(event, generation);
+    });
+    this.setSnapshot({
+      lifecycle: "preparing",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: null,
+    });
+
+    try {
+      const connection = await this.client.connect();
+      this.assertPreparationHealthy(generation);
+      this.clientSessionReady = true;
+      const capabilities = await this.client.loadModels({ warmup: true });
+      this.assertPreparationHealthy(generation);
+      const summary = summarizeCapabilities(connection, capabilities);
+      this.setSnapshot({ capabilities: summary });
+      this.assertPreparationHealthy(generation);
+      if (!supportsRequiredSpeech(capabilities)) {
+        throw new HearingControllerError(
+          "CAPABILITIES_UNAVAILABLE",
+          SAFE_MESSAGES.CAPABILITIES_UNAVAILABLE,
+        );
+      }
+
+      this.frameForwarding = false;
+      await this.capture.start();
+      this.assertPreparationHealthy(generation);
+      await this.capture.stop();
+      this.assertPreparationHealthy(generation);
+      this.preparingGeneration = null;
+      this.preparationFailure = null;
+      this.setSnapshot({
+        lifecycle: "ready",
+        code: null,
+        message: null,
+        partialText: "",
+        activeMode: null,
+      });
+      return this.snapshotValue;
+    } catch (cause) {
+      this.frameForwarding = false;
+      try {
+        await this.capture.stop();
+      } catch {
+        // The primary safe preparation error is retained below.
+      }
+      if (generation !== this.generation || this.closed) {
+        throw new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED);
+      }
+      const recordedFailure = this.preparationErrorFor(generation);
+      const error = recordedFailure ?? controllerError(cause);
+      this.preparingGeneration = null;
+      this.preparationFailure = null;
+      this.setRecoverable(error);
+      throw error;
+    }
+  }
+
+  async speakerTest(): Promise<void> {
+    this.requireReady();
+    const clipAvailable =
+      this.snapshotValue.capabilities?.cachedClipIds.includes(
+        SPEAKER_TEST_CLIP_ID,
+      ) ?? false;
+    await this.speakUnits([
+      Object.freeze(
+        clipAvailable
+          ? { actor: "actor.judge", clipId: SPEAKER_TEST_CLIP_ID }
+          : { actor: "actor.judge", text: SPEAKER_TEST_PHRASE },
+      ),
+    ]);
+  }
+
+  baselineView(view: HearingRuntimeViewV1): void {
+    this.assertOpen();
+    const selection = selectSpeakableTranscriptDelta(view, view, "baseline");
+    if (!selection.ok) {
+      throw new HearingControllerError(selection.code, selection.message);
+    }
+    this.baseline = view;
+  }
+
+  async adoptView(
+    previous: HearingRuntimeViewV1 | null,
+    next: HearingRuntimeViewV1,
+    source: HearingSpeechViewSource,
+  ): Promise<void> {
+    this.requireReady();
+    if (!sameBaseline(this.baseline, previous)) {
+      const error = new HearingControllerError(
+        "TRANSCRIPT_DIVERGED",
+        TRANSCRIPT_DIVERGED_MESSAGE,
+      );
+      this.setRecoverable(error);
+      throw error;
+    }
+    const selection = selectSpeakableTranscriptDelta(this.baseline, next, source);
+    if (!selection.ok) {
+      const error = new HearingControllerError(selection.code, selection.message);
+      this.setRecoverable(error);
+      throw error;
+    }
+    // Adopt the durable head before phrase construction: an irreparable model
+    // turn must be reported once, never replayed or allowed to deadlock later heads.
+    this.baseline = next;
+    const units: SpeechUnit[] = [];
+    try {
+      for (const turn of selection.turns) {
+        const actor = safeActorId(turn.actor);
+        for (const phrase of splitSpeechPhrases(turn.text)) {
+          units.push(Object.freeze({ actor, text: phrase }));
+        }
+      }
+    } catch (cause) {
+      const error = controllerError(cause);
+      this.setRecoverable(error);
+      throw error;
+    }
+    if (units.length > 0) await this.speakUnits(units);
+  }
+
+  async startRecording(mode: HearingVoiceInputMode): Promise<void> {
+    this.requirePreparedForRecording();
+    const context = this.freezeAndValidate(mode);
+    const generation = this.generation;
+    this.setSnapshot({
+      lifecycle: "preparing",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: mode,
+    });
+
+    try {
+      this.interruptPlaybackForRecording();
+      this.frameForwarding = false;
+      await this.capture.start();
+      this.assertGeneration(generation);
+      const utteranceId = this.createId("utterance");
+      const recording: RecordingState = {
+        generation,
+        utteranceId,
+        mode,
+        context,
+        finalReceived: createDeferredResult(),
+        completion: createDeferredResult(),
+        lastRevision: 0,
+        finalHandled: false,
+        commitStarted: false,
+        postCommitRecovery: null,
+        stopPromise: null,
+      };
+      this.client.startUtterance({
+        utteranceId,
+        sampleRateHz: CAPTURE_SAMPLE_RATE_HZ,
+        bargeIn: true,
+      });
+      this.recording = recording;
+      this.frameForwarding = true;
+      this.setSnapshot({
+        lifecycle: "recording",
+        code: null,
+        message: null,
+        partialText: "",
+        activeMode: mode,
+      });
+    } catch (cause) {
+      this.frameForwarding = false;
+      try {
+        await this.capture.stop();
+      } catch {
+        // The primary safe recording error is retained below.
+      }
+      const error = this.recordingError(cause);
+      this.setRecoverable(error);
+      throw error;
+    }
+  }
+
+  stopRecording(): Promise<void> {
+    const recording = this.recording;
+    if (recording === null || recording.generation !== this.generation) {
+      return Promise.reject(
+        new HearingControllerError("NOT_RECORDING", SAFE_MESSAGES.NOT_READY),
+      );
+    }
+    if (recording.stopPromise !== null) return recording.stopPromise;
+    this.frameForwarding = false;
+    const pending = Promise.resolve().then(() =>
+      this.stopRecordingInternal(recording),
+    );
+    recording.stopPromise = pending;
+    return pending;
+  }
+
+  private async stopRecordingInternal(recording: RecordingState): Promise<void> {
+    this.frameForwarding = false;
+    try {
+      await this.capture.stop();
+      if (
+        recording.generation !== this.generation ||
+        this.recording !== recording ||
+        this.closed
+      ) {
+        const closedError = await recording.completion.promise;
+        throw (
+          closedError ??
+          new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED)
+        );
+      }
+      if (!recording.finalHandled) this.client.endUtterance(recording.utteranceId);
+      if (!recording.finalHandled) {
+        this.setSnapshot({ lifecycle: "processing", partialText: "" });
+      }
+    } catch (cause) {
+      const error = this.recordingError(cause);
+      await this.failRecording(recording, error);
+      throw error;
+    }
+
+    const finalError = await this.waitForResult(
+      recording.finalReceived.promise,
+      this.finalTimeoutMs,
+      new HearingControllerError("FINAL_TIMEOUT", SAFE_MESSAGES.FINAL_TIMEOUT),
+    );
+    if (finalError !== null) {
+      if (!recording.finalHandled) await this.failRecording(recording, finalError);
+      throw finalError;
+    }
+    const completionError = await recording.completion.promise;
+    if (completionError !== null) throw completionError;
+  }
+
+  async submitDeveloperFinal(
+    mode: HearingVoiceInputMode,
+    text: string,
+  ): Promise<void> {
+    this.requireReady();
+    const context = this.freezeAndValidate(mode);
+    const normalized = normalizeText(text, context.mode);
+    const generation = this.generation;
+    const submissionState: DeveloperSubmissionState = {
+      generation,
+      failure: null,
+    };
+    this.developerSubmission = submissionState;
+    this.setSnapshot({
+      lifecycle: "processing",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: mode,
+    });
+    try {
+      await this.commitValidatedFinal(context, normalized, generation);
+      this.assertGeneration(generation);
+      if (this.developerSubmission !== submissionState) {
+        throw new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED);
+      }
+      this.developerSubmission = null;
+      if (submissionState.failure !== null) {
+        if (this.snapshotValue.lifecycle !== "fatal_error") {
+          this.setRecoverable(submissionState.failure);
+        }
+        return;
+      }
+      this.setSnapshot({
+        lifecycle: "ready",
+        code: null,
+        message: null,
+        partialText: "",
+        activeMode: null,
+      });
+    } catch (cause) {
+      if (this.developerSubmission === submissionState) {
+        this.developerSubmission = null;
+      }
+      const error = submissionState.failure ?? this.finalError(cause);
+      this.setRecoverable(error);
+      throw error;
+    }
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise !== null) return this.closePromise;
+    if (this.closed) return Promise.resolve();
+    ++this.generation;
+    ++this.playbackFence;
+    this.preparingGeneration = null;
+    this.preparationFailure = null;
+    this.developerSubmission = null;
+    this.closed = true;
+    this.unsubscribeClient?.();
+    this.unsubscribeClient = null;
+    this.frameForwarding = false;
+    const recording = this.recording;
+    this.recording = null;
+    const playbackJob = this.activePlaybackJob;
+    this.activePlaybackJob = null;
+    this.activePlaybackResponseId = null;
+    recording?.completion.resolve(
+      new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED),
+    );
+    recording?.finalReceived.resolve(
+      new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED),
+    );
+    playbackJob?.completion.resolve(
+      new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED),
+    );
+
+    const pending = Promise.resolve().then(() => this.closeInternal(recording));
+    this.closePromise = pending;
+    return pending;
+  }
+
+  private async closeInternal(recording: RecordingState | null): Promise<void> {
+    let failed = false;
+    try {
+      await this.capture.stop();
+    } catch {
+      failed = true;
+    }
+    if (recording !== null && !recording.finalHandled) {
+      try {
+        this.client.cancelUtterance(recording.utteranceId, "controller_closed");
+      } catch {
+        failed = true;
+      }
+    }
+    if (this.clientSessionReady) {
+      try {
+        this.client.cancelSynthesis({ scope: "all", reason: "controller_closed" });
+      } catch {
+        failed = true;
+      }
+    }
+    try {
+      await this.playback.close();
+    } catch {
+      failed = true;
+    }
+    try {
+      this.client.disconnect("controller_closed");
+    } catch {
+      failed = true;
+    }
+    this.setSnapshot({
+      lifecycle: "closed",
+      code: failed ? "CLOSE_FAILED" : null,
+      message: failed ? SAFE_MESSAGES.CLOSE_FAILED : null,
+      partialText: "",
+      activeMode: null,
+      captureStatus: this.capture.state.status,
+      playbackStatus: this.playback.status,
+    });
+    if (failed) {
+      throw new HearingControllerError("CLOSE_FAILED", SAFE_MESSAGES.CLOSE_FAILED);
+    }
+  }
+
+  private handleCaptureFrame(frame: AudioCaptureFrame): void {
+    const recording = this.recording;
+    if (
+      !this.frameForwarding ||
+      recording === null ||
+      recording.generation !== this.generation ||
+      recording.finalHandled ||
+      this.closed
+    ) {
+      return;
+    }
+    try {
+      this.client.sendPcmFrame(
+        recording.utteranceId,
+        new Int16Array(frame.pcm),
+      );
+    } catch (cause) {
+      this.frameForwarding = false;
+      const error = this.recordingError(cause);
+      void this.failRecording(recording, error);
+    }
+  }
+
+  private handleCaptureState(snapshot: AudioCaptureSnapshot): void {
+    if (this.closed && this.snapshotValue.lifecycle === "closed") return;
+    this.setSnapshot({ captureStatus: snapshot.status });
+    const recording = this.recording;
+    if (
+      snapshot.failure !== null &&
+      recording !== null &&
+      !recording.finalHandled &&
+      recording.generation === this.generation
+    ) {
+      this.frameForwarding = false;
+      void this.failRecording(
+        recording,
+        new HearingControllerError(
+          snapshot.failure.code,
+          SAFE_MESSAGES.RECORDING_FAILED,
+        ),
+      );
+    }
+  }
+
+  private handlePlaybackStatus(status: AudioPlaybackStatus): void {
+    if (this.closed && this.snapshotValue.lifecycle === "closed") return;
+    this.setSnapshot({ playbackStatus: status });
+  }
+
+  private handleClientEvent(event: SpeechClientEvent, generation: number): void {
+    if (generation !== this.generation || this.closed) return;
+    switch (event.type) {
+      case "stt_partial":
+        this.handlePartial(event.utteranceId, event.revision, event.text);
+        return;
+      case "stt_final":
+        this.handleFinal(event.utteranceId, event.revision, event.text);
+        return;
+      case "tts_started":
+        this.handleTtsStarted(event);
+        return;
+      case "tts_audio_frame":
+        this.handleTtsAudio(event);
+        return;
+      case "tts_timing":
+        this.handleTtsTiming(event);
+        return;
+      case "tts_finished":
+        this.handleTtsFinished(event);
+        return;
+      case "cancelled":
+        this.handleCancellation(event.target, event.targetId ?? null);
+        return;
+      case "error":
+        if (!this.errorMatchesActiveOperation(event.utteranceId, event.jobId)) return;
+        this.handleServiceFailure(event.fatal);
+        return;
+      case "client_error":
+        this.handleServiceFailure(false);
+        return;
+      case "client_state":
+        if (event.state === "disconnected") this.handleDisconnect();
+        return;
+      case "ready":
+      case "capabilities":
+      case "flow_control":
+      case "speech_started":
+      case "speech_ended":
+      case "metrics":
+      case "pong":
+        return;
+    }
+  }
+
+  private handlePartial(
+    utteranceId: string,
+    revision: number,
+    text: string,
+  ): void {
+    const recording = this.recording;
+    if (
+      recording === null ||
+      recording.generation !== this.generation ||
+      recording.utteranceId !== utteranceId ||
+      recording.finalHandled ||
+      revision <= recording.lastRevision
+    ) {
+      return;
+    }
+    recording.lastRevision = revision;
+    this.setSnapshot({ partialText: text });
+  }
+
+  private handleFinal(
+    utteranceId: string,
+    revision: number,
+    text: string,
+  ): void {
+    const recording = this.recording;
+    if (
+      recording === null ||
+      recording.generation !== this.generation ||
+      recording.utteranceId !== utteranceId ||
+      recording.finalHandled ||
+      revision < recording.lastRevision
+    ) {
+      return;
+    }
+    recording.lastRevision = revision;
+    recording.finalHandled = true;
+    recording.finalReceived.resolve(null);
+    this.frameForwarding = false;
+    this.setSnapshot({ lifecycle: "processing", partialText: "" });
+    void this.completeRecording(recording, text);
+  }
+
+  private async completeRecording(
+    recording: RecordingState,
+    text: string,
+  ): Promise<void> {
+    let failure: HearingControllerError | null = null;
+    try {
+      await this.capture.stop();
+      if (
+        recording.generation !== this.generation ||
+        this.recording !== recording ||
+        this.closed
+      ) {
+        return;
+      }
+      recording.commitStarted = true;
+      await this.commitValidatedFinal(
+        recording.context,
+        normalizeText(text, recording.context.mode),
+        recording.generation,
+      );
+      this.assertGeneration(recording.generation);
+    } catch (cause) {
+      failure = this.finalError(cause);
+    }
+    if (
+      recording.generation !== this.generation ||
+      this.recording !== recording ||
+      this.closed
+    ) {
+      recording.completion.resolve(
+        failure ?? new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED),
+      );
+      return;
+    }
+    this.recording = null;
+    recording.completion.resolve(failure);
+    if (failure === null) {
+      if (this.snapshotValue.lifecycle === "fatal_error") return;
+      if (recording.postCommitRecovery !== null) {
+        this.setRecoverable(recording.postCommitRecovery);
+      } else {
+        this.setSnapshot({
+          lifecycle: "ready",
+          code: null,
+          message: null,
+          partialText: "",
+          activeMode: null,
+        });
+      }
+    } else {
+      this.setRecoverable(failure);
+    }
+  }
+
+  private async commitValidatedFinal(
+    context: HearingVoiceContext,
+    text: string,
+    generation: number,
+  ): Promise<void> {
+    this.assertGeneration(generation);
+    const view = this.options.getView();
+    if (view === null) {
+      throw new HearingControllerError("STALE_FINAL", SAFE_MESSAGES.STALE_FINAL);
+    }
+    const validation = validateHearingVoiceContext(
+      context,
+      view,
+      this.options.getActivity(),
+    );
+    if (!validation.valid) {
+      throw new HearingControllerError(validation.code, validation.message);
+    }
+    const intent = voiceContextToIntent(context, text);
+    this.assertGeneration(generation);
+    await this.options.commitFinal(Object.freeze({ context, text, intent }));
+  }
+
+  private async failRecording(
+    recording: RecordingState,
+    error: HearingControllerError,
+  ): Promise<void> {
+    if (
+      recording.generation !== this.generation ||
+      this.recording !== recording ||
+      this.closed
+    ) {
+      return;
+    }
+    this.frameForwarding = false;
+    recording.finalHandled = true;
+    try {
+      this.client.cancelUtterance(recording.utteranceId, "recording_failed");
+    } catch {
+      // The utterance may already be terminal; the generation and forwarding fences remain.
+    }
+    try {
+      await this.capture.stop();
+    } catch {
+      // The original safe recording failure remains the actionable state.
+    }
+    if (this.recording !== recording || recording.generation !== this.generation) {
+      return;
+    }
+    this.recording = null;
+    recording.finalReceived.resolve(error);
+    recording.completion.resolve(error);
+    this.setRecoverable(error);
+  }
+
+  private handleTtsStarted(event: Extract<SpeechClientEvent, { type: "tts_started" }>): void {
+    const job = this.matchPlaybackJob(event);
+    if (job === null || job.started) return;
+    try {
+      const completion = this.playback.startJob(job.identity);
+      job.started = true;
+      void completion
+        .then((result) => {
+          if (
+            result.status !== "completed" &&
+            this.matchPlaybackJob(job.identity) === job
+          ) {
+            this.failPlaybackJob(
+              job,
+              "PLAYBACK_FAILED",
+              SAFE_MESSAGES.PLAYBACK_FAILED,
+            );
+          }
+        })
+        .catch(() => {
+          this.failPlaybackJob(
+            job,
+            "PLAYBACK_FAILED",
+            SAFE_MESSAGES.PLAYBACK_FAILED,
+          );
+        });
+    } catch {
+      this.failPlaybackJob(job, "PLAYBACK_FAILED", SAFE_MESSAGES.PLAYBACK_FAILED);
+    }
+  }
+
+  private handleTtsAudio(
+    event: Extract<SpeechClientEvent, { type: "tts_audio_frame" }>,
+  ): void {
+    const job = this.matchPlaybackJob(event.metadata);
+    if (job === null || !job.started) return;
+    try {
+      this.playback.enqueueFrame({
+        jobId: event.metadata.jobId,
+        responseId: event.metadata.responseId,
+        actor: event.metadata.actor,
+        sequence: event.metadata.sequence,
+        frameSequence: event.metadata.frameSequence,
+        byteLength: event.metadata.byteLength,
+        durationMs: event.metadata.durationMs,
+        sampleRateHz: event.metadata.sampleRateHz,
+        channels: event.metadata.channels,
+        encoding: event.metadata.encoding,
+        pcm: event.pcmS16le,
+      });
+      if (!event.acknowledge()) {
+        throw new HearingControllerError(
+          "PLAYBACK_FAILED",
+          SAFE_MESSAGES.PLAYBACK_FAILED,
+        );
+      }
+    } catch {
+      this.failPlaybackJob(job, "PLAYBACK_FAILED", SAFE_MESSAGES.PLAYBACK_FAILED);
+    }
+  }
+
+  private handleTtsTiming(
+    event: Extract<SpeechClientEvent, { type: "tts_timing" }>,
+  ): void {
+    const job = this.matchPlaybackJob(event);
+    if (job === null || !job.started) return;
+    try {
+      this.playback.addTiming({
+        jobId: event.jobId,
+        responseId: event.responseId,
+        actor: event.actor,
+        sequence: event.sequence,
+        marks: event.marks,
+      });
+    } catch {
+      this.failPlaybackJob(job, "PLAYBACK_FAILED", SAFE_MESSAGES.PLAYBACK_FAILED);
+    }
+  }
+
+  private handleTtsFinished(
+    event: Extract<SpeechClientEvent, { type: "tts_finished" }>,
+  ): void {
+    const job = this.matchPlaybackJob(event);
+    if (job === null || !job.started) return;
+    let completion: Promise<AudioPlaybackCompletion>;
+    try {
+      completion = this.playback.finishJob(job.identity);
+    } catch {
+      this.failPlaybackJob(job, "PLAYBACK_FAILED", SAFE_MESSAGES.PLAYBACK_FAILED);
+      return;
+    }
+    void completion
+      .then((result) => {
+        if (this.matchPlaybackJob(job.identity) !== job) return;
+        if (result.status !== "completed") {
+          this.failPlaybackJob(
+            job,
+            "SPEECH_CANCELLED",
+            SAFE_MESSAGES.SPEECH_CANCELLED,
+          );
+          return;
+        }
+        job.completion.resolve(null);
+      })
+      .catch(() => {
+        this.failPlaybackJob(job, "PLAYBACK_FAILED", SAFE_MESSAGES.PLAYBACK_FAILED);
+      });
+  }
+
+  private handleCancellation(
+    target: "utterance" | "job" | "response" | "all_synthesis",
+    targetId: string | null,
+  ): void {
+    const recording = this.recording;
+    if (
+      target === "utterance" &&
+      recording !== null &&
+      targetId === recording.utteranceId
+    ) {
+      if (recording.finalHandled || recording.commitStarted) return;
+      void this.failRecording(
+        recording,
+        new HearingControllerError(
+          "SPEECH_CANCELLED",
+          SAFE_MESSAGES.SPEECH_CANCELLED,
+        ),
+      );
+      return;
+    }
+    const job = this.activePlaybackJob;
+    const matchesPlayback =
+      job !== null &&
+      (target === "all_synthesis" ||
+        (target === "job" && targetId === job.identity.jobId) ||
+        (target === "response" && targetId === job.identity.responseId));
+    if (matchesPlayback) {
+      const error = new HearingControllerError(
+        "SPEECH_CANCELLED",
+        SAFE_MESSAGES.SPEECH_CANCELLED,
+      );
+      this.abortPlayback(error, false);
+      this.setRecoverable(error);
+    }
+  }
+
+  private handleServiceFailure(fatal: boolean): void {
+    const error = new HearingControllerError(
+      "SPEECH_SERVICE_ERROR",
+      SAFE_MESSAGES.SPEECH_SERVICE_ERROR,
+    );
+    this.recordPreparationFailure(error);
+    this.recordDeveloperSubmissionFailure(error);
+    if (fatal) this.clientSessionReady = false;
+    const recording = this.recording;
+    if (recording?.finalHandled || recording?.commitStarted) {
+      recording.postCommitRecovery = error;
+    } else if (recording !== null) {
+      void this.failRecording(recording, error);
+    }
+    if (this.activePlaybackJob !== null) this.abortPlayback(error, false);
+    if (fatal) this.setFatal(error);
+    else if (recording === null && this.activePlaybackJob === null) {
+      this.setRecoverable(error);
+    }
+  }
+
+  private handleDisconnect(): void {
+    this.clientSessionReady = false;
+    const error = new HearingControllerError(
+      "SPEECH_DISCONNECTED",
+      SAFE_MESSAGES.SPEECH_DISCONNECTED,
+    );
+    this.recordPreparationFailure(error);
+    this.recordDeveloperSubmissionFailure(error);
+    const recording = this.recording;
+    if (recording?.finalHandled || recording?.commitStarted) {
+      recording.postCommitRecovery = error;
+      this.setRecoverable(error);
+    } else if (recording !== null) {
+      void this.failRecording(recording, error);
+    }
+    if (this.activePlaybackJob !== null) this.abortPlayback(error, false);
+    if (recording === null && this.activePlaybackJob === null) {
+      this.setRecoverable(error);
+    }
+  }
+
+  private errorMatchesActiveOperation(
+    utteranceId: string | null | undefined,
+    jobId: string | null | undefined,
+  ): boolean {
+    if (utteranceId !== null && utteranceId !== undefined) {
+      if (this.recording?.utteranceId !== utteranceId) return false;
+    }
+    if (jobId !== null && jobId !== undefined) {
+      if (this.activePlaybackJob?.identity.jobId !== jobId) return false;
+    }
+    return true;
+  }
+
+  private async speakUnits(units: readonly SpeechUnit[]): Promise<void> {
+    this.requireReady();
+    if (units.length === 0) return;
+    const generation = this.generation;
+    const playbackFence = ++this.playbackFence;
+    this.setSnapshot({
+      lifecycle: "speaking",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: null,
+    });
+    try {
+      for (let offset = 0; offset < units.length; offset += MAX_JOBS_PER_RESPONSE) {
+        this.assertPlaybackFence(generation, playbackFence);
+        const responseUnits = units.slice(offset, offset + MAX_JOBS_PER_RESPONSE);
+        const responseId = this.createId("response");
+        await this.playback.activateResponse(responseId);
+        this.assertPlaybackFence(generation, playbackFence);
+        this.activePlaybackResponseId = responseId;
+
+        for (let sequence = 0; sequence < responseUnits.length; sequence += 1) {
+          this.assertPlaybackFence(generation, playbackFence);
+          const unit = responseUnits[sequence];
+          if (unit === undefined) continue;
+          const identity = Object.freeze({
+            jobId: this.createId("job"),
+            responseId,
+            actor: assertSpeechIdentifier(unit.actor),
+            sequence,
+          });
+          const job: PlaybackJobState = {
+            generation,
+            playbackFence,
+            identity,
+            completion: createDeferredResult(),
+            started: false,
+          };
+          this.activePlaybackJob = job;
+          const finalInResponse = sequence === responseUnits.length - 1;
+          this.client.synthesize(
+            unit.text === undefined
+              ? {
+                  ...identity,
+                  clipId: unit.clipId ?? SPEAKER_TEST_CLIP_ID,
+                  isFinal: finalInResponse,
+                }
+              : { ...identity, text: unit.text, isFinal: finalInResponse },
+          );
+          const error = await this.waitForResult(
+            job.completion.promise,
+            this.ttsTimeoutMs,
+            new HearingControllerError(
+              "PLAYBACK_TIMEOUT",
+              SAFE_MESSAGES.PLAYBACK_TIMEOUT,
+            ),
+          );
+          if (error !== null) throw error;
+          this.assertPlaybackFence(generation, playbackFence);
+          if (this.activePlaybackJob === job) this.activePlaybackJob = null;
+        }
+        if (this.activePlaybackResponseId === responseId) {
+          this.activePlaybackResponseId = null;
+        }
+      }
+      this.assertPlaybackFence(generation, playbackFence);
+      this.setSnapshot({
+        lifecycle: "ready",
+        code: null,
+        message: null,
+        partialText: "",
+        activeMode: null,
+      });
+    } catch (cause) {
+      const error = controllerError(cause);
+      if (
+        generation === this.generation &&
+        playbackFence === this.playbackFence &&
+        !this.closed
+      ) {
+        this.abortPlayback(error, true);
+        this.setRecoverable(error);
+      }
+      throw error;
+    }
+  }
+
+  private interruptPlaybackForRecording(): void {
+    const job = this.activePlaybackJob;
+    ++this.playbackFence;
+    this.activePlaybackJob = null;
+    this.activePlaybackResponseId = null;
+    job?.completion.resolve(
+      new HearingControllerError("BARGED_IN", SAFE_MESSAGES.BARGED_IN),
+    );
+    let failure: HearingControllerError | null = null;
+    try {
+      this.playback.bargeIn();
+    } catch {
+      failure = new HearingControllerError(
+        "PLAYBACK_FAILED",
+        SAFE_MESSAGES.PLAYBACK_FAILED,
+      );
+    }
+    try {
+      this.client.cancelSynthesis({ scope: "all", reason: "barge_in" });
+    } catch {
+      failure ??= new HearingControllerError(
+        "SPEECH_SERVICE_ERROR",
+        SAFE_MESSAGES.SPEECH_SERVICE_ERROR,
+      );
+    }
+    if (failure !== null) throw failure;
+  }
+
+  private abortPlayback(
+    error: HearingControllerError,
+    notifyService: boolean,
+  ): void {
+    ++this.playbackFence;
+    const job = this.activePlaybackJob;
+    this.activePlaybackJob = null;
+    this.activePlaybackResponseId = null;
+    job?.completion.resolve(error);
+    try {
+      this.playback.bargeIn();
+    } catch {
+      // The playback fence is already active.
+    }
+    if (notifyService) {
+      try {
+        this.client.cancelSynthesis({ scope: "all", reason: "playback_failed" });
+      } catch {
+        // The local playback fence remains authoritative for late events.
+      }
+    }
+  }
+
+  private failPlaybackJob(
+    job: PlaybackJobState,
+    code: string,
+    message: string,
+  ): void {
+    if (this.matchPlaybackJob(job.identity) !== job) return;
+    job.completion.resolve(new HearingControllerError(code, message));
+  }
+
+  private matchPlaybackJob(identity: {
+    readonly jobId: string;
+    readonly responseId: string;
+    readonly actor: string;
+    readonly sequence: number;
+  }): PlaybackJobState | null {
+    const job = this.activePlaybackJob;
+    if (
+      job === null ||
+      job.generation !== this.generation ||
+      job.playbackFence !== this.playbackFence ||
+      job.identity.jobId !== identity.jobId ||
+      job.identity.responseId !== identity.responseId ||
+      job.identity.actor !== identity.actor ||
+      job.identity.sequence !== identity.sequence
+    ) {
+      return null;
+    }
+    return job;
+  }
+
+  private freezeAndValidate(mode: HearingVoiceInputMode): HearingVoiceContext {
+    const view = this.options.getView();
+    if (view === null) {
+      throw new HearingControllerError("NOT_READY", SAFE_MESSAGES.NOT_READY);
+    }
+    let context: HearingVoiceContext;
+    try {
+      context = freezeHearingVoiceContext(mode, view);
+    } catch (cause) {
+      throw controllerError(cause);
+    }
+    const validation = validateHearingVoiceContext(
+      context,
+      view,
+      this.options.getActivity(),
+    );
+    if (!validation.valid) {
+      throw new HearingControllerError(validation.code, validation.message);
+    }
+    return context;
+  }
+
+  private createId(prefix: string): string {
+    try {
+      return assertSpeechIdentifier(this.idFactory(prefix));
+    } catch {
+      throw new HearingControllerError(
+        "INVALID_IDENTIFIER",
+        SAFE_MESSAGES.INVALID_IDENTIFIER,
+      );
+    }
+  }
+
+  private recordingError(cause: unknown): HearingControllerError {
+    if (cause instanceof HearingControllerError) return cause;
+    if (cause instanceof HearingVoicePolicyError || cause instanceof AudioCaptureError) {
+      return new HearingControllerError(cause.code, cause.message);
+    }
+    if (cause instanceof SpeechClientError && cause.code === "STT_BACKPRESSURE") {
+      return new HearingControllerError(
+        "STT_BACKPRESSURE",
+        SAFE_MESSAGES.STT_BACKPRESSURE,
+      );
+    }
+    return new HearingControllerError("RECORDING_FAILED", SAFE_MESSAGES.RECORDING_FAILED);
+  }
+
+  private finalError(cause: unknown): HearingControllerError {
+    if (cause instanceof HearingControllerError) return cause;
+    if (cause instanceof HearingVoicePolicyError) {
+      return new HearingControllerError(cause.code, cause.message);
+    }
+    return new HearingControllerError("COMMIT_FAILED", SAFE_MESSAGES.COMMIT_FAILED);
+  }
+
+  private async waitForResult(
+    promise: Promise<HearingControllerError | null>,
+    timeoutMs: number,
+    timeoutError: HearingControllerError,
+  ): Promise<HearingControllerError | null> {
+    let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const timeout = new Promise<HearingControllerError>((resolve) => {
+      timer = globalThis.setTimeout(() => resolve(timeoutError), timeoutMs);
+    });
+    const result = await Promise.race([promise, timeout]);
+    if (timer !== null) globalThis.clearTimeout(timer);
+    return result;
+  }
+
+  private requireReady(): void {
+    this.assertOpen();
+    if (this.snapshotValue.lifecycle !== "ready") {
+      throw new HearingControllerError(
+        this.snapshotValue.lifecycle === "recording" ||
+          this.snapshotValue.lifecycle === "processing" ||
+          this.snapshotValue.lifecycle === "speaking" ||
+          this.snapshotValue.lifecycle === "preparing"
+          ? "BUSY"
+          : "NOT_READY",
+        this.snapshotValue.lifecycle === "recording" ||
+          this.snapshotValue.lifecycle === "processing" ||
+          this.snapshotValue.lifecycle === "speaking" ||
+          this.snapshotValue.lifecycle === "preparing"
+          ? SAFE_MESSAGES.BUSY
+          : SAFE_MESSAGES.NOT_READY,
+      );
+    }
+  }
+
+  private requirePreparedForRecording(): void {
+    this.assertOpen();
+    if (
+      this.snapshotValue.lifecycle !== "ready" &&
+      this.snapshotValue.lifecycle !== "speaking"
+    ) {
+      throw new HearingControllerError(
+        this.snapshotValue.lifecycle === "recording" ||
+          this.snapshotValue.lifecycle === "processing" ||
+          this.snapshotValue.lifecycle === "preparing"
+          ? "BUSY"
+          : "NOT_READY",
+        this.snapshotValue.lifecycle === "recording" ||
+          this.snapshotValue.lifecycle === "processing" ||
+          this.snapshotValue.lifecycle === "preparing"
+          ? SAFE_MESSAGES.BUSY
+          : SAFE_MESSAGES.NOT_READY,
+      );
+    }
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED);
+    }
+  }
+
+  private assertGeneration(generation: number): void {
+    if (this.closed || generation !== this.generation) {
+      throw new HearingControllerError("CLOSED", SAFE_MESSAGES.CLOSED);
+    }
+  }
+
+  private assertPreparationHealthy(generation: number): void {
+    this.assertGeneration(generation);
+    const failure = this.preparationFailure;
+    if (
+      this.preparingGeneration !== generation ||
+      (failure !== null && failure.generation === generation)
+    ) {
+      throw (
+        failure?.error ??
+        new HearingControllerError(
+          "SPEECH_SERVICE_ERROR",
+          SAFE_MESSAGES.SPEECH_SERVICE_ERROR,
+        )
+      );
+    }
+  }
+
+  private recordPreparationFailure(error: HearingControllerError): void {
+    const generation = this.preparingGeneration;
+    if (generation === null || generation !== this.generation) return;
+    this.preparationFailure = Object.freeze({ generation, error });
+  }
+
+  private preparationErrorFor(
+    generation: number,
+  ): HearingControllerError | null {
+    const failure: PreparationFailure | null = this.preparationFailure;
+    return failure?.generation === generation ? failure.error : null;
+  }
+
+  private recordDeveloperSubmissionFailure(error: HearingControllerError): void {
+    const submission = this.developerSubmission;
+    if (submission === null || submission.generation !== this.generation) return;
+    submission.failure = error;
+  }
+
+  private assertPlaybackFence(generation: number, playbackFence: number): void {
+    this.assertGeneration(generation);
+    if (playbackFence !== this.playbackFence) {
+      throw new HearingControllerError("BARGED_IN", SAFE_MESSAGES.BARGED_IN);
+    }
+  }
+
+  private setRecoverable(error: HearingControllerError): void {
+    if (this.closed || this.snapshotValue.lifecycle === "fatal_error") return;
+    this.setSnapshot({
+      lifecycle: "recoverable_error",
+      code: error.code,
+      message: error.message,
+      partialText: "",
+      activeMode: null,
+    });
+  }
+
+  private setFatal(error: HearingControllerError): void {
+    if (this.closed) return;
+    this.setSnapshot({
+      lifecycle: "fatal_error",
+      code: error.code,
+      message: error.message,
+      partialText: "",
+      activeMode: null,
+    });
+  }
+
+  private setSnapshot(patch: Partial<HearingControllerSnapshot>): void {
+    this.snapshotValue = freezeSnapshot({ ...this.snapshotValue, ...patch });
+    const listeners = [...this.listeners];
+    for (const listener of listeners) {
+      try {
+        listener(this.snapshotValue);
+      } catch {
+        // State observers cannot compromise the microphone or playback lifecycle.
+      }
+    }
+    try {
+      this.options.onStateChange?.(this.snapshotValue);
+    } catch {
+      // State observers cannot compromise the microphone or playback lifecycle.
+    }
+  }
+}
