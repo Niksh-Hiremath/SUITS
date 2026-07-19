@@ -64,6 +64,7 @@ from .providers.base import (
     ProviderCancelled,
     StreamingSttSession,
     SynthesizedPhrase,
+    SynthesisTiming,
     TranscriptHypothesis,
 )
 from .tts_lane import TtsLaneQuarantinedError
@@ -1229,33 +1230,38 @@ class SpeechConnection:
         return removed
 
     async def _enqueue_synthesis(self, control: SynthesizeControl) -> None:
-        if self._runtime.tts_lane_snapshot.quarantined:
-            await self._send_error(
-                code="TTS_RESTART_REQUIRED",
-                message=(
-                    "local synthesis is quarantined because provider termination could not be "
-                    "confirmed; restart the speech service"
-                ),
-                job_id=control.job_id,
-                retryable=False,
-            )
-            await self._send_event(self._runtime.capabilities())
-            return
-        if not self._runtime.tts_provider.status.ready:
-            await self._send_error(
-                code="TTS_NOT_READY",
-                message="load the configured local TTS provider before synthesis",
-                job_id=control.job_id,
-            )
-            return
+        fixed_clip = None
         if control.clip_id is not None:
-            await self._send_error(
-                code="CLIP_NOT_READY",
-                message="the requested fixed local clip is not cached",
-                job_id=control.job_id,
-            )
-            return
-        voice_id = control.voice_id or self._voice_for_actor(control.actor)
+            fixed_clip = self._runtime.fixed_clip(control.clip_id)
+            if fixed_clip is None:
+                await self._send_error(
+                    code="CLIP_NOT_READY",
+                    message="the requested fixed local clip is not cached",
+                    job_id=control.job_id,
+                )
+                return
+            voice_id = self._runtime.fixed_clip_voice_id(fixed_clip.default_voice_role)
+        else:
+            if self._runtime.tts_lane_snapshot.quarantined:
+                await self._send_error(
+                    code="TTS_RESTART_REQUIRED",
+                    message=(
+                        "local synthesis is quarantined because provider termination could not be "
+                        "confirmed; restart the speech service"
+                    ),
+                    job_id=control.job_id,
+                    retryable=False,
+                )
+                await self._send_event(self._runtime.capabilities())
+                return
+            if not self._runtime.tts_provider.status.ready:
+                await self._send_error(
+                    code="TTS_NOT_READY",
+                    message="load the configured local TTS provider before synthesis",
+                    job_id=control.job_id,
+                )
+                return
+            voice_id = control.voice_id or self._voice_for_actor(control.actor)
         job = TtsJob(
             job_id=control.job_id,
             response_id=control.response_id,
@@ -1294,14 +1300,36 @@ class SpeechConnection:
             queue_latency_ms = max(0, _now_ms() - lease.job.enqueued_at_ms)
             synthesis_started = time.perf_counter()
             try:
-                phrase = await self._runtime.synthesize_phrase(
-                    text=lease.job.text or "",
-                    voice_id=lease.job.voice_id,
-                    cancel_event=lease.cancel_event,
-                )
-                synthesis_latency_ms = max(
-                    0, int((time.perf_counter() - synthesis_started) * 1_000)
-                )
+                cached = lease.job.clip_id is not None
+                if cached:
+                    fixed_clip = self._runtime.fixed_clip(lease.job.clip_id or "")
+                    if fixed_clip is None:
+                        raise RuntimeError("fixed courtroom clip became unavailable")
+                    phrase = SynthesizedPhrase(
+                        pcm_s16le=fixed_clip.pcm_s16le,
+                        sample_rate_hz=fixed_clip.sample_rate_hz,
+                        channels=1,
+                        duration_ms=fixed_clip.duration_ms,
+                        timings=tuple(
+                            SynthesisTiming(
+                                kind=mark.kind,
+                                value=mark.value,
+                                start_ms=mark.start_ms,
+                                end_ms=mark.end_ms,
+                            )
+                            for mark in fixed_clip.timings
+                        ),
+                    )
+                    synthesis_latency_ms = 0
+                else:
+                    phrase = await self._runtime.synthesize_phrase(
+                        text=lease.job.text or "",
+                        voice_id=lease.job.voice_id,
+                        cancel_event=lease.cancel_event,
+                    )
+                    synthesis_latency_ms = max(
+                        0, int((time.perf_counter() - synthesis_started) * 1_000)
+                    )
                 derived_duration_ms = self._validate_synthesized_phrase(phrase)
                 if not await self._phrase_queue.mark_streaming(lease):
                     raise asyncio.CancelledError
@@ -1313,7 +1341,7 @@ class SpeechConnection:
                             actor=lease.job.actor,
                             sequence=lease.job.sequence,
                             voice_id=lease.job.voice_id,
-                            cached=False,
+                            cached=cached,
                             queue_latency_ms=queue_latency_ms,
                         ),
                         TtsTimingEvent(

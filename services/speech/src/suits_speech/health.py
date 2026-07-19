@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from .capacity import BoundedLeasePool, CapacityLease, CapacitySnapshot
+from .clip_cache import FixedClip, FixedClipCache, FixedClipSpec, FixedClipVoiceRole
 from .config import SpeechSettings
 from .protocol import (
     CapabilitiesEvent,
@@ -237,7 +238,8 @@ class SpeechRuntime:
         self._stt_creation_tasks: set[asyncio.Task[StreamingSttSession]] = set()
         self._stt_cleanup_tasks: set[asyncio.Task[None]] = set()
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
-        self.cached_clip_ids: tuple[str, ...] = ()
+        self._fixed_clips = FixedClipCache()
+        self._fixed_clip_voices = self._voice_mapping(settings.tts_voices)
         self._load_lock = asyncio.Lock()
         self._load_task: asyncio.Task[CapabilitiesEvent] | None = None
 
@@ -246,6 +248,7 @@ class SpeechRuntime:
         return (
             self.stt_provider.status.ready
             and self.tts_provider.status.ready
+            and self._fixed_clips.ready
             and self._stt_session_pool.snapshot.available > 0
             and not self._tts_lane.snapshot.quarantined
         )
@@ -260,6 +263,23 @@ class SpeechRuntime:
             connections=self._connection_pool.snapshot,
             stt_sessions=self._stt_session_pool.snapshot,
         )
+
+    @property
+    def cached_clip_ids(self) -> tuple[str, ...]:
+        return self._fixed_clips.ready_clip_ids
+
+    def fixed_clip(self, clip_id: str) -> FixedClip | None:
+        """Return immutable cached audio without touching a provider."""
+
+        return self._fixed_clips.lookup(clip_id)
+
+    def fixed_clip_voice_id(self, role: FixedClipVoiceRole) -> str:
+        """Return the immutable configured voice used during clip prewarm."""
+
+        voice_id = self._fixed_clip_voices.get(role)
+        if voice_id is None:
+            raise RuntimeError(f"no configured fixed-clip voice for role {role}")
+        return voice_id
 
     def try_acquire_connection(self) -> CapacityLease | None:
         """Claim one WebSocket slot immediately, or reject process overload."""
@@ -374,7 +394,22 @@ class SpeechRuntime:
                 ",".join(sorted({type(error).__name__ for error in failures})),
             )
             raise RuntimeError("one or more local speech providers failed to load")
+        try:
+            await self._fixed_clips.prewarm(self._synthesize_fixed_clip)
+        except Exception as error:
+            _LOGGER.warning(
+                "fixed courtroom clip prewarm failed errorType=%s",
+                type(error).__name__,
+            )
+            raise RuntimeError("fixed courtroom clips failed to prewarm") from None
         return self.capabilities()
+
+    async def _synthesize_fixed_clip(self, spec: FixedClipSpec) -> SynthesizedPhrase:
+        return await self.synthesize_phrase(
+            text=spec.text,
+            voice_id=self.fixed_clip_voice_id(spec.default_voice_role),
+            cancel_event=asyncio.Event(),
+        )
 
     @staticmethod
     async def _load_provider_if_needed(
@@ -384,6 +419,15 @@ class SpeechRuntime:
         if status.ready:
             return status
         return await provider.load()
+
+    @staticmethod
+    def _voice_mapping(entries: tuple[str, ...]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for entry in entries:
+            actor, separator, voice = entry.partition("=")
+            if separator and actor and voice:
+                mapping[actor] = voice
+        return mapping
 
     def capabilities(self, *, request_id: str | None = None) -> CapabilitiesEvent:
         stt = _provider_capability(self.stt_provider.status)

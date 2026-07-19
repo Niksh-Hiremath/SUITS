@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 from starlette.testclient import WebSocketTestSession
 
 from suits_speech.app import create_app
+from suits_speech.clip_cache import CANONICAL_FIXED_CLIP_IDS
 from suits_speech.config import SpeechSettings
 from suits_speech.health import SpeechRuntime
 from suits_speech.protocol import PROTOCOL_VERSION
@@ -104,6 +105,7 @@ def test_handshake_load_and_ping(client: TestClient) -> None:
             True,
             True,
         ]
+        assert loaded["cachedClipIds"] == list(CANONICAL_FIXED_CLIP_IDS)
 
         websocket.send_json(
             {

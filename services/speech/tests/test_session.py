@@ -10,11 +10,17 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 
 from suits_speech.app import create_app
+from suits_speech.clip_cache import SUSTAINED_CLIP_ID
 from suits_speech.config import SpeechSettings
 from suits_speech.health import SpeechRuntime
 from suits_speech.protocol import PROTOCOL_VERSION
 from suits_speech.providers import FakeTtsProvider
-from suits_speech.providers.base import AudioChunk, ProviderStatus, TranscriptHypothesis
+from suits_speech.providers.base import (
+    AudioChunk,
+    ProviderStatus,
+    SynthesizedPhrase,
+    TranscriptHypothesis,
+)
 
 
 class _SlowLateSttSession:
@@ -68,6 +74,26 @@ class _SlowLateSttProvider:
     async def create_session(self, *, sample_rate_hz: int) -> _SlowLateSttSession:
         assert sample_rate_hz == 16_000
         return _SlowLateSttSession()
+
+
+class _CountingTtsProvider(FakeTtsProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.synthesized_texts: list[str] = []
+
+    async def synthesize_phrase(
+        self,
+        *,
+        text: str,
+        voice_id: str,
+        cancel_event: asyncio.Event,
+    ) -> SynthesizedPhrase:
+        self.synthesized_texts.append(text)
+        return await super().synthesize_phrase(
+            text=text,
+            voice_id=voice_id,
+            cancel_event=cancel_event,
+        )
 
 
 def _settings(tmp_path: Path, **overrides: str) -> SpeechSettings:
@@ -477,6 +503,64 @@ def test_fake_tts_streams_binary_frames_with_acknowledged_backpressure(
         timing = next(event for event in text_events if event["type"] == "tts_timing")
         assert timing["marks"]
         assert all("protocol" not in mark for mark in timing["marks"])
+
+
+def test_cached_courtroom_clip_streams_without_runtime_provider_call(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    provider = _CountingTtsProvider()
+    runtime = SpeechRuntime(settings=settings, tts_provider=provider)
+    client = TestClient(create_app(settings, runtime=runtime))
+    with _connect(client) as websocket:
+        _handshake_and_load(websocket)
+        assert provider.synthesized_texts == ["Objection!", "Sustained.", "Overruled."]
+        websocket.send_json(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "type": "synthesize",
+                "jobId": "job:cached",
+                "responseId": "response:cached",
+                "actor": "judge",
+                "sequence": 0,
+                "clipId": SUSTAINED_CLIP_ID,
+                "isFinal": True,
+            }
+        )
+
+        started: dict[str, object] | None = None
+        audio_bytes = 0
+        while True:
+            packet = websocket.receive()
+            assert packet["type"] == "websocket.send"
+            event = json.loads(packet["text"])
+            if event["type"] == "tts_started":
+                started = event
+            if event["type"] == "tts_audio":
+                binary = websocket.receive()
+                assert binary["type"] == "websocket.send"
+                audio = binary["bytes"]
+                assert len(audio) == event["byteLength"]
+                audio_bytes += len(audio)
+                websocket.send_json(
+                    {
+                        "protocol": PROTOCOL_VERSION,
+                        "type": "ack_tts_audio",
+                        "jobId": event["jobId"],
+                        "responseId": event["responseId"],
+                        "frameSequence": event["frameSequence"],
+                        "frameToken": event["frameToken"],
+                        "byteLength": event["byteLength"],
+                    }
+                )
+            if event["type"] == "tts_finished":
+                break
+
+        assert started is not None
+        assert started["cached"] is True
+        assert started["voiceId"] == "am_michael"
+        assert audio_bytes > 0
+        assert provider.synthesized_texts == ["Objection!", "Sustained.", "Overruled."]
 
 
 def test_tts_cancel_purges_ack_blocked_audio_before_pong(tmp_path: Path) -> None:
