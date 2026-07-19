@@ -15,7 +15,11 @@ import {
   DebriefGeneratorModelOutputSchema,
   JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   JuryRoleResponseModelOutputSchema,
+  NEGOTIATION_AGENT_OUTPUT_SCHEMA_VERSION,
+  NegotiationAgentModelOutputSchema,
+  OBJECTION_RULING_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
+  ObjectionRulingModelOutputSchema,
   CounselRoleResponseModelOutputSchema,
   CourtroomModelCallTraceSchema,
   OpponentPlannerModelOutputSchema,
@@ -26,12 +30,16 @@ import {
   type DebriefGeneratorRequest,
   type JuryRoleResponseModelOutput,
   type JuryResponseRequest,
+  type NegotiationAgentRequest,
+  type ObjectionRulingRequest,
   type OpponentPlannerRequest,
 } from "../src/domain/courtroom-ai";
 import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
@@ -40,6 +48,8 @@ import {
   HearingCommandPreparationSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
@@ -58,12 +68,19 @@ import {
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   juryResponseOutputCitations,
+  hashNegotiationAgentModelOutput,
+  hashObjectionRulingModelOutput,
+  negotiationAgentOutputCitations,
+  negotiationAgentProposedCitationCount,
+  objectionRulingOutputCitations,
   opponentPlannerOutputCitations,
   witnessAnswerOutputCitations,
   type HearingCounselResponsePrecommit,
   type HearingCommandPreparation,
   type HearingDebriefGeneratorPrecommit,
   type HearingJuryResponsePrecommit,
+  type HearingNegotiationPrecommit,
+  type HearingObjectionRulingPrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
@@ -120,6 +137,16 @@ const commitCounselGenerationReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
   HearingCommandPreparation
 >("hearingRuntime:commitCounselGeneration");
+const commitObjectionRulingGenerationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitObjectionRulingGeneration");
+const commitNegotiationGenerationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitNegotiationGeneration");
 const commitJuryGenerationReference = makeFunctionReference<
   "action",
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
@@ -130,6 +157,11 @@ const commitDebriefGenerationReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
   HearingCommandPreparation
 >("hearingRuntime:commitDebriefGeneration");
+const recordTerminalModelCallReference = makeFunctionReference<
+  "mutation",
+  Readonly<{ ownerId: string; traceJson: string }>,
+  Readonly<{ callId: string; attemptCount: number; replayed: boolean }>
+>("courtroomModelCalls:recordTerminalForOwner");
 const readReference = makeFunctionReference<
   "action",
   Readonly<{ ownerId: string; trialId: string }>,
@@ -447,7 +479,7 @@ async function fakeWitnessGeneration(
       latencyMs: trace.latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
-      estimatedCostUsd: null,
+      estimatedCostUsd: trace.estimatedCostUsd,
       retryCount: trace.retryCount,
       validationFailureCount: trace.validationFailureCount,
     },
@@ -470,7 +502,10 @@ function proposedCitationCount(
 }
 
 function counselKnowledgeScope(
-  request: OpponentPlannerRequest | CounselResponseRequest,
+  request:
+    | OpponentPlannerRequest
+    | CounselResponseRequest
+    | NegotiationAgentRequest,
 ) {
   const view = request.knowledgeView;
   return {
@@ -480,10 +515,12 @@ function counselKnowledgeScope(
     factCount: new Set([
       ...view.counsel.facts.map((fact) => fact.factId),
       ...view.publicRecord.facts.map((fact) => fact.factId),
+      ...(view.currentExchange?.factIds ?? []),
     ]).size,
     evidenceCount: new Set([
       ...view.counsel.evidence.map((evidence) => evidence.evidenceId),
       ...view.publicRecord.evidence.map((evidence) => evidence.evidenceId),
+      ...(view.currentExchange?.evidenceIds ?? []),
     ]).size,
     testimonyCount: view.publicRecord.testimony.length,
     priorStatementCount: 0,
@@ -504,19 +541,26 @@ function counselKnowledgeScope(
 
 function acceptedCounselTrace(
   input: Readonly<{
-    request: OpponentPlannerRequest | CounselResponseRequest;
+    request:
+      | OpponentPlannerRequest
+      | CounselResponseRequest
+      | NegotiationAgentRequest;
     outputHash: string;
     outputCharacterCount: number;
     proposedCitationCount: number;
     acceptedCitations: ReturnType<typeof opponentPlannerOutputCitations>;
     startedAt: string;
-    callClass: "opponent_planner" | "role_responder";
-    task: "plan_opponent" | "counsel_response";
+    callClass: "opponent_planner" | "role_responder" | "negotiation_agent";
+    task: "plan_opponent" | "counsel_response" | "evaluate_settlement";
     promptVersion:
-      "opponent-planner.prompt.v2" | "role-responder.counsel.prompt.v2";
+      | "opponent-planner.prompt.v2"
+      | "role-responder.counsel.prompt.v2"
+      | "negotiation-agent.prompt.v1";
     outputSchemaVersion:
       | typeof OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION
-      | typeof COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION;
+      | typeof COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION
+      | typeof NEGOTIATION_AGENT_OUTPUT_SCHEMA_VERSION;
+    estimatedCostUsd?: number | null;
   }>,
 ) {
   const completedAt = new Date(Date.parse(input.startedAt) + 250).toISOString();
@@ -561,7 +605,7 @@ function acceptedCounselTrace(
     firstAcceptedSegmentMs: 50,
     retryCount: 0,
     validationFailureCount: 0,
-    estimatedCostUsd: null,
+    estimatedCostUsd: input.estimatedCostUsd ?? null,
     usage,
     acceptedAttempt: 1,
     acceptedCitations: input.acceptedCitations,
@@ -607,7 +651,7 @@ function acceptedCounselTrace(
       latencyMs: trace.latencyMs,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
-      estimatedCostUsd: null,
+      estimatedCostUsd: trace.estimatedCostUsd,
       retryCount: 0,
       validationFailureCount: 0,
     },
@@ -813,6 +857,308 @@ async function fakeCounselGeneration(
     expectedStateVersion: request.expectedStateVersion,
     expectedLastEventId: request.expectedLastEventId,
     planBinding: request.planBinding,
+    output,
+    modelMetadata: audit.modelMetadata,
+    trace: audit.trace,
+  });
+}
+
+function emptyCourtroomCitations() {
+  return {
+    factIds: [],
+    evidenceIds: [],
+    testimonyIds: [],
+    transcriptTurnIds: [],
+    sourceSegmentIds: [],
+    priorStatementIds: [],
+    issueIds: [],
+    instructionIds: [],
+    ruleIds: [],
+    settlementOfferIds: [],
+  };
+}
+
+function judgeKnowledgeScope(request: ObjectionRulingRequest) {
+  const record = request.knowledgeView.publicRecord;
+  return {
+    knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
+    knowledgeViewHash: sha256Utf8(JSON.stringify(request.knowledgeView)),
+    stateVersion: request.knowledgeView.stateVersion,
+    factCount: record.facts.length,
+    evidenceCount: record.evidence.length,
+    testimonyCount: record.testimony.length,
+    priorStatementCount: 0,
+    sourceSegmentCount: new Set([
+      ...record.facts.flatMap(({ sourceSegmentIds }) => sourceSegmentIds),
+      ...record.evidence.flatMap(({ sourceSegmentIds }) => sourceSegmentIds),
+    ]).size,
+    publicRecordEventCount: new Set(
+      record.testimony.map(({ transcriptEventId }) => transcriptEventId),
+    ).size,
+    currentExchangeCount: request.knowledgeView.currentExchange === null ? 0 : 1,
+  };
+}
+
+function acceptedObjectionTrace(
+  request: ObjectionRulingRequest,
+  output: ReturnType<typeof ObjectionRulingModelOutputSchema.parse>,
+  startedAt: string,
+) {
+  const completedAt = new Date(Date.parse(startedAt) + 250).toISOString();
+  const outputHash = hashObjectionRulingModelOutput(output);
+  const outputCharacterCount = JSON.stringify(output).length;
+  const proposedCount = proposedCitationCount([output.citations]);
+  const acceptedCitations = objectionRulingOutputCitations(output, {
+    turnId: request.question.turnId,
+    sourceEventId: request.question.eventId,
+  });
+  const usage = {
+    inputTokens: 160,
+    outputTokens: 35,
+    totalTokens: 195,
+    cachedInputTokens: 50,
+    cacheWriteTokens: 0,
+    reasoningTokens: 8,
+  };
+  const providerRequestId = `request:test:${sha256Utf8(request.callId).slice(0, 24)}`;
+  const trace = CourtroomModelCallTraceSchema.parse({
+    schemaVersion: COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+    callId: request.callId,
+    trialId: request.trialId,
+    responseId: request.interruption?.interruptedResponseId ?? null,
+    actorId: request.actorId,
+    actorRole: "judge",
+    callClass: "objection_resolver",
+    task: "resolve_objection",
+    inputEventIds: [
+      ...new Set([
+        request.question.eventId,
+        request.objection.sourceEventId,
+        request.expectedLastEventId,
+      ]),
+    ].sort((left, right) => left.localeCompare(right)),
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    provider: "scripted-courtroom-model",
+    model: "gpt-5.6-luna",
+    providerProtocolVersion: "courtroom-model-provider.v1",
+    promptVersion: "objection-resolver.ruling.prompt.v1",
+    outputSchemaVersion: output.schemaVersion,
+    knowledgeScope: judgeKnowledgeScope(request),
+    promptAudit: {
+      stablePrefixHash: sha256Utf8("fake-objection-stable-prefix"),
+      trustedContextHash: sha256Utf8("fake-objection-trusted-context"),
+      untrustedInputHash: sha256Utf8("fake-objection-untrusted-input"),
+      inputCharacterCount: 80,
+    },
+    status: "accepted",
+    startedAt,
+    completedAt,
+    latencyMs: 250,
+    firstStructuredDeltaMs: 25,
+    firstAcceptedSegmentMs: 50,
+    retryCount: 0,
+    validationFailureCount: 0,
+    estimatedCostUsd: null,
+    usage,
+    acceptedAttempt: 1,
+    acceptedCitations,
+    acceptedCitationCount: Object.values(acceptedCitations).reduce(
+      (total, identifiers) => total + identifiers.length,
+      0,
+    ),
+    outputHash,
+    outputCharacterCount,
+    committedActionId: null,
+    committedEventId: null,
+    safeFailureCode: null,
+    attempts: [
+      {
+        schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+        attempt: 1,
+        mode: "initial",
+        status: "accepted",
+        providerRequestId,
+        providerResponseId: `response:test:${sha256Utf8(request.callId).slice(0, 24)}`,
+        startedAt,
+        completedAt,
+        latencyMs: 250,
+        firstStructuredDeltaMs: 25,
+        streamEventCount: 3,
+        structuredDeltaCount: 1,
+        streamedCharacterCount: outputCharacterCount,
+        outputHash,
+        proposedCitationCount: proposedCount,
+        usage,
+        validationIssueCodes: [],
+        safeErrorCode: null,
+      },
+    ],
+  });
+  return {
+    trace,
+    modelMetadata: {
+      model: "gpt-5.6-luna" as const,
+      requestId: providerRequestId,
+      promptVersion: trace.promptVersion,
+      schemaVersion: trace.outputSchemaVersion,
+      latencyMs: trace.latencyMs,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: trace.estimatedCostUsd,
+      retryCount: trace.retryCount,
+      validationFailureCount: trace.validationFailureCount,
+    },
+  };
+}
+
+function fakeObjectionRulingGeneration(
+  preparation: HearingCommandPreparation,
+  startedAt: string,
+  ruling: "sustained" | "overruled",
+): HearingObjectionRulingPrecommit {
+  if (!isHearingObjectionRulingModelRequiredPreparation(preparation)) {
+    throw new Error("Expected objection-ruling model preparation");
+  }
+  const request = preparation.request;
+  if (request.interruption === null) {
+    throw new Error("Fixture objection requires an interrupted response");
+  }
+  const output = ObjectionRulingModelOutputSchema.parse({
+    schemaVersion: OBJECTION_RULING_OUTPUT_SCHEMA_VERSION,
+    ruling,
+    remedy: ruling === "sustained" ? "cancel_response" : "resume_response",
+    reason:
+      ruling === "sustained"
+        ? "The question calls for an inadmissible out-of-court statement."
+        : "The question may be answered from the witness's personal knowledge.",
+    citations: {
+      ...emptyCourtroomCitations(),
+      transcriptTurnIds: [request.question.turnId],
+    },
+    performance: {
+      activity: "ruling",
+      emotion: "neutral",
+      intensity: 0.5,
+      gazeTarget: "questioning_counsel",
+      gesture: "gavel",
+      speakingStyle: "formal",
+    },
+  });
+  const audit = acceptedObjectionTrace(request, output, startedAt);
+  return HearingObjectionRulingPrecommitSchema.parse({
+    schemaVersion: HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    objectionEventId: request.objection.sourceEventId,
+    responseId: request.interruption.interruptedResponseId,
+    questionEventBinding: {
+      turnId: request.question.turnId,
+      sourceEventId: request.question.eventId,
+    },
+    output,
+    modelMetadata: audit.modelMetadata,
+    trace: audit.trace,
+  });
+}
+
+function negotiationUtilityBand(
+  amount: number | null,
+  authority: Readonly<{ reservationValue: number; targetValue: number }>,
+) {
+  if (amount === null) return "non_monetary_tradeoff" as const;
+  if (authority.targetValue > authority.reservationValue) {
+    if (amount >= authority.targetValue) return "at_or_above_target" as const;
+    if (amount < authority.reservationValue) return "below_reservation" as const;
+    return "within_authority" as const;
+  }
+  if (authority.targetValue < authority.reservationValue) {
+    if (amount <= authority.targetValue) return "at_or_above_target" as const;
+    if (amount > authority.reservationValue) return "below_reservation" as const;
+    return "within_authority" as const;
+  }
+  return amount === authority.targetValue
+    ? ("at_or_above_target" as const)
+    : ("within_authority" as const);
+}
+
+function fakeNegotiationGeneration(
+  preparation: HearingCommandPreparation,
+  startedAt: string,
+  recommendation: "counter" | "accept" | "reject",
+  counterAmount = 60_000,
+): HearingNegotiationPrecommit {
+  if (!isHearingNegotiationModelRequiredPreparation(preparation)) {
+    throw new Error("Expected negotiation model preparation");
+  }
+  const request = preparation.request;
+  const settlement = request.knowledgeView.counsel.privateSettlement;
+  const targetOfferId = request.offerBinding.targetOfferId;
+  if (settlement === null || targetOfferId === null) {
+    throw new Error("Fixture negotiation requires a bound private offer");
+  }
+  const targetOffer = settlement.offers.find(
+    (offer) => offer.offerId === targetOfferId,
+  );
+  if (targetOffer === undefined) {
+    throw new Error("Fixture target offer is absent from private scope");
+  }
+  const amount = recommendation === "counter" ? counterAmount : targetOffer.amount;
+  const output = NegotiationAgentModelOutputSchema.parse({
+    schemaVersion: NEGOTIATION_AGENT_OUTPUT_SCHEMA_VERSION,
+    recommendation,
+    utilityBand: negotiationUtilityBand(amount, settlement.authority),
+    terms:
+      recommendation === "counter"
+        ? {
+            amount: counterAmount,
+            currency: settlement.currency,
+            nonMonetaryTerms: [],
+            summary: "Resolve the fictional matter for the counter amount.",
+          }
+        : null,
+    decisionSummary:
+      recommendation === "counter"
+        ? "A bounded counteroffer better matches the represented party's authority."
+        : recommendation === "accept"
+          ? "The offer falls within the represented party's settlement authority."
+          : "The offer falls outside the represented party's acceptable range.",
+    citations: {
+      ...emptyCourtroomCitations(),
+      settlementOfferIds: [targetOfferId],
+    },
+    performance: {
+      activity: "thinking",
+      emotion: "neutral",
+      intensity: 0.3,
+      gazeTarget: "none",
+      gesture: "none",
+      speakingStyle: "deliberative",
+    },
+  });
+  const audit = acceptedCounselTrace({
+    request,
+    outputHash: hashNegotiationAgentModelOutput(output),
+    outputCharacterCount: JSON.stringify(output).length,
+    proposedCitationCount: negotiationAgentProposedCitationCount(output),
+    acceptedCitations: negotiationAgentOutputCitations(output),
+    startedAt,
+    callClass: "negotiation_agent",
+    task: "evaluate_settlement",
+    promptVersion: "negotiation-agent.prompt.v1",
+    outputSchemaVersion: output.schemaVersion,
+    estimatedCostUsd: 0.001,
+  });
+  return HearingNegotiationPrecommitSchema.parse({
+    schemaVersion: HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
     output,
     modelMetadata: audit.modelMetadata,
     trace: audit.trace,
@@ -1271,6 +1617,34 @@ async function commitModelPreparation(
       }),
     );
   }
+  if (isHearingObjectionRulingModelRequiredPreparation(preparation)) {
+    const generation = await fakeObjectionRulingGeneration(
+      preparation,
+      startedAt,
+      "overruled",
+    );
+    return HearingCommandPreparationSchema.parse(
+      await backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+  }
+  if (isHearingNegotiationModelRequiredPreparation(preparation)) {
+    const generation = await fakeNegotiationGeneration(
+      preparation,
+      startedAt,
+      "reject",
+    );
+    return HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+  }
   if (isHearingJuryResponseModelRequiredPreparation(preparation)) {
     const generation = await fakeJuryGeneration(
       preparation,
@@ -1345,6 +1719,147 @@ async function prepareInitialOpponentCross(
     throw new Error("Expected opponent plan after completed direct");
   }
   return ending.preparation;
+}
+
+async function prepareSettlementNegotiation(
+  backend: TestBackend,
+  amount: number,
+): Promise<{
+  preparation: Extract<HearingCommandPreparation, { status: "model_required" }>;
+  offerId: string;
+}> {
+  let view = await start(backend);
+  ({ view } = await command(
+    backend,
+    view,
+    "86868686-8686-4686-8686-868686868686",
+    "2026-07-19T03:41:00.000Z",
+    { type: "call_witness", witnessId: "witness_rina_shah" },
+  ));
+  ({ view } = await command(
+    backend,
+    view,
+    "87878787-8787-4787-8787-878787878787",
+    "2026-07-19T03:42:00.000Z",
+    {
+      type: "ask_question",
+      witnessId: "witness_rina_shah",
+      examinationKind: "direct",
+      text: "What did you personally observe?",
+      presentedEvidenceIds: [],
+    },
+  ));
+  ({ view } = await command(
+    backend,
+    view,
+    "88888888-8888-4888-8888-888888888887",
+    "2026-07-19T03:43:00.000Z",
+    {
+      type: "finish_witness",
+      witnessId: "witness_rina_shah",
+      examinationKind: "direct",
+    },
+  ));
+  if (view.activeAppearance?.stage === "redirect") {
+    ({ view } = await command(
+      backend,
+      view,
+      "89898989-8989-4989-8989-898989898989",
+      "2026-07-19T03:44:00.000Z",
+      {
+        type: "finish_witness",
+        witnessId: "witness_rina_shah",
+        examinationKind: "redirect",
+      },
+    ));
+  }
+  if (!view.capabilities.canProposeSettlement) {
+    throw new Error("Fixture must reach a settlement-capable record");
+  }
+  const requestId = "90909090-9090-4090-8090-909090909091";
+  const offer = playerCommand(
+    view,
+    requestId,
+    "2026-07-19T03:45:00.000Z",
+    {
+      type: "propose_settlement",
+      terms: {
+        amount,
+        nonMonetaryTerms: ["Neutral reference"],
+        summary: "Resolve the fictional matter on these terms.",
+      },
+    },
+  );
+  const preparation = HearingCommandPreparationSchema.parse(
+    await backend.action(prepareCommandReference, {
+      ownerId: OWNER_ID,
+      trialId: view.trial.trialId,
+      commandJson: JSON.stringify(offer),
+    }),
+  );
+  if (!isHearingNegotiationModelRequiredPreparation(preparation)) {
+    throw new Error("A user offer should require opposing settlement review");
+  }
+  return { preparation, offerId: `offer:${requestId}` };
+}
+
+async function prepareUserObjectionRuling(
+  backend: TestBackend,
+): Promise<Extract<HearingCommandPreparation, { status: "model_required" }>> {
+  const planPreparation = await prepareInitialOpponentCross(backend);
+  const planGeneration = await fakeOpponentPlanGeneration(
+    planPreparation,
+    "2026-07-19T03:50:00.000Z",
+    "question",
+  );
+  const counselPreparation = HearingCommandPreparationSchema.parse(
+    await backend.action(commitOpponentPlanGenerationReference, {
+      ownerId: OWNER_ID,
+      trialId: planPreparation.request.trialId,
+      generationJson: JSON.stringify(planGeneration),
+    }),
+  );
+  const counselGeneration = await fakeCounselGeneration(
+    counselPreparation,
+    "2026-07-19T03:50:01.000Z",
+  );
+  const responseWindow = HearingCommandPreparationSchema.parse(
+    await backend.action(commitCounselGenerationReference, {
+      ownerId: OWNER_ID,
+      trialId: planPreparation.request.trialId,
+      generationJson: JSON.stringify(counselGeneration),
+    }),
+  );
+  if (responseWindow.status !== "completed") {
+    throw new Error("Expected an objection decision window");
+  }
+  const activeQuestion = responseWindow.view.activeQuestion;
+  if (!activeQuestion?.pendingResponseId) {
+    throw new Error("Expected an interruptible pending response");
+  }
+  const preparation = HearingCommandPreparationSchema.parse(
+    await backend.action(prepareCommandReference, {
+      ownerId: OWNER_ID,
+      trialId: responseWindow.view.trial.trialId,
+      commandJson: JSON.stringify(
+        playerCommand(
+          responseWindow.view,
+          "92929292-9292-4292-8292-929292929290",
+          "2026-07-19T03:50:02.000Z",
+          {
+            type: "object",
+            questionId: activeQuestion.questionId,
+            responseId: activeQuestion.pendingResponseId,
+            ground: "hearsay",
+          },
+        ),
+      ),
+    }),
+  );
+  if (!isHearingObjectionRulingModelRequiredPreparation(preparation)) {
+    throw new Error("Expected judge ruling preparation");
+  }
+  return preparation;
 }
 
 describe("V3 hearing runtime facade", () => {
@@ -2611,6 +3126,269 @@ describe("V3 hearing runtime facade", () => {
       "system",
     ]);
     expect(events.at(-1)?.eventId).toBe(rulingPreparation.request.expectedLastEventId);
+
+    const generation = await fakeObjectionRulingGeneration(
+      rulingPreparation,
+      "2026-07-19T03:30:03.000Z",
+      "overruled",
+    );
+    const callsBeforeRuling = await backend.run(async (ctx) =>
+      (await ctx.db.query("courtroomModelCalls").collect()).length,
+    );
+    await expect(
+      backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OTHER_OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify({
+          ...generation,
+          output: {
+            ...generation.output,
+            reason: "A tampered ruling must fail its output-hash binding.",
+          },
+        }),
+      }),
+    ).rejects.toThrow("OBJECTION_RULING_GENERATION_INVALID");
+    const rejectedCounts = await backend.run(async (ctx) => ({
+      events: (
+        await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", responseWindow.view.trial.trialId),
+          )
+          .collect()
+      ).length,
+      calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+    }));
+    expect(rejectedCounts).toEqual({
+      events: events.length,
+      calls: callsBeforeRuling,
+    });
+
+    const witnessPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (!isHearingWitnessModelRequiredPreparation(witnessPreparation)) {
+      throw new Error("An overruled objection should resume witness generation");
+    }
+    expect(witnessPreparation.request.responseId).toBe(
+      activeQuestion.pendingResponseId,
+    );
+
+    const exactReplay = HearingCommandPreparationSchema.parse(
+      await backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (!isHearingWitnessModelRequiredPreparation(exactReplay)) {
+      throw new Error("An exact ruling replay should preserve witness generation");
+    }
+    expect(exactReplay.request.responseId).toBe(
+      witnessPreparation.request.responseId,
+    );
+
+    const committed = await backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", responseWindow.view.trial.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+    }));
+    expect(committed.events.slice(-5).map(({ eventType }) => eventType)).toEqual([
+      "OBJECT",
+      "BEGIN_INTERRUPTION",
+      "RULE_ON_OBJECTION",
+      "RESOLVE_INTERRUPTION",
+      "RESUME_INTERRUPTED_SPEECH",
+    ]);
+    expect(committed.events.slice(-3).map(({ source }) => source)).toEqual([
+      "ai",
+      "deterministic",
+      "deterministic",
+    ]);
+    expect(
+      committed.events.slice(-3).every(
+        ({ responseId }) => responseId === activeQuestion.pendingResponseId,
+      ),
+    ).toBe(true);
+    expect(
+      committed.calls.filter(({ callId }) => callId === generation.callId),
+    ).toHaveLength(1);
+
+    const answerGeneration = await fakeWitnessGeneration(
+      witnessPreparation,
+      "2026-07-19T03:30:04.000Z",
+    );
+    const continued = HearingCommandPreparationSchema.parse(
+      await backend.action(commitWitnessGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(answerGeneration),
+      }),
+    );
+    expect(continued).toMatchObject({ status: "model_required" });
+    if (
+      continued.status !== "model_required" ||
+      !isHearingOpponentPlanModelRequiredPreparation(continued)
+    ) {
+      throw new Error("The answered cross should return control to opposing counsel");
+    }
+    expect(
+      continued.request.knowledgeView.publicRecord.testimony.some(
+        ({ speakerActorId }) =>
+          speakerActorId === witnessPreparation.request.actorId,
+      ),
+    ).toBe(true);
+  });
+
+  it("atomically sustains an objection, cancels speech, and skips witness generation", async () => {
+    const backend = convexTest({ schema, modules });
+    const planPreparation = await prepareInitialOpponentCross(backend);
+    const planGeneration = await fakeOpponentPlanGeneration(
+      planPreparation,
+      "2026-07-19T03:35:00.000Z",
+      "question",
+    );
+    const counselPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(commitOpponentPlanGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: planPreparation.request.trialId,
+        generationJson: JSON.stringify(planGeneration),
+      }),
+    );
+    const counselGeneration = await fakeCounselGeneration(
+      counselPreparation,
+      "2026-07-19T03:35:01.000Z",
+    );
+    const responseWindow = HearingCommandPreparationSchema.parse(
+      await backend.action(commitCounselGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: planPreparation.request.trialId,
+        generationJson: JSON.stringify(counselGeneration),
+      }),
+    );
+    if (responseWindow.status !== "completed") {
+      throw new Error("Expected an objection decision window");
+    }
+    const activeQuestion = responseWindow.view.activeQuestion;
+    if (!activeQuestion?.pendingResponseId) {
+      throw new Error("Expected an interruptible pending response");
+    }
+    const objection = playerCommand(
+      responseWindow.view,
+      "85858585-8585-4585-8585-858585858580",
+      "2026-07-19T03:35:02.000Z",
+      {
+        type: "object",
+        questionId: activeQuestion.questionId,
+        responseId: activeQuestion.pendingResponseId,
+        ground: "hearsay",
+      },
+    );
+    const rulingPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        commandJson: JSON.stringify(objection),
+      }),
+    );
+    const generation = await fakeObjectionRulingGeneration(
+      rulingPreparation,
+      "2026-07-19T03:35:03.000Z",
+      "sustained",
+    );
+    const next = HearingCommandPreparationSchema.parse(
+      await backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (!isHearingOpponentPlanModelRequiredPreparation(next)) {
+      throw new Error("A sustained objection should return to opponent planning");
+    }
+
+    const stored = await backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", responseWindow.view.trial.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+    }));
+    expect(stored.events.slice(-4).map(({ eventType }) => eventType)).toEqual([
+      "OBJECT",
+      "BEGIN_INTERRUPTION",
+      "RULE_ON_OBJECTION",
+      "RESOLVE_INTERRUPTION",
+    ]);
+    expect(
+      stored.events.some(
+        ({ eventType, responseId }) =>
+          eventType === "RESUME_INTERRUPTED_SPEECH" &&
+          responseId === activeQuestion.pendingResponseId,
+      ),
+    ).toBe(false);
+    expect(
+      stored.events.some(
+        ({ eventType, responseId }) =>
+          eventType === "ANSWER_QUESTION" &&
+          responseId === activeQuestion.pendingResponseId,
+      ),
+    ).toBe(false);
+    expect(
+      stored.calls.filter(({ callId }) => callId === generation.callId),
+    ).toHaveLength(1);
+
+    const eventCount = stored.events.length;
+    const exactReplay = HearingCommandPreparationSchema.parse(
+      await backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    expect(isHearingOpponentPlanModelRequiredPreparation(exactReplay)).toBe(
+      true,
+    );
+    expect(
+      await backend.run(async (ctx) =>
+        (
+          await ctx.db
+            .query("trialEvents")
+            .withIndex("by_trial_sequence", (index) =>
+              index.eq("trialId", responseWindow.view.trial.trialId),
+            )
+            .collect()
+        ).length,
+      ),
+    ).toBe(eventCount);
+
+    await expect(
+      backend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        generationJson: JSON.stringify({
+          ...generation,
+          decisionId: "decision:objection:stale",
+        }),
+      }),
+    ).rejects.toThrow("OBJECTION_RULING_GENERATION_STALE");
   });
 
   it("derives a private user offer and binds the opposing negotiation request", async () => {
@@ -2765,6 +3543,321 @@ describe("V3 hearing runtime facade", () => {
         nonMonetaryTerms: ["Neutral reference"],
       },
     });
+
+    const generation = await fakeNegotiationGeneration(
+      negotiation,
+      "2026-07-19T03:45:01.000Z",
+      "reject",
+    );
+    const countsBeforeCommit = await backend.run(async (ctx) => ({
+      events: (await ctx.db.query("trialEvents").collect()).length,
+      calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+    }));
+    await expect(
+      backend.action(commitNegotiationGenerationReference, {
+        ownerId: OTHER_OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify({
+          ...generation,
+          output: {
+            ...generation.output,
+            decisionSummary: "Tampered after generation.",
+          },
+        }),
+      }),
+    ).rejects.toThrow("NEGOTIATION_GENERATION_INVALID");
+    expect(
+      await backend.run(async (ctx) => ({
+        events: (await ctx.db.query("trialEvents").collect()).length,
+        calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      })),
+    ).toEqual(countsBeforeCommit);
+
+    const rejected = HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (rejected.status !== "completed") {
+      throw new Error("A rejected offer should return active trial control");
+    }
+    expect(rejected.view.trial).toMatchObject({ status: "active" });
+    expect(rejected.view.player.settlement?.offers).toContainEqual(
+      expect.objectContaining({ offerId: `offer:${offerCommand.requestId}`, status: "rejected" }),
+    );
+    const exactReplay = HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    expect(exactReplay).toEqual(rejected);
+    const committed = await backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", view.trial.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+    }));
+    expect(committed.events.at(-1)?.eventType).toBe("REJECT_SETTLEMENT");
+    expect(committed.events.at(-1)?.source).toBe("ai");
+    expect(
+      committed.calls.filter(({ callId }) => callId === generation.callId),
+    ).toHaveLength(1);
+  });
+
+  it("commits an AI counteroffer and lets the player settle into Terra coaching", async () => {
+    const backend = convexTest({ schema, modules });
+    const { preparation, offerId } = await prepareSettlementNegotiation(
+      backend,
+      75_000,
+    );
+    const generation = await fakeNegotiationGeneration(
+      preparation,
+      "2026-07-19T03:46:00.000Z",
+      "counter",
+      60_000,
+    );
+    const countered = HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (countered.status !== "completed") {
+      throw new Error("An AI counteroffer should return player control");
+    }
+    const [counterOfferId] =
+      countered.view.capabilities.acceptableSettlementOfferIds;
+    if (!counterOfferId) {
+      throw new Error("The player should be able to accept the AI counteroffer");
+    }
+    expect(countered.view.player.settlement?.offers).toContainEqual(
+      expect.objectContaining({
+        offerId: counterOfferId,
+        proposerPartyId: "party_redwood_signal",
+        recipientPartyIds: ["party_rina_shah"],
+        amount: 60_000,
+        status: "open",
+      }),
+    );
+
+    const exactReplay = HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    expect(exactReplay).toEqual(countered);
+
+    const accepted = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        commandJson: JSON.stringify(
+          playerCommand(
+            countered.view,
+            "91919191-9191-4191-8191-919191919190",
+            "2026-07-19T03:46:01.000Z",
+            { type: "accept_settlement", offerId: counterOfferId },
+          ),
+        ),
+      }),
+    );
+    if (!isHearingDebriefGeneratorModelRequiredPreparation(accepted)) {
+      throw new Error("Accepted settlement should require Terra coaching");
+    }
+    expect(accepted.request).toMatchObject({
+      knowledgeView: {
+        actorRole: "debrief",
+      },
+      procedure: {
+        verdict: null,
+      },
+    });
+    expect(accepted.request.procedure.settlementOffers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ offerId, status: "countered" }),
+        expect.objectContaining({ offerId: counterOfferId, status: "accepted" }),
+      ]),
+    );
+
+    const debriefGeneration = await fakeDebriefGeneration(
+      accepted,
+      "2026-07-19T03:46:02.000Z",
+    );
+    expect(debriefGeneration.trace.model).toBe("gpt-5.6-terra");
+    const completed = HearingCommandPreparationSchema.parse(
+      await backend.action(commitDebriefGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(debriefGeneration),
+      }),
+    );
+    expect(completed).toMatchObject({
+      status: "completed",
+      view: { trial: { phase: "complete", status: "complete" } },
+    });
+    const stored = await backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", preparation.request.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+    }));
+    expect(
+      stored.events.filter(({ eventType }) => eventType === "ACCEPT_SETTLEMENT"),
+    ).toHaveLength(1);
+    expect(
+      stored.calls
+        .filter(({ trialId }) => trialId === preparation.request.trialId)
+        .map(({ task }) => task),
+    ).toEqual(expect.arrayContaining(["evaluate_settlement", "generate_debrief"]));
+  });
+
+  it("allows the AI to accept an in-authority offer and requires a verdict-free debrief", async () => {
+    const backend = convexTest({ schema, modules });
+    const { preparation, offerId } = await prepareSettlementNegotiation(
+      backend,
+      75_000,
+    );
+    const generation = await fakeNegotiationGeneration(
+      preparation,
+      "2026-07-19T03:47:00.000Z",
+      "accept",
+    );
+    const debrief = HearingCommandPreparationSchema.parse(
+      await backend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (!isHearingDebriefGeneratorModelRequiredPreparation(debrief)) {
+      throw new Error("AI settlement acceptance should require Terra coaching");
+    }
+    expect(debrief.request.procedure).toMatchObject({ verdict: null });
+    expect(debrief.request.procedure.settlementOffers).toContainEqual(
+      expect.objectContaining({ offerId, status: "accepted" }),
+    );
+    const acceptedEvent = await backend.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", preparation.request.trialId),
+          )
+          .collect()
+      ).find(({ eventType }) => eventType === "ACCEPT_SETTLEMENT"),
+    );
+    expect(acceptedEvent).toMatchObject({ source: "ai", model: "gpt-5.6-luna" });
+  });
+
+  it("rolls back objection and negotiation events when their accepted audit conflicts", async () => {
+    const objectionBackend = convexTest({ schema, modules });
+    const objectionPreparation = await prepareUserObjectionRuling(
+      objectionBackend,
+    );
+    const objectionGeneration = await fakeObjectionRulingGeneration(
+      objectionPreparation,
+      "2026-07-19T03:50:03.000Z",
+      "overruled",
+    );
+    const objectionEventCount = await objectionBackend.run(async (ctx) =>
+      (await ctx.db.query("trialEvents").collect()).length,
+    );
+    await objectionBackend.mutation(recordTerminalModelCallReference, {
+      ownerId: OWNER_ID,
+      traceJson: JSON.stringify(
+        CourtroomModelCallTraceSchema.parse({
+          ...objectionGeneration.trace,
+          committedActionId: "action:foreign-objection-ruling",
+          committedEventId: "event:action:foreign-objection-ruling",
+        }),
+      ),
+    });
+    await expect(
+      objectionBackend.action(commitObjectionRulingGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: objectionPreparation.request.trialId,
+        generationJson: JSON.stringify(objectionGeneration),
+      }),
+    ).rejects.toThrow("OBJECTION_RULING_GENERATION_INVALID");
+    const objectionPersisted = await objectionBackend.run(async (ctx) => ({
+      events: await ctx.db.query("trialEvents").collect(),
+      calls: await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", objectionGeneration.callId),
+        )
+        .collect(),
+    }));
+    expect(objectionPersisted.events).toHaveLength(objectionEventCount);
+    expect(
+      objectionPersisted.events.some(
+        ({ eventType }) => eventType === "RULE_ON_OBJECTION",
+      ),
+    ).toBe(false);
+    expect(objectionPersisted.calls).toHaveLength(1);
+
+    const negotiationBackend = convexTest({ schema, modules });
+    const { preparation: negotiationPreparation } =
+      await prepareSettlementNegotiation(negotiationBackend, 100_000);
+    const negotiationGeneration = await fakeNegotiationGeneration(
+      negotiationPreparation,
+      "2026-07-19T03:51:00.000Z",
+      "reject",
+    );
+    const negotiationEventCount = await negotiationBackend.run(async (ctx) =>
+      (await ctx.db.query("trialEvents").collect()).length,
+    );
+    await negotiationBackend.mutation(recordTerminalModelCallReference, {
+      ownerId: OWNER_ID,
+      traceJson: JSON.stringify(
+        CourtroomModelCallTraceSchema.parse({
+          ...negotiationGeneration.trace,
+          committedActionId: "action:foreign-negotiation",
+          committedEventId: "event:action:foreign-negotiation",
+        }),
+      ),
+    });
+    await expect(
+      negotiationBackend.action(commitNegotiationGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: negotiationPreparation.request.trialId,
+        generationJson: JSON.stringify(negotiationGeneration),
+      }),
+    ).rejects.toThrow("NEGOTIATION_GENERATION_INVALID");
+    const negotiationPersisted = await negotiationBackend.run(async (ctx) => ({
+      events: await ctx.db.query("trialEvents").collect(),
+      calls: await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", negotiationGeneration.callId),
+        )
+        .collect(),
+    }));
+    expect(negotiationPersisted.events).toHaveLength(negotiationEventCount);
+    expect(negotiationPersisted.events.at(-1)?.eventType).toBe(
+      "PROPOSE_SETTLEMENT",
+    );
+    expect(negotiationPersisted.calls).toHaveLength(1);
   });
 
   it("caps one AI examination at three questions and completes its model loop in eleven steps", async () => {
