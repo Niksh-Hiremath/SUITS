@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "browser-install": "playwright install chromium",
     "test:live:case-compiler": "node --env-file-if-exists=.env.local --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/server/case-compiler/case-compiler.live.test.ts --reporter=verbose",
     "test:live:case-compiler-injection": "node --env-file-if-exists=.env.local --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/server/case-compiler/case-compiler.injection.live.test.ts --reporter=verbose",
     "test:live:courtroom-witness": "node --env-file-if-exists=.env.local --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/server/courtroom-ai/witness-runtime.live.test.ts --reporter=verbose",
@@ -28,6 +30,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
