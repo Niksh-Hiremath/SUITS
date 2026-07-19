@@ -47,7 +47,6 @@ import type { Doc } from "./_generated/dataModel";
 import {
   internalQuery,
   internalMutation,
-  mutation,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
@@ -1378,7 +1377,7 @@ async function createTrialForOwner(
  * Starts an owner-bound event stream from an immutable published CaseGraph.
  * Owner identity is derived exclusively from Convex auth.
  */
-export const createTrial = mutation({
+export const createTrial = internalMutation({
   args: createTrialArgs,
   handler: async (ctx, args) => {
     const ownerId = await requireOwnerId(ctx);
@@ -1488,7 +1487,7 @@ async function appendActiveAction(
 }
 
 /** Commits one player-controlled active-v3 action for the authenticated owner. */
-export const append = mutation({
+export const append = internalMutation({
   args: {
     actionJson: v.string(),
   },

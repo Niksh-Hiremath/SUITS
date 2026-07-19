@@ -8,6 +8,18 @@ const TRIAL_EVENTS_SOURCE_PATH = fileURLToPath(
 );
 
 describe("canonical trial-event browser boundary", () => {
+  it("keeps low-level create and append writes behind internal mutations", async () => {
+    const source = await readFile(TRIAL_EVENTS_SOURCE_PATH, "utf8");
+
+    expect(source).toContain("export const createTrial = internalMutation");
+    expect(source).toContain("export const append = internalMutation");
+    expect(source).not.toMatch(
+      /export const (?:createTrial|append)\s*=\s*mutation\s*\(/u,
+    );
+    expect(source).not.toContain('>("trialEvents:createTrial")');
+    expect(source).not.toContain('>("trialEvents:append")');
+  });
+
   it("keeps raw replay state and event payloads behind an internal query", async () => {
     const source = await readFile(TRIAL_EVENTS_SOURCE_PATH, "utf8");
     const reloadStart = source.indexOf("async function reloadForOwner(");
