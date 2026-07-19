@@ -239,7 +239,7 @@ export function deriveCourtroomPresentation(
   let activeAnimation: CourtroomAnimation | null = null;
   if (input.speech?.lifecycle === "recording") {
     activeSlot = "user_counsel";
-    activeAnimation = "speaking";
+    activeAnimation = "standing";
   } else if (input.speech?.lifecycle === "processing") {
     activeSlot = "user_counsel";
     activeAnimation = "thinking";
@@ -261,7 +261,7 @@ export function deriveCourtroomPresentation(
         activeSlot === "user_counsel" || activeSlot === "opposing_counsel"
           ? "standing"
           : characters.find(({ slot }) => slot === activeSlot)?.posture,
-      emphasis: activeAnimation === "speaking" ? 1 : 0.7,
+      emphasis: 0.7,
     });
   } else if (presentedEvidence && legOwner) {
     updateCharacter(characters, legOwner, {

@@ -11,8 +11,11 @@ import {
 
 import type {
   CourtroomPresentationFrame,
+  CourtroomPresentationRuntimeSnapshot,
+  CourtroomPresentationRuntimeState,
   CourtroomQuality,
 } from "@/domain/courtroom-presentation";
+import { selectCourtroomPresentationRuntime } from "@/domain/courtroom-presentation";
 
 import styles from "./courtroom-stage.module.css";
 
@@ -51,9 +54,11 @@ class RendererBoundary extends Component<
 
 export function CourtroomStage({
   frame,
+  presentationRuntime,
   onQualityChange,
 }: Readonly<{
   frame: CourtroomPresentationFrame;
+  presentationRuntime: CourtroomPresentationRuntimeState;
   onQualityChange: (quality: CourtroomQuality) => void;
 }>) {
   const [webglSupported, setWebglSupported] = useState<boolean | null>(null);
@@ -105,12 +110,44 @@ export function CourtroomStage({
         : ready
           ? "ready"
           : "loading";
+  const runtimeSnapshot = selectCourtroomPresentationRuntime(
+    presentationRuntime,
+  );
+  const cameraShot = presentationRuntime.camera.shot;
+  const runtimeCameraIsBase =
+    presentationRuntime.camera.targetPriority === 0 &&
+    presentationRuntime.camera.targetOrder === 0;
+  const cameraTransition =
+    frame.reducedMotion || presentationRuntime.reducedMotion
+      ? "cut"
+      : runtimeCameraIsBase
+        ? frame.camera.transition
+        : presentationRuntime.camera.transition;
+  const performancePurpose =
+    runtimeSnapshot.playback?.identity.purpose ?? runtimeSnapshot.source;
+  const mouthActor = runtimeMouthIsActive(runtimeSnapshot)
+    ? runtimeSnapshot.sceneActor
+    : null;
+  const runtimeActorLabel = frame.characters.find(
+    ({ slot }) => slot === runtimeSnapshot.sceneActor,
+  )?.label;
+  const screenReaderStatus =
+    runtimeSnapshot.source !== "base" &&
+    runtimeActorLabel &&
+    runtimeSnapshot.animation
+      ? `${runtimeActorLabel}: ${runtimeSnapshot.animation.replaceAll("_", " ")}`
+      : frame.statusSummary;
 
   return (
     <section
       aria-labelledby="courtroom-stage-heading"
       className={styles.stage}
-      data-camera-shot={frame.camera.shot}
+      data-active-scene-actor={runtimeSnapshot.sceneActor ?? "none"}
+      data-camera-shot={cameraShot}
+      data-camera-target={presentationRuntime.camera.target ?? "none"}
+      data-camera-transition={cameraTransition}
+      data-performance-purpose={performancePurpose}
+      data-performance-source={runtimeSnapshot.source}
       data-quality={frame.quality}
       data-renderer-ready={ready ? "true" : "false"}
       data-renderer-state={rendererState}
@@ -120,10 +157,13 @@ export function CourtroomStage({
         {webglSupported && (
           <RendererBoundary onError={handleRenderError}>
             <CourtroomCanvas
+              cameraShot={cameraShot}
+              cameraTransition={cameraTransition}
               frame={frame}
               onContextLost={handleContextLost}
               onContextRestored={handleContextRestored}
               onReady={handleReady}
+              presentationRuntime={presentationRuntime}
             />
           </RendererBoundary>
         )}
@@ -172,21 +212,49 @@ export function CourtroomStage({
         {frame.display.status && <small>{frame.display.status}</small>}
       </div>
       <div className={styles.actors} aria-hidden="true">
-        {frame.characters.map((character) => (
-          <div
-            className={styles.actor}
-            data-active={character.emphasis > 0.6 ? "true" : "false"}
-            data-animation={character.animation}
-            key={character.slot}
-          >
-            <span>{character.label}</span>
-            <strong>{character.present ? character.animation.replaceAll("_", " ") : "off stage"}</strong>
-          </div>
-        ))}
+        {frame.characters.map((character) => {
+          const isRuntimeActor = runtimeSnapshot.sceneActor === character.slot;
+          const animation =
+            isRuntimeActor && runtimeSnapshot.animation
+              ? runtimeSnapshot.animation
+              : character.animation;
+          const posture =
+            isRuntimeActor && runtimeSnapshot.posture
+              ? runtimeSnapshot.posture
+              : character.posture;
+          return (
+            <div
+              className={styles.actor}
+              data-actor-slot={character.slot}
+              data-active={
+                isRuntimeActor || character.emphasis > 0.6 ? "true" : "false"
+              }
+              data-animation={animation}
+              data-mouth-active={mouthActor === character.slot ? "true" : "false"}
+              data-posture={posture}
+              data-scene-actor={character.slot}
+              key={character.slot}
+            >
+              <span>{character.label}</span>
+              <strong>
+                {character.present
+                  ? animation.replaceAll("_", " ")
+                  : "off stage"}
+              </strong>
+            </div>
+          );
+        })}
       </div>
       <p aria-live="polite" className={styles.screenReaderStatus}>
-        {frame.statusSummary}
+        {screenReaderStatus}
       </p>
     </section>
   );
+}
+
+function runtimeMouthIsActive(
+  snapshot: CourtroomPresentationRuntimeSnapshot,
+): boolean {
+  if (snapshot.source === "user_speech") return true;
+  return snapshot.playback !== null && snapshot.playback.phase !== "requested";
 }

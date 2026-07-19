@@ -4,6 +4,7 @@ import type { HearingPerformanceEvent } from "@/lib/speech/hearing-performance";
 
 import {
   CourtroomAnimationSchema,
+  CourtroomCameraShotSchema,
   CourtroomPostureSchema,
   SceneActorKeySchema,
   type CourtroomAnimation,
@@ -112,6 +113,7 @@ const CourtroomRuntimePlaybackHighWaterSchema = z
 const CourtroomRuntimeCameraPendingSchema = z
   .object({
     target: SceneActorKeySchema.nullable(),
+    shot: CourtroomCameraShotSchema,
     priority: z.number().int().min(0).max(7),
     order: z.number().int().nonnegative(),
     sinceMs: z.number().finite().nonnegative(),
@@ -122,6 +124,7 @@ const CourtroomRuntimeCameraPendingSchema = z
 const CourtroomRuntimeCameraSchema = z
   .object({
     target: SceneActorKeySchema.nullable(),
+    shot: CourtroomCameraShotSchema,
     targetPriority: z.number().int().min(0).max(7),
     targetOrder: z.number().int().nonnegative(),
     transition: z.enum(["blend", "cut"]),
@@ -137,6 +140,7 @@ export const CourtroomPresentationRuntimeStateSchema = z
     revision: z.number().int().nonnegative(),
     reducedMotion: z.boolean(),
     baseFocus: SceneActorKeySchema.nullable(),
+    baseCameraShot: CourtroomCameraShotSchema,
     nextOrder: z.number().int().positive(),
     playbackHighWater: CourtroomRuntimePlaybackHighWaterSchema.nullable(),
     highestUserSpeechGeneration: z.number().int().nonnegative(),
@@ -283,6 +287,7 @@ type PlaybackCue = z.infer<typeof CourtroomRuntimePlaybackCueSchema>;
 type RuntimeSelection = Readonly<{
   source: "base" | "user_speech" | "playback";
   sceneActor: SceneActorKey | null;
+  cameraShot: z.infer<typeof CourtroomCameraShotSchema>;
   priority: number;
   order: number;
   playback: PlaybackCue | null;
@@ -402,15 +407,37 @@ function playbackPriority(identity: CourtroomRuntimePlaybackIdentity): number {
   }
 }
 
+function closeCameraShot(
+  sceneActor: SceneActorKey | null,
+): z.infer<typeof CourtroomCameraShotSchema> {
+  switch (sceneActor) {
+    case "judge":
+      return "judge_close";
+    case "user_counsel":
+      return "user_counsel_close";
+    case "opposing_counsel":
+      return "opposing_counsel_close";
+    case "witness":
+      return "witness_close";
+    case "jury":
+      return "jury_box";
+    case "clerk":
+      return "evidence_display";
+    case null:
+      return "courtroom_wide";
+  }
+}
+
 function selectRuntimeCue(
   state: Pick<
     CourtroomPresentationRuntimeState,
-    "baseFocus" | "playbackCues" | "userSpeech"
+    "baseCameraShot" | "baseFocus" | "playbackCues" | "userSpeech"
   >,
 ): RuntimeSelection {
   let selected: RuntimeSelection = {
     source: "base",
     sceneActor: state.baseFocus,
+    cameraShot: state.baseCameraShot,
     priority: 0,
     order: 0,
     playback: null,
@@ -419,6 +446,7 @@ function selectRuntimeCue(
     selected = {
       source: "user_speech",
       sceneActor: "user_counsel",
+      cameraShot: "user_counsel_close",
       priority: 3,
       order: state.userSpeech.order,
       playback: null,
@@ -433,6 +461,7 @@ function selectRuntimeCue(
       selected = {
         source: "playback",
         sceneActor: cue.identity.sceneActor,
+        cameraShot: closeCameraShot(cue.identity.sceneActor),
         priority,
         order: cue.order,
         playback: cue,
@@ -451,6 +480,7 @@ function reconcileCamera(
   const transition = reducedMotion ? "cut" : "blend";
   const selectionMatchesCamera =
     selection.sceneActor === camera.target &&
+    selection.cameraShot === camera.shot &&
     selection.priority === camera.targetPriority &&
     selection.order === camera.targetOrder;
   if (selectionMatchesCamera) {
@@ -467,6 +497,7 @@ function reconcileCamera(
     (selection.source !== "base" && selection.order > camera.targetOrder);
   const pendingMatches =
     camera.pending?.target === selection.sceneActor &&
+    camera.pending.shot === selection.cameraShot &&
     camera.pending.priority === selection.priority &&
     camera.pending.order === selection.order;
   const hysteresisElapsed =
@@ -476,6 +507,7 @@ function reconcileCamera(
   if (shouldPreempt || hysteresisElapsed) {
     return CourtroomRuntimeCameraSchema.parse({
       target: selection.sceneActor,
+      shot: selection.cameraShot,
       targetPriority: selection.priority,
       targetOrder: selection.order,
       transition,
@@ -493,6 +525,7 @@ function reconcileCamera(
       ? camera.pending
       : {
           target: selection.sceneActor,
+          shot: selection.cameraShot,
           priority: selection.priority,
           order: selection.order,
           sinceMs: observedAtMs,
@@ -616,6 +649,7 @@ function finishRuntimeChange(
 export type CreateCourtroomPresentationRuntimeInput = Readonly<{
   reducedMotion?: boolean;
   baseFocus?: SceneActorKey | null;
+  baseCameraShot?: z.infer<typeof CourtroomCameraShotSchema>;
   observedAtMs?: number;
 }>;
 
@@ -629,6 +663,7 @@ export function createCourtroomPresentationRuntime(
     revision: 0,
     reducedMotion,
     baseFocus: input.baseFocus ?? null,
+    baseCameraShot: input.baseCameraShot ?? "courtroom_wide",
     nextOrder: 1,
     playbackHighWater: null,
     highestUserSpeechGeneration: 0,
@@ -638,6 +673,7 @@ export function createCourtroomPresentationRuntime(
     retiredUserSpeechIdentities: [],
     camera: {
       target: input.baseFocus ?? null,
+      shot: input.baseCameraShot ?? "courtroom_wide",
       targetPriority: 0,
       targetOrder: 0,
       transition: "cut",
@@ -860,6 +896,7 @@ export function reduceCourtroomPresentationRuntime(
     {
       reducedMotion: state.reducedMotion,
       baseFocus: state.baseFocus,
+      baseCameraShot: state.baseCameraShot,
       nextOrder,
       playbackHighWater,
       highestUserSpeechGeneration,
@@ -883,6 +920,7 @@ export function advanceCourtroomPresentationRuntime(
     {
       reducedMotion: state.reducedMotion,
       baseFocus: state.baseFocus,
+      baseCameraShot: state.baseCameraShot,
       nextOrder: state.nextOrder,
       playbackHighWater: state.playbackHighWater,
       highestUserSpeechGeneration: state.highestUserSpeechGeneration,
@@ -899,6 +937,7 @@ export function advanceCourtroomPresentationRuntime(
 
 export type RebaseCourtroomPresentationRuntimeInput = Readonly<{
   baseFocus: SceneActorKey | null;
+  baseCameraShot: z.infer<typeof CourtroomCameraShotSchema>;
   reducedMotion: boolean;
   observedAtMs: number;
 }>;
@@ -910,12 +949,14 @@ export function rebaseCourtroomPresentationRuntime(
   const atMs = checkedTime(input.observedAtMs);
   const changed =
     state.baseFocus !== input.baseFocus ||
+    state.baseCameraShot !== input.baseCameraShot ||
     state.reducedMotion !== input.reducedMotion;
   return finishRuntimeChange(
     state,
     {
       reducedMotion: input.reducedMotion,
       baseFocus: input.baseFocus,
+      baseCameraShot: input.baseCameraShot,
       nextOrder: state.nextOrder,
       playbackHighWater: state.playbackHighWater,
       highestUserSpeechGeneration: state.highestUserSpeechGeneration,

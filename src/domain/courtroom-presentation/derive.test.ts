@@ -199,7 +199,7 @@ describe("courtroom presentation derivation", () => {
     expect(Object.isFrozen(frame.characters[0])).toBe(true);
   });
 
-  it("maps local question recording to the user counsel and a close camera", () => {
+  it("stands the recording counsel without inventing an exact speaking event", () => {
     const frame = deriveCourtroomPresentation({
       view: view(),
       speech: { lifecycle: "recording", activeMode: "question" },
@@ -209,16 +209,20 @@ describe("courtroom presentation derivation", () => {
     });
 
     expect(character(frame, "user_counsel")).toMatchObject({
-      animation: "speaking",
+      animation: "standing",
       posture: "standing",
-      emphasis: 1,
+      emphasis: 0.7,
     });
     expect(character(frame, "witness").animation).toBe("listening");
+    expect(frame.characters).not.toContainEqual(
+      expect.objectContaining({ animation: "speaking" }),
+    );
     expect(frame.camera).toEqual({
       shot: "user_counsel_close",
       target: "user_counsel",
       transition: "blend",
     });
+    expect(frame.statusSummary).toBe("Your counsel is standing.");
   });
 
   it("does not invent an active speaker from generic playback state", () => {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -12,7 +13,13 @@ import {
 
 import { CourtroomStage } from "@/components/courtroom/courtroom-stage";
 import {
+  advanceCourtroomPresentationRuntime,
+  COURTROOM_CAMERA_HYSTERESIS_MS,
+  createCourtroomPresentationRuntime,
   deriveCourtroomPresentation,
+  rebaseCourtroomPresentationRuntime,
+  reduceCourtroomPresentationRuntime,
+  resetCourtroomPresentationRuntime,
   type CourtroomQuality,
 } from "@/domain/courtroom-presentation";
 import {
@@ -279,8 +286,28 @@ function HearingPageContent() {
     useState<HearingController | null>(null);
   const [speechSnapshot, setSpeechSnapshot] =
     useState<HearingControllerSnapshot | null>(null);
+  const [presentationRuntime, setPresentationRuntime] = useState(() =>
+    createCourtroomPresentationRuntime(),
+  );
+  const presentationTrialIdRef = useRef<string | null>(null);
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
   const [speechSetupError, setSpeechSetupError] = useState<string>();
   const trialId = createdTrialId ?? initialTrialId;
+
+  const publishView = useCallback((next: HearingRuntimeViewV1): void => {
+    if (presentationTrialIdRef.current !== next.trial.trialId) {
+      presentationTrialIdRef.current = next.trial.trialId;
+      setPresentationRuntime(
+        resetCourtroomPresentationRuntime({
+          reducedMotion: reducedMotionRef.current,
+          observedAtMs: window.performance.now(),
+        }),
+      );
+    }
+    viewRef.current = next;
+    setView(next);
+  }, []);
 
   const caseSelector = useMemo(() => {
     const uploadId = searchParams.get("upload")?.trim();
@@ -404,6 +431,13 @@ function HearingPageContent() {
       setSpeechSnapshot(snapshot);
       if (snapshot.lifecycle === "ready") requestSpeechDrainRef.current();
     });
+    const unsubscribePerformance = controller.subscribePerformance((event) => {
+      if (disposed) return;
+      const observedAtMs = window.performance.now();
+      setPresentationRuntime((current) =>
+        reduceCourtroomPresentationRuntime(current, event, observedAtMs),
+      );
+    });
     queueMicrotask(() => {
       if (disposed) return;
       setSpeechController(controller);
@@ -412,6 +446,7 @@ function HearingPageContent() {
     return () => {
       disposed = true;
       interruptionRecoveryAbortRef.current?.abort();
+      unsubscribePerformance();
       unsubscribe();
       if (speechControllerRef.current === controller) {
         speechControllerRef.current = null;
@@ -420,7 +455,7 @@ function HearingPageContent() {
         // close() has already fenced capture/playback and retained its safe status.
       });
     };
-  }, []);
+  }, [publishView]);
 
   useEffect(() => {
     const previousTrialId = observedTrialSearchRef.current;
@@ -457,8 +492,7 @@ function HearingPageContent() {
         const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
         if (!parsed.success) throw new Error("The saved hearing response was invalid.");
         speechQueueRef.current.length = 0;
-        viewRef.current = parsed.data;
-        setView(parsed.data);
+        publishView(parsed.data);
         speechControllerRef.current?.baselineView(parsed.data);
         await recoverDurableInterruptionRef.current(
           parsed.data,
@@ -489,12 +523,7 @@ function HearingPageContent() {
       }
     })();
     return () => controller.abort();
-  }, [createdTrialId, initialTrialId]);
-
-  function publishView(next: HearingRuntimeViewV1): void {
-    viewRef.current = next;
-    setView(next);
-  }
+  }, [createdTrialId, initialTrialId, publishView]);
 
   function recoverDurableInterruption(
     previous: HearingRuntimeViewV1,
@@ -1044,20 +1073,74 @@ function HearingPageContent() {
     speechIsRecording && speechSnapshot?.activeMode === "question";
   const closingIsRecording =
     speechIsRecording && speechSnapshot?.activeMode === "closing";
-  const courtroomPresentation = view
-    ? deriveCourtroomPresentation({
-        view,
-        speech: speechSnapshot
-          ? {
-              lifecycle: speechSnapshot.lifecycle,
-              activeMode: speechSnapshot.activeMode,
-            }
-          : null,
-        busy: courtroomBusy,
-        quality: courtroomQuality,
-        reducedMotion,
-      })
-    : null;
+  const speechActiveMode = speechSnapshot?.activeMode ?? null;
+  const courtroomPresentation = useMemo(
+    () =>
+      view
+        ? deriveCourtroomPresentation({
+            view,
+            speech: speechLifecycle
+              ? {
+                  lifecycle: speechLifecycle,
+                  activeMode: speechActiveMode,
+                }
+              : null,
+            busy: courtroomBusy,
+            quality: courtroomQuality,
+            reducedMotion,
+          })
+        : null,
+    [
+      courtroomBusy,
+      courtroomQuality,
+      reducedMotion,
+      speechActiveMode,
+      speechLifecycle,
+      view,
+    ],
+  );
+  const durableTrialId = view?.trial.trialId ?? null;
+  const presentationBaseFocus = courtroomPresentation?.camera.target ?? null;
+  const presentationBaseCameraShot =
+    courtroomPresentation?.camera.shot ?? "courtroom_wide";
+  const cameraPending = presentationRuntime.camera.pending;
+
+  useEffect(() => {
+    const observedAtMs = window.performance.now();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setPresentationRuntime((current) =>
+        rebaseCourtroomPresentationRuntime(current, {
+          baseFocus: presentationBaseFocus,
+          baseCameraShot: presentationBaseCameraShot,
+          reducedMotion,
+          observedAtMs,
+        }),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    durableTrialId,
+    presentationBaseCameraShot,
+    presentationBaseFocus,
+    reducedMotion,
+  ]);
+
+  useEffect(() => {
+    if (cameraPending === null) return;
+    const dueAtMs =
+      cameraPending.sinceMs + COURTROOM_CAMERA_HYSTERESIS_MS;
+    const timeout = window.setTimeout(() => {
+      const observedAtMs = Math.max(window.performance.now(), dueAtMs);
+      setPresentationRuntime((current) =>
+        advanceCourtroomPresentationRuntime(current, observedAtMs),
+      );
+    }, Math.max(0, dueAtMs - window.performance.now()));
+    return () => window.clearTimeout(timeout);
+  }, [cameraPending]);
 
   return (
     <main className="hearing-shell">
@@ -1141,6 +1224,7 @@ function HearingPageContent() {
             <CourtroomStage
               frame={courtroomPresentation}
               onQualityChange={setCourtroomQuality}
+              presentationRuntime={presentationRuntime}
             />
           )}
           <section className="transcript-panel">

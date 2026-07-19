@@ -158,7 +158,10 @@ describe("courtroom presentation runtime", () => {
   });
 
   it("lets a request establish posture and focus without moving the mouth", () => {
-    let state = createCourtroomPresentationRuntime({ baseFocus: "witness" });
+    let state = createCourtroomPresentationRuntime({
+      baseFocus: "witness",
+      baseCameraShot: "witness_counsel_two_shot",
+    });
     const objection = {
       jobId: "job:objection",
       responseId: "response:objection",
@@ -732,10 +735,14 @@ describe("courtroom presentation runtime", () => {
       sceneActor: "witness" as const,
       purpose: "testimony" as const,
     };
-    let state = createCourtroomPresentationRuntime({ baseFocus: "witness" });
+    let state = createCourtroomPresentationRuntime({
+      baseFocus: "witness",
+      baseCameraShot: "witness_counsel_two_shot",
+    });
     state = reduceCourtroomPresentationRuntime(state, requested(testimony), 1);
     expect(state.camera).toMatchObject({
       target: "witness",
+      shot: "witness_close",
       targetPriority: 2,
       targetOrder: 1,
       transition: "blend",
@@ -749,6 +756,7 @@ describe("courtroom presentation runtime", () => {
       targetOrder: 1,
       pending: {
         target: "witness",
+        shot: "witness_counsel_two_shot",
         priority: 0,
         order: 0,
         sinceMs: 2,
@@ -765,9 +773,48 @@ describe("courtroom presentation runtime", () => {
     );
     expect(state.camera).toMatchObject({
       target: "witness",
+      shot: "witness_counsel_two_shot",
       targetPriority: 0,
       targetOrder: 0,
       transition: "blend",
+      pending: null,
+    });
+  });
+
+  it("holds the exact prior composition across a base-to-base reframe", () => {
+    let state = createCourtroomPresentationRuntime({
+      baseFocus: "witness",
+      baseCameraShot: "witness_counsel_two_shot",
+    });
+    state = rebaseCourtroomPresentationRuntime(state, {
+      baseFocus: "judge",
+      baseCameraShot: "judge_close",
+      reducedMotion: false,
+      observedAtMs: 5,
+    });
+    expect(state.camera).toMatchObject({
+      target: "witness",
+      shot: "witness_counsel_two_shot",
+      targetPriority: 0,
+      targetOrder: 0,
+      pending: {
+        target: "judge",
+        shot: "judge_close",
+        priority: 0,
+        order: 0,
+        sinceMs: 5,
+      },
+    });
+
+    state = advanceCourtroomPresentationRuntime(
+      state,
+      5 + COURTROOM_CAMERA_HYSTERESIS_MS,
+    );
+    expect(state.camera).toMatchObject({
+      target: "judge",
+      shot: "judge_close",
+      targetPriority: 0,
+      targetOrder: 0,
       pending: null,
     });
   });
@@ -860,6 +907,7 @@ describe("courtroom presentation runtime", () => {
     state = reduceCourtroomPresentationRuntime(state, terminal(), 2);
     state = rebaseCourtroomPresentationRuntime(state, {
       baseFocus: "jury",
+      baseCameraShot: "jury_box",
       reducedMotion: true,
       observedAtMs: 3,
     });
@@ -871,6 +919,7 @@ describe("courtroom presentation runtime", () => {
 
     const reset = resetCourtroomPresentationRuntime({
       baseFocus: "jury",
+      baseCameraShot: "jury_box",
       reducedMotion: true,
       observedAtMs: 4,
     });
@@ -879,7 +928,7 @@ describe("courtroom presentation runtime", () => {
       playbackCues: [],
       retiredPlaybackIdentities: [],
       userSpeech: null,
-      camera: { target: "jury", transition: "cut" },
+      camera: { target: "jury", shot: "jury_box", transition: "cut" },
     });
   });
 

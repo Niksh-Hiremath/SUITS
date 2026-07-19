@@ -227,7 +227,40 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("Objection telemetry");
     expect(sources.page).toContain("Local audio telemetry");
     expect(sources.page).toContain("deriveCourtroomPresentation({");
+    expect(sources.page).toContain("createCourtroomPresentationRuntime()");
+    expect(sources.page).toContain("controller.subscribePerformance((event)");
+    expect(sources.page).toContain(
+      "reduceCourtroomPresentationRuntime(current, event, observedAtMs)",
+    );
+    expect(sources.page).toContain("unsubscribePerformance();");
+    expect(sources.page.indexOf("unsubscribePerformance();")).toBeLessThan(
+      sources.page.indexOf("controller.close()"),
+    );
+    expect(sources.page).toContain("resetCourtroomPresentationRuntime({");
+    expect(sources.page).toContain(
+      "presentationTrialIdRef.current !== next.trial.trialId",
+    );
+    const publishViewStart = sources.page.indexOf("const publishView = useCallback");
+    const resetStart = sources.page.indexOf(
+      "resetCourtroomPresentationRuntime({",
+      publishViewStart,
+    );
+    const durableViewWrite = sources.page.indexOf(
+      "viewRef.current = next",
+      publishViewStart,
+    );
+    expect(publishViewStart).toBeGreaterThan(-1);
+    expect(resetStart).toBeGreaterThan(publishViewStart);
+    expect(resetStart).toBeLessThan(durableViewWrite);
+    expect(sources.page).toContain(
+      "presentationBaseCameraShot,\n    presentationBaseFocus",
+    );
+    expect(sources.page).toContain("rebaseCourtroomPresentationRuntime(current, {");
+    expect(sources.page).toContain(
+      "cameraPending.sinceMs + COURTROOM_CAMERA_HYSTERESIS_MS",
+    );
     expect(sources.page).toContain("<CourtroomStage");
+    expect(sources.page).toContain("presentationRuntime={presentationRuntime}");
     expect(sources.page).toContain("onQualityChange={setCourtroomQuality}");
     expect(sources.page).toContain('(prefers-reduced-motion: reduce)');
     expect(sources.courtroomStage).toContain("ssr: false");
