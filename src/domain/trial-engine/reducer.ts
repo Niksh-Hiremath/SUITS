@@ -449,6 +449,19 @@ export function applyTrialEvent(stateInput: TrialState, eventInput: unknown): Tr
         event.payload.disposition,
         event.eventId,
       );
+      const speechTurn =
+        event.payload.turnId !== undefined &&
+        event.payload.text !== undefined &&
+        event.payload.citations !== undefined
+          ? transcriptTurn(
+              event,
+              event.payload.turnId,
+              event.payload.text,
+              event.actor,
+              event.payload.citations,
+              null,
+            )
+          : null;
       next = {
         ...state,
         activeQuestionId: null,
@@ -460,6 +473,17 @@ export function applyTrialEvent(stateInput: TrialState, eventInput: unknown): Tr
           ...state.witnesses,
           [event.payload.witnessId]: { ...witness, status: "sworn", examinationKind: null, lastEventId: event.eventId },
         },
+        transcriptTurns:
+          speechTurn === null
+            ? state.transcriptTurns
+            : {
+                ...state.transcriptTurns,
+                [speechTurn.turnId]: speechTurn,
+              },
+        transcriptTurnIds:
+          speechTurn === null
+            ? state.transcriptTurnIds
+            : [...state.transcriptTurnIds, speechTurn.turnId],
       };
       break;
     }

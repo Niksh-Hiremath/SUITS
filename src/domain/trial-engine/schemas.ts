@@ -559,7 +559,25 @@ const EndExaminationPayloadV1Schema = z
 const EndExaminationPayloadV2Schema = EndExaminationPayloadV1Schema;
 const EndExaminationPayloadV3Schema = EndExaminationPayloadV2Schema.extend({
   disposition: z.enum(["completed", "waived"]),
-}).strict();
+  turnId: IdentifierSchema.optional(),
+  text: z.string().trim().min(1).max(2_000).optional(),
+  citations: CitationSetSchema.optional(),
+})
+  .strict()
+  .superRefine((payload, context) => {
+    const speechFields = [payload.turnId, payload.text, payload.citations];
+    const presentCount = speechFields.filter(
+      (field) => field !== undefined,
+    ).length;
+    if (presentCount !== 0 && presentCount !== speechFields.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["turnId"],
+        message:
+          "Examination-ending speech requires turnId, text, and citations together",
+      });
+    }
+  });
 const ObjectPayloadSchema = z
   .object({
     objectionId: IdentifierSchema,

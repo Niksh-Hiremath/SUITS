@@ -1006,6 +1006,23 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (disposition === "waived" && leg.answeredQuestionCount > 0) {
         return invalid("INVALID_ACTION", "A started examination leg cannot be waived");
       }
+      if (
+        action.payload.turnId !== undefined &&
+        state.transcriptTurns[action.payload.turnId]
+      ) {
+        return invalid(
+          "DUPLICATE_ENTITY_ID",
+          `Transcript turn ${action.payload.turnId} already exists`,
+          "payload.turnId",
+        );
+      }
+      if (action.payload.citations !== undefined) {
+        const citationIssue = validateJuryConsiderableCitations(
+          state,
+          action.payload.citations,
+        );
+        if (citationIssue) return citationIssue;
+      }
       return null;
     }
     case "RELEASE_WITNESS": {

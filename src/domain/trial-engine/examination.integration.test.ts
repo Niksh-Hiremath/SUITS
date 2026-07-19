@@ -447,6 +447,47 @@ describe("multi-leg witness examination", () => {
     );
     expect(harness.examinationState.activeAppearanceId).toBeNull();
   });
+
+  it("persists V3 examination-ending counsel speech as a cited transcript turn", () => {
+    const harness = createHarness();
+    callAndSwearRina(harness);
+    askAndAnswer(harness, "direct", "spoken_end_direct");
+    endExamination(harness, "direct");
+    const cross = askAndAnswer(harness, "cross", "spoken_end_cross");
+    const ended = harness.commit(
+      "END_EXAMINATION",
+      {
+        witnessId: ACTORS.rina.witnessId,
+        examinationKind: "cross",
+        disposition: "completed",
+        turnId: "turn_cross_completed",
+        text: "No further questions, Your Honor.",
+        citations: {
+          factIds: [],
+          evidenceIds: [],
+          testimonyIds: [cross.testimonyId],
+          eventIds: [],
+          sourceSegmentIds: [],
+        },
+      },
+      ACTORS.opposingCounsel,
+    );
+
+    expect(ended.event.citations.testimonyIds).toEqual([
+      cross.testimonyId,
+    ]);
+    expect(harness.state.transcriptTurns.turn_cross_completed).toMatchObject({
+      text: "No further questions, Your Honor.",
+      actor: ACTORS.opposingCounsel,
+      testimonyId: null,
+      citations: { testimonyIds: [cross.testimonyId] },
+      sourceEventId: ended.event.eventId,
+    });
+    expect(harness.state.transcriptTurnIds.at(-1)).toBe(
+      "turn_cross_completed",
+    );
+    expect(activeAppearance(harness).stage).toBe("redirect");
+  });
 });
 
 describe("examination permissions and open-work constraints", () => {
