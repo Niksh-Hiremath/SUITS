@@ -559,7 +559,7 @@ Gate:
 
 Deliverables:
 
-- [ ] Three.js/R3F scene and licensed assets;
+- [x] Three.js/R3F scene and licensed assets;
 - [ ] character animation state machines;
 - [ ] camera director;
 - [ ] lip/viseme timing;
@@ -895,6 +895,13 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: Milestone 6 is complete. The automated browser uses Chromium fake media and muted output, so it does not claim real microphone permission, human STT accuracy, speaker audibility, GPU inference, or the Milestone 5 hardware/privacy gate. Begin Milestone 7 animated-courtroom work while retaining the open Milestone 5 external-hardware checks.
   - Commits: `73961a3`, `7f20752`, `e8271a6`, `f032844`, `9c8e7f2`, `7f9a7b8`, and `0dcf8c2`.
 
+- 2026-07-20 01:37 IST - Milestone 7 procedural courtroom foundation
+  - Changed: added exact React Three Fiber/Three.js dependencies, a strict renderer-owned `courtroom-presentation-frame.v1` contract, a pure redacted-view-to-presentation selector, and a responsive full-width procedural courtroom with judge, both counsel, active witness, clerk/display, and representative jury. The canvas is a noninteractive enhancement; the existing voice and courtroom controls remain semantic DOM outside it.
+  - Safety and recoverability: presentation labels are normalized and deterministically bounded before strict parsing; generic audio playback does not guess an actor from the latest transcript; OS reduced-motion preference reaches the presentation contract; WebGL capability is probed before mounting; the ready marker is emitted only from the first rendered frame; render failure and context loss expose a user-safe fallback without removing hearing controls. The scene uses only repository-authored primitives and is recorded in `docs/ASSETS.md`.
+  - Verified: eight focused selector/page-boundary tests, scoped ESLint, strict TypeScript, and the production build passed. Two parallel Chromium fixtures passed: the real partial-objection hearing initialized and rendered the scene before continuing through the existing production-path interruption assertions, while a separately launched `--disable-webgl --disable-software-rasterizer` browser proved the fallback and enabled hearing controls.
+  - Remaining: this closes only the scene/assets foundation deliverable, not Milestone 7. Exact audio actor/job/timing events, validated model performance projection, animated state transitions, visemes, camera priority/hysteresis, evidence/ruling/settlement transitions, explicit quality controls, a deterministic visual state atlas, and mid-sentence objection screenshots/video remain open.
+  - Commit: `00a4782`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -964,6 +971,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A pending judicial motion must be a procedure-wide serialization point. Allowing settlement or another player command to append first makes a head-bound ruling stale, so player commands now fail with `STRIKE_RULING_PENDING` and reload invokes an actorless protected continuation before accepting new work.
 - The production interruption path intentionally overlaps the protected ruling request with the short cached objection playback. The coordinator considers the local reaction dispatched once synthesis is queued, while the controller retains the true Web Audio completion and awaits natural drain before dispatching the judge ruling or resumed witness. Measuring drain before the HTTP request contradicts the low-latency runtime and its unit contract; source-identity tracking between exact objection and ruling synthesis markers is the deterministic browser assertion.
 - The first valid examination question exists while the leg is `available`, not yet `in_progress`. Projection and voice-policy checks that required only `in_progress` hid/rejected the first question even though the deterministic engine authorized it. Production-path E2E exposed both copies of that assumption.
+- A generic browser playback lifecycle cannot identify the character who is currently audible. During cached objection and ruling speech, deriving the speaker from the latest durable transcript would animate the wrong actor because the durable view can publish before its queued audio drains. Milestone 7 therefore remains neutral for generic playback until the speech controller exposes exact actor/job/timing events.
+- React Three Fiber's `Canvas` fallback and `onCreated` callback are not sufficient renderer proof. Capability detection, a first-`useFrame` ready signal, an error boundary, and `webglcontextlost`/`webglcontextrestored` handling are required to distinguish a drawn scene from a configured or failed context.
+- Valid CaseGraph witness and evidence names can be longer than the intentionally compact renderer label contract. Presentation data must be deterministically normalized and bounded before strict renderer parsing so a valid case cannot crash the hearing UI.
 
 ## 15. Decisions
 
@@ -1033,6 +1043,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat pending generic judicial work like interrupted-speech recovery: expose only an owner/trial actorless continuation boundary, no browser-selected directive or actor, and return the current view without generic dispatch while a leased final-bound interruption remains active.
 - Let protected ruling evaluation overlap cached objection playback to preserve latency, but never let judge or witness audio overtake it: retain the exact playback-completion promise, require natural Web Audio drain, and only then synthesize the ruling and continuation.
 - Keep automated speech E2E hardware-independent and production-path: use Chromium fake media, muted output, a dedicated loopback fake companion, real framed WebSocket traffic, the real browser controller/BFF/Convex path, and a narrowly gated server-only decision provider. Do not grant real microphone permission or claim audible/GPU verification from this fixture.
+- Start the animated courtroom with original procedural Three.js primitives and no external binary assets. This establishes deterministic rendering, a documented asset origin, responsive layout, and a safe semantic boundary before introducing licensed rigs, textures, or animation files.
+- Keep renderer state subordinate to validated application contracts. The scene consumes an immutable allowlisted presentation frame, never the controller, model output JSON, transcript text, case summary, fact propositions, evidence descriptions, or arbitrary Three.js properties.
+- Do not fabricate an audible actor from the durable transcript. Until exact speech lifecycle events are available, generic playback remains a neutral courtroom state; later audio-actor/timing wiring must carry explicit stable scene bindings and cancellation fencing.
 
 ## 16. Verification Evidence
 
@@ -1252,6 +1265,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run typecheck`, `npx eslint playwright.config.ts tests/e2e/hearing-objection.spec.ts`, and `git diff --check` - exit 0.
   - Chromium used `--use-fake-device-for-media-stream`, `--use-fake-ui-for-media-stream`, `--autoplay-policy=no-user-gesture-required`, and `--mute-audio`. This is production-path orchestration proof, not real microphone, audible speaker, CUDA, or live-Luna evidence; those claims remain explicitly open under their own gates.
   - `git push origin main` - exit 0 through `0dcf8c2`; the isolated speech/Next harness, fail-closed decision fixture, first-question fixes, fake streaming-capability correction, and browser acceptance test are on `origin/main`.
+
+- 2026-07-20 01:25-01:37 IST - Milestone 7 procedural courtroom foundation verification
+  - `npm run typecheck` and scoped `npx eslint` over the presentation domain, courtroom components, hearing page/source test, and both courtroom Playwright fixtures - exit 0.
+  - `npx vitest run src/domain/courtroom-presentation src/app/hearing/page.source.test.ts` - exit 0; two files and eight tests passed. Coverage proves the fixed six-role ensemble, no copied case summary/fact/evidence-description markers, immutable frames, bounded long witness/evidence names, recording state, neutral generic playback, visible evidence presentation, pending-response thinking, reduced-motion camera cuts, and completed-leg floor handling.
+  - `npm run build` - exit 0 in 15.7 seconds; Next.js 16.2.10 compiled/typechecked and generated 19/19 pages with the dynamically loaded client-only courtroom canvas.
+  - `npx playwright test tests/e2e/courtroom-fallback.spec.ts tests/e2e/hearing-objection.spec.ts --project=chromium` - exit 0; two tests passed with two workers in 42.6 seconds. The normal fixture required `data-renderer-ready=true` from the first R3F frame before exercising the real page/controller/WebSocket/Python fake-speech/protected-route/Convex interruption chain. The second browser disabled WebGL and software rasterization, observed `data-renderer-state=unavailable`, displayed the safe fallback, and retained an enabled `Call witness` control.
+  - The successful hearing fixture attached `playwright-report/data/5fcfc07bc67766c7585e546e9a1d1535512d3625.png`: 1,240 x 615, 119,277 bytes, SHA-256 `12159d45a6076969bbc63a61c1f165888c1a39dd39abfcba3fa35247c65b7b39`. Primary visual inspection confirmed the procedural architecture and six semantic role labels render without covering the hearing controls. The ignored report artifact is a static checkpoint, not a committed pixel baseline or proof of animated objection/ruling states.
+  - Development logging retains one upstream R3F warning that `THREE.Clock` is deprecated; there were no browser console errors or page errors. The previous repeated deprecated soft-shadow warning was removed by selecting the supported percentage-closer shadow mode explicitly.
+  - `git push origin main` - exit 0 through `00a4782` (`feat: add procedural courtroom stage`).
 
 ## 17. Blocked external prerequisites
 
