@@ -162,7 +162,7 @@ $env:SUITS_SPEECH_CACHE_DIR = Join-Path $env:LOCALAPPDATA 'SUITS\speech'
 uv run --no-sync --no-python-downloads suits-speech
 ```
 
-For fake mode, use `$env:SUITS_SPEECH_MODE = 'fake'`. For CPU mode, use `cpu` and ensure the `local-cpu` profile is the one currently synced.
+For fake mode, use `$env:SUITS_SPEECH_MODE = 'fake'`. Browser E2E may additionally set the allowlisted `$env:SUITS_FAKE_STT_SCENARIO = 'leading-objection'` fixture. That setting is rejected outside fake mode and cannot accept arbitrary transcript text. For CPU mode, use `cpu` and ensure the `local-cpu` profile is the one currently synced.
 
 The default endpoints are:
 
@@ -271,6 +271,7 @@ All values are process environment variables. Settings are validated before the 
 | `SUITS_STT_MODEL_REVISION` | `df1f0fe9dfdf05152936192b4c8c7653d53bf557` | Exact 40-character commit |
 | `SUITS_STT_LOOKAHEAD_TOKENS` | `1` | Nemotron: one of `0`, `1`, `6`, or `13` |
 | `SUITS_STT_SAMPLE_RATE_HZ` | `16000` | Real and fake canonical STT require 16 kHz mono PCM |
+| `SUITS_FAKE_STT_SCENARIO` | `default` | Fake-mode-only allowlist: `default` or the deterministic `leading-objection` browser-E2E transcript; explicitly setting it with real speech is rejected |
 | `SUITS_STT_MAX_SESSIONS` | `1` | Process recognizer slots; Nemotron requires exactly one |
 | `SUITS_STT_INPUT_MAX_FRAMES` | `8` | Per-connection pending microphone-frame credits, 1–128 |
 | `SUITS_STT_INPUT_MAX_BYTES` | `524288` | Per-connection pending microphone-byte credits |

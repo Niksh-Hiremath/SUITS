@@ -270,6 +270,65 @@ def test_fake_websocket_stt_emits_monotonic_partial_and_final_revisions(
     assert runtime.capacity_snapshot.connections.active == 0
 
 
+def test_fake_leading_objection_scenario_crosses_the_websocket_boundary(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        SUITS_FAKE_STT_SCENARIO="leading-objection",
+    )
+    runtime = SpeechRuntime(settings=settings)
+    client = TestClient(create_app(settings, runtime=runtime))
+    with _connect(client) as websocket:
+        _handshake_and_load(websocket)
+        websocket.send_json(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "type": "start_utterance",
+                "utteranceId": "utterance:leading-objection",
+                "sampleRateHz": 16_000,
+                "channels": 1,
+                "encoding": "pcm_s16le",
+                "bargeIn": True,
+                "endOfUtteranceSilenceMs": 600,
+            }
+        )
+
+        expected_partials = (
+            "Isn't it",
+            "Isn't it true that",
+            "Isn't it true that the warning light was already red, correct?",
+        )
+        pcm = _tone_pcm()
+        for sequence, expected_text in enumerate(expected_partials):
+            _send_audio(
+                websocket,
+                utterance_id="utterance:leading-objection",
+                sequence=sequence,
+                pcm=pcm,
+            )
+            partial, _ = _receive_json_until(websocket, "stt_partial")
+            assert partial["revision"] == sequence + 1
+            assert partial["text"] == expected_text
+
+        websocket.send_json(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "type": "end_utterance",
+                "utteranceId": "utterance:leading-objection",
+            }
+        )
+        final, _ = _receive_json_until(websocket, "stt_final")
+        assert final["revision"] == 4
+        assert final["text"] == expected_partials[-1]
+        ended, trailing = _receive_json_until(websocket, "speech_ended")
+        assert ended["reason"] == "client_end"
+        assert all(event["type"] != "stt_final" for event in trailing)
+
+    assert runtime.capacity_snapshot.connections.active == 0
+    assert runtime.capacity_snapshot.stt_sessions.active == 0
+
+
 def test_binary_pcm_length_mismatch_cancels_without_transcript(tmp_path: Path) -> None:
     client = TestClient(create_app(_settings(tmp_path)))
     with _connect(client) as websocket:
