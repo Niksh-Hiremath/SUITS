@@ -15,7 +15,11 @@ import {
   type CounselRoleResponseModelOutput,
   type OpponentPlannerModelOutput,
 } from "../courtroom-ai/call-contracts";
-import { CounselResponseRequestSchema } from "../courtroom-ai/counsel-response";
+import {
+  COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION,
+  CounselResponseRequestSchema,
+  type CounselResponseRequest,
+} from "../courtroom-ai/counsel-response";
 import {
   OPPONENT_PLANNER_REQUEST_SCHEMA_VERSION,
   OpponentPlannerRequestSchema,
@@ -61,6 +65,7 @@ const ModelRequiredHearingCommandPreparationSchema = z
     request: z.union([
       WitnessAnswerRequestSchema,
       OpponentPlannerRequestSchema,
+      CounselResponseRequestSchema,
     ]),
   })
   .strict();
@@ -97,6 +102,12 @@ export type HearingOpponentPlanModelRequiredPreparation = Omit<
 > &
   Readonly<{ request: OpponentPlannerRequest }>;
 
+export type HearingCounselResponseModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: CounselResponseRequest }>;
+
 /** Narrow a model-required preparation before entering witness-only code. */
 export function isHearingWitnessModelRequiredPreparation(
   preparation: HearingCommandPreparation,
@@ -116,6 +127,16 @@ export function isHearingOpponentPlanModelRequiredPreparation(
     preparation.status === "model_required" &&
     preparation.request.schemaVersion ===
       OPPONENT_PLANNER_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering counsel-only code. */
+export function isHearingCounselResponseModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingCounselResponseModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion === COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
   );
 }
 

@@ -35,6 +35,7 @@ import {
   hashCounselResponseModelOutput,
   hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
+  isHearingCounselResponseModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   opponentPlannerOutputCitations,
@@ -625,6 +626,11 @@ describe("hearing command model boundary", () => {
       status: "model_required" as const,
       request: createOpponentPlannerRequestFixture(),
     };
+    const counselModelRequired = {
+      schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+      status: "model_required" as const,
+      request: createCounselResponseRequestFixture(),
+    };
 
     expect(HearingCommandPreparationSchema.parse(completed)).toEqual(completed);
     expect(HearingCommandPreparationSchema.parse(modelRequired)).toEqual(
@@ -633,6 +639,9 @@ describe("hearing command model boundary", () => {
     expect(
       HearingCommandPreparationSchema.parse(opponentModelRequired),
     ).toEqual(opponentModelRequired);
+    expect(HearingCommandPreparationSchema.parse(counselModelRequired)).toEqual(
+      counselModelRequired,
+    );
     expect(
       isHearingWitnessModelRequiredPreparation(
         HearingCommandPreparationSchema.parse(modelRequired),
@@ -641,6 +650,11 @@ describe("hearing command model boundary", () => {
     expect(
       isHearingOpponentPlanModelRequiredPreparation(
         HearingCommandPreparationSchema.parse(opponentModelRequired),
+      ),
+    ).toBe(true);
+    expect(
+      isHearingCounselResponseModelRequiredPreparation(
+        HearingCommandPreparationSchema.parse(counselModelRequired),
       ),
     ).toBe(true);
     expect(
