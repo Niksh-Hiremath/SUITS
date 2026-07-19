@@ -812,6 +812,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. Convex remained authenticated and the development deployment synchronized without another login.
   - Commits: opposing-counsel implementation series `ada5ec9` through `42f5703`; this PLAN checkpoint is committed separately.
 
+- 2026-07-19 07:12 IST — Convex legacy public-surface hardening
+  - Changed: replaced the browser legacy Court Records reader with a static migration notice, removed every active `/records` link, converted all legacy trial/trace/artifact/eval/event/case functions and billable participatory/autonomous/ElevenLabs actions to internal Convex functions, and internalized the low-level active-V3 `createTrial`/`append` wrappers. Added source regressions, an exact deployment-level public-function allowlist, and PowerShell wrappers for the allowlist check and admin-only legacy Gate 3 invocation. No legacy row, table, model artifact, or git history was deleted.
+  - Verified: the linked development deployment synchronized without login and `npm run verify:convex-surface` reports exactly six public UDFs, all owner-authenticated `caseUploads` functions. The full gate passes lint with four generated warnings, both TypeScript surfaces, 724 tests with three live-only skips, three evals, and a 17/17 production build. The five-run legacy Gate 3 action was not executed because routing it internally does not justify five billable Terra calls; its PowerShell wrapper was syntax-checked and the normal eval suite passed.
+  - Remaining: resume Milestone 4 judge/objection, settlement, jury, and Terra coaching runtime work. Owner-bound V3 Court Records remains a later product deliverable; the static notice must not be presented as the finished records experience.
+  - Blocked: none. Convex authentication and the existing development deployment remained available.
+  - Commits: `6063a05`, `69354cf`, `55d56a4`, and `59bcdf7`; this PLAN checkpoint is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1000,6 +1007,16 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run lint`, `npm run typecheck`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, `npm test`, `npm run eval`, `npm run build`, and `git diff --check` — exit 0. Lint reported only four generated Convex warnings; 97 files/720 tests passed with three expected live-only skips; three evals passed; Next.js 16.2.10 compiled/typechecked and generated 17/17 pages.
   - `git push origin main` through `42f5703` — exit 0; all scoped opponent-runtime, security-boundary, prompt-v2, recovery, and live-workflow commits are on `origin/main`.
   - Judge, objection, settlement, jury, Terra coaching, full-trial completion, local speech, and the unauthenticated legacy public Convex surface remain unverified or unfinished; none are reported as passed by this checkpoint.
+
+- 2026-07-19 07:08–07:12 IST — Convex legacy public-surface hardening
+  - `npm exec -- vitest run src/app/records/page.test.tsx src/app/hearing/page.source.test.ts` — exit 0; three tests passed and no active page links to `/records` or reads legacy trial APIs.
+  - Legacy function audit plus focused domain/eval tests — exit 0; all nine assigned modules contain no public `action`, `mutation`, or `query` builders and no legacy provider action retains an `api.*` dependency; 34 focused tests passed.
+  - `npm exec -- vitest run src/server/hearing-api/trial-events-boundary.source.test.ts src/server/hearing-api/convex-public-surface.source.test.ts convex/trialEvents.integration.test.ts` — exit 0; 14 tests passed for internal-only low-level event writes, raw replay isolation, the exact six-function source allowlist, authenticated upload ownership, and event-stream behavior.
+  - PowerShell parser validation for `scripts/verify-convex-public-surface.ps1` and `scripts/run-legacy-gate3.ps1` — exit 0. `npm run eval` also remained green; `npm run eval:gate3` was intentionally not run because it performs five real Terra calls.
+  - `npm exec -- convex dev --once` — exit 0; functions ready on `cheery-bandicoot-36` in 6.85 seconds without another login.
+  - `npm run verify:convex-surface` — exit 0 against the deployed function spec; exactly six public functions remain: `caseUploads.generateUploadUrl`, `registerStoredUpload`, `getLatest`, `listMine`, `getDownloadUrl`, and `listSourceSegments`.
+  - `npm run lint`, `npm run typecheck`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, `npm test`, `npm run eval`, `npm run build`, and `git diff --check` — exit 0. Lint reported four generated warnings and no errors; 99 files/724 tests passed with three expected live-only skips; three evals passed; Next.js generated 17/17 pages.
+  - `git push origin main` through `59bcdf7` — exit 0. The deployment contains the same visibility changes; the worktree remained clean after sync.
 
 ## 17. Blocked external prerequisites
 
