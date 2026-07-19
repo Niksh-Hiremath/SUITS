@@ -24,6 +24,27 @@ const SOURCE_PATHS = {
   commandRoute: fileURLToPath(
     new URL("../api/hearings/[trialId]/commands/route.ts", import.meta.url),
   ),
+  durableService: fileURLToPath(
+    new URL("../../server/hearing-api/durable-service.ts", import.meta.url),
+  ),
+  interruptionRoute: fileURLToPath(
+    new URL(
+      "../api/hearings/[trialId]/interruptions/route.ts",
+      import.meta.url,
+    ),
+  ),
+  interruptionRecoveryRoute: fileURLToPath(
+    new URL(
+      "../api/hearings/[trialId]/interruptions/recover/route.ts",
+      import.meta.url,
+    ),
+  ),
+  interruptionService: fileURLToPath(
+    new URL(
+      "../../server/hearing-api/final-bound-interruption.ts",
+      import.meta.url,
+    ),
+  ),
   convexHttp: fileURLToPath(
     new URL("../../../convex/http.ts", import.meta.url),
   ),
@@ -51,28 +72,57 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).not.toContain('href="/records/"');
     expect(sources.startRoute).toContain('path: "/service/hearings/start"');
     expect(sources.readRoute).toContain('path: "/service/hearings/read"');
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/command/prepare"',
     );
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/command/commit"',
     );
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/opponent-plan/commit"',
     );
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/counsel-response/commit"',
     );
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/jury-response/commit"',
     );
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/debrief/commit"',
     );
     expect(sources.commandRoute).toContain("orchestrateCourtroomCommand");
-    expect(sources.commandRoute).toContain(
+    expect(sources.durableService).toContain(
       'path: "/service/hearings/model-call/terminal"',
     );
+    expect(sources.page).toContain("/interruptions");
+    expect(sources.page).toContain("interruptFinal:");
+    expect(sources.interruptionService).toContain(
+      'path: "/service/hearings/interruption/prepare"',
+    );
+    expect(sources.interruptionService).toContain(
+      "assertFinalBoundInterruptionPreparationMatchesRequest",
+    );
+    expect(sources.interruptionService).toContain(
+      "orchestratePreparedCourtroomCommandResult",
+    );
+    expect(sources.interruptionService).toContain(
+      'path: "/service/hearings/interruption/claim"',
+    );
+    expect(sources.interruptionService).toContain(
+      'path: "/service/hearings/interruption/claim/renew"',
+    );
+    expect(sources.interruptionService).toContain(
+      'path: "/service/hearings/interruption/claim/release"',
+    );
+    expect(sources.interruptionRoute).toContain(
+      "resolveFinalBoundInterruption",
+    );
+    expect(sources.interruptionRecoveryRoute).toContain(
+      "recoverFinalBoundInterruption",
+    );
+    expect(sources.page).toContain("FinalBoundInterruptionResolutionSchema");
+    expect(sources.page).toContain("adoptRecoveredInterruption");
+    expect(sources.page).toContain("Retry interrupted response");
     expect(sources.convexHttp).toContain('>("hearingRuntime:start")');
     expect(sources.convexHttp).toContain('>("hearingRuntime:read")');
     expect(sources.convexHttp).toContain(

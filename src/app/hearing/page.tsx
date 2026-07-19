@@ -22,17 +22,24 @@ import {
 } from "@/domain/hearing-runtime";
 import { hearingUrl, trialIdFromSearch } from "@/domain/hearing-journey";
 import {
+  FinalBoundInterruptionResolutionSchema,
+  FinalBoundInterruptionResponseSchema,
+} from "@/domain/objections/final-bound-contracts";
+import {
   HearingController,
   type HearingControllerSnapshot,
   type HearingFinalSubmission,
 } from "@/lib/speech/hearing-controller";
-import type { HearingSpeechViewSource } from "@/lib/speech/hearing-policy";
-
 import { DeveloperTypedInput } from "./developer-typed-input";
 import {
   hearingLifecycleBlocksCourtroomControls,
   shouldReloadHearingSession,
 } from "./session-policy";
+import {
+  adoptRecoveredInterruptionResponse,
+  enqueuePendingSpeechAdoption,
+  type PendingSpeechAdoption,
+} from "./speech-queue";
 
 const DEFAULT_CASE_SLUG = "redwood-signal-retaliation";
 const DEFAULT_LOCAL_SPEECH_URL = "ws://127.0.0.1:8765/v1/speech";
@@ -42,11 +49,25 @@ const DEV_TYPED_INPUT_ENABLED =
   process.env.NODE_ENV !== "production" &&
   process.env.NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT === "1";
 
-type PendingSpeechAdoption = Readonly<{
-  previous: HearingRuntimeViewV1 | null;
-  next: HearingRuntimeViewV1;
-  source: HearingSpeechViewSource;
-}>;
+function waitForInterruptionRetry(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new Error("Recovery cancelled"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error("Recovery cancelled"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function speechStatusLabel(snapshot: HearingControllerSnapshot | null): string {
   if (snapshot === null) return "Local audio controller unavailable";
@@ -177,6 +198,9 @@ function HearingPageContent() {
   const [pendingStart, setPendingStart] = useState(false);
   const [pendingIntent, setPendingIntent] =
     useState<HearingPlayerIntent | null>(null);
+  const [recoveringInterruption, setRecoveringInterruption] = useState(false);
+  const [interruptionRecoveryError, setInterruptionRecoveryError] =
+    useState<string>();
   const viewRef = useRef<HearingRuntimeViewV1 | null>(null);
   const busyRef = useRef(false);
   const pendingIntentRef = useRef<HearingPlayerIntent | null>(null);
@@ -189,7 +213,16 @@ function HearingPageContent() {
   const speechControllerRef = useRef<HearingController | null>(null);
   const speechQueueRef = useRef<PendingSpeechAdoption[]>([]);
   const speechDrainPromiseRef = useRef<Promise<void> | null>(null);
+  const interruptionRecoveryPromiseRef = useRef<Promise<void> | null>(null);
+  const interruptionRecoveryAbortRef = useRef<AbortController | null>(null);
+  const interruptionRecoveryRunRef = useRef<symbol | null>(null);
   const requestSpeechDrainRef = useRef<() => void>(() => undefined);
+  const recoverDurableInterruptionRef = useRef<
+    (
+      previous: HearingRuntimeViewV1,
+      signal?: AbortSignal,
+    ) => Promise<void>
+  >(async () => undefined);
   const commitFinalRef = useRef<
     (submission: HearingFinalSubmission) => Promise<void>
   >(async () => {
@@ -221,10 +254,90 @@ function HearingPageContent() {
         url: LOCAL_SPEECH_URL,
         getView: () => viewRef.current,
         getActivity: () => ({
-          busy: busyRef.current,
+          busy:
+            busyRef.current ||
+            interruptionRecoveryPromiseRef.current !== null,
           pending: pendingIntentRef.current !== null,
         }),
         commitFinal: (submission) => commitFinalRef.current(submission),
+        onInterruptionPending: (response) => {
+          void recoverDurableInterruptionRef.current(response.view);
+        },
+        interruptFinal: async (interruption, signal) => {
+          const current = viewRef.current;
+          if (
+            disposed ||
+            signal.aborted ||
+            current === null ||
+            current.trial.trialId !== interruption.head.trialId ||
+            current.trial.version !== interruption.head.stateVersion ||
+            current.trial.lastEventId !== interruption.head.lastEventId
+          ) {
+            throw new Error(
+              "The courtroom changed before that interruption could be committed.",
+            );
+          }
+          const response = await fetch(
+            `/api/hearings/${encodeURIComponent(interruption.head.trialId)}/interruptions`,
+            {
+              method: "POST",
+              credentials: "same-origin",
+              cache: "no-store",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(interruption),
+              signal,
+            },
+          );
+          if (!response.ok) throw new Error(await responseError(response));
+          const parsed = FinalBoundInterruptionResolutionSchema.safeParse(
+            await response.json(),
+          );
+          if (!parsed.success) {
+            throw new Error("The courtroom interruption response was invalid.");
+          }
+          const latest = viewRef.current;
+          const sourceStillCurrent =
+            !disposed &&
+            !signal.aborted &&
+            latest !== null &&
+            latest.trial.trialId === interruption.head.trialId &&
+            latest.trial.version === interruption.head.stateVersion &&
+            latest.trial.lastEventId === interruption.head.lastEventId;
+          if (!sourceStillCurrent) {
+            throw new Error(
+              "The courtroom changed while that interruption was resolving.",
+            );
+          }
+          if (parsed.data.disposition === "candidate_withdrawn") {
+            if (
+              parsed.data.head.trialId !== interruption.head.trialId ||
+              parsed.data.head.stateVersion !== interruption.head.stateVersion ||
+              parsed.data.head.lastEventId !== interruption.head.lastEventId
+            ) {
+              throw new Error(
+                "The withdrawn interruption did not match the current record.",
+              );
+            }
+            return parsed.data;
+          }
+          if (
+            parsed.data.targetCompletionHead.trialId !==
+              interruption.head.trialId ||
+            parsed.data.targetCompletionHead.stateVersion <=
+              interruption.head.stateVersion ||
+            parsed.data.targetCompletionHead.lastEventId ===
+              interruption.head.lastEventId ||
+            parsed.data.view.trial.trialId !== interruption.head.trialId ||
+            parsed.data.view.trial.version <= interruption.head.stateVersion ||
+            parsed.data.view.trial.lastEventId === interruption.head.lastEventId
+          ) {
+            throw new Error(
+              "The courtroom changed while that interruption was resolving.",
+            );
+          }
+          publishView(parsed.data.view);
+          return parsed.data;
+        },
       });
     } catch (cause) {
       const message =
@@ -251,6 +364,7 @@ function HearingPageContent() {
     });
     return () => {
       disposed = true;
+      interruptionRecoveryAbortRef.current?.abort();
       unsubscribe();
       if (speechControllerRef.current === controller) {
         speechControllerRef.current = null;
@@ -299,6 +413,10 @@ function HearingPageContent() {
         viewRef.current = parsed.data;
         setView(parsed.data);
         speechControllerRef.current?.baselineView(parsed.data);
+        void recoverDurableInterruptionRef.current(
+          parsed.data,
+          controller.signal,
+        );
       } catch (caught) {
         if (!controller.signal.aborted) {
           setError(
@@ -319,8 +437,120 @@ function HearingPageContent() {
     setView(next);
   }
 
+  function recoverDurableInterruption(
+    previous: HearingRuntimeViewV1,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const existing = interruptionRecoveryPromiseRef.current;
+    if (existing !== null) return existing;
+    const activeLifecycle = speechControllerRef.current?.snapshot.lifecycle;
+    if (
+      busyRef.current ||
+      pendingIntentRef.current !== null ||
+      speechDrainPromiseRef.current !== null ||
+      activeLifecycle === "preparing" ||
+      activeLifecycle === "recording" ||
+      activeLifecycle === "processing" ||
+      activeLifecycle === "speaking"
+    ) {
+      setInterruptionRecoveryError(
+        "Finish the current courtroom activity before retrying the interrupted response.",
+      );
+      return Promise.resolve();
+    }
+    const ownedAbort = signal === undefined ? new AbortController() : null;
+    const activeSignal = signal ?? ownedAbort?.signal;
+    const runToken = Symbol("interruption-recovery");
+    interruptionRecoveryRunRef.current = runToken;
+    interruptionRecoveryAbortRef.current = ownedAbort;
+    const work = (async (): Promise<void> => {
+      setRecoveringInterruption(true);
+      setInterruptionRecoveryError(undefined);
+      let expected = previous;
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await fetch(
+            `/api/hearings/${encodeURIComponent(
+              expected.trial.trialId,
+            )}/interruptions/recover`,
+            {
+              method: "POST",
+              credentials: "same-origin",
+              cache: "no-store",
+              ...(activeSignal === undefined
+                ? {}
+                : { signal: activeSignal }),
+            },
+          );
+          if (response.status === 204) {
+            setInterruptionRecoveryError(undefined);
+            return;
+          }
+          if (!response.ok) throw new Error(await responseError(response));
+          const parsed = FinalBoundInterruptionResponseSchema.safeParse(
+            await response.json(),
+          );
+          if (!parsed.success) {
+            throw new Error(
+              "The recovered courtroom interruption was invalid.",
+            );
+          }
+          const next = adoptRecoveredInterruptionResponse({
+            previous: expected,
+            response: parsed.data,
+            ...(activeSignal === undefined ? {} : { signal: activeSignal }),
+            isCurrent: () =>
+              interruptionRecoveryRunRef.current === runToken,
+            currentView: () => viewRef.current,
+            publishView,
+            queueSpeech,
+          });
+          expected = next;
+          if (parsed.data.continuation === "complete") {
+            setInterruptionRecoveryError(undefined);
+            return;
+          }
+          setInterruptionRecoveryError(
+            "The ruling is safe in the record, but the resumed witness answer is still pending.",
+          );
+          if (attempt === 0) {
+            await waitForInterruptionRetry(750, activeSignal);
+          }
+        }
+      } catch (caught) {
+        if (!activeSignal?.aborted) {
+          setInterruptionRecoveryError(
+            caught instanceof Error
+              ? caught.message
+              : "The interrupted courtroom response could not be recovered.",
+          );
+        }
+      }
+    })();
+    interruptionRecoveryPromiseRef.current = work;
+    void work.finally(() => {
+      if (interruptionRecoveryPromiseRef.current === work) {
+        interruptionRecoveryPromiseRef.current = null;
+      }
+      if (interruptionRecoveryAbortRef.current === ownedAbort) {
+        interruptionRecoveryAbortRef.current = null;
+      }
+      if (interruptionRecoveryRunRef.current === runToken) {
+        interruptionRecoveryRunRef.current = null;
+      }
+      if (!activeSignal?.aborted) {
+        setRecoveringInterruption(false);
+        requestSpeechDrainRef.current();
+      }
+    });
+    return work;
+  }
+
   function queueSpeech(adoption: PendingSpeechAdoption): void {
-    speechQueueRef.current.push(adoption);
+    speechQueueRef.current = enqueuePendingSpeechAdoption(
+      speechQueueRef.current,
+      adoption,
+    );
     requestSpeechDrainRef.current();
   }
 
@@ -328,6 +558,7 @@ function HearingPageContent() {
     if (
       speechDrainPromiseRef.current !== null ||
       busyRef.current ||
+      interruptionRecoveryPromiseRef.current !== null ||
       pendingIntentRef.current !== null ||
       speechQueueRef.current.length === 0
     ) {
@@ -339,6 +570,7 @@ function HearingPageContent() {
     const drain = async (): Promise<void> => {
       while (
         !busyRef.current &&
+        interruptionRecoveryPromiseRef.current === null &&
         pendingIntentRef.current === null &&
         speechQueueRef.current.length > 0
       ) {
@@ -352,11 +584,18 @@ function HearingPageContent() {
         const adoption = speechQueueRef.current.shift();
         if (adoption === undefined) return;
         try {
-          await activeController.adoptView(
-            adoption.previous,
-            adoption.next,
-            adoption.source,
-          );
+          if (adoption.kind === "interruption") {
+            await activeController.adoptRecoveredInterruption(
+              adoption.previous,
+              adoption.response,
+            );
+          } else {
+            await activeController.adoptView(
+              adoption.previous,
+              adoption.next,
+              adoption.source,
+            );
+          }
           setSpeechSetupError(undefined);
         } catch (cause) {
           setSpeechSetupError(
@@ -380,6 +619,7 @@ function HearingPageContent() {
   }
   useEffect(() => {
     requestSpeechDrainRef.current = requestSpeechDrain;
+    recoverDurableInterruptionRef.current = recoverDurableInterruption;
   });
 
   function setPendingIntentState(intent: HearingPlayerIntent | null): void {
@@ -443,7 +683,12 @@ function HearingPageContent() {
       setPendingStart(false);
       createdTrialIdRef.current = parsed.data.trial.trialId;
       publishView(parsed.data);
-      queueSpeech({ previous: null, next: parsed.data, source: "new_hearing" });
+      queueSpeech({
+        kind: "view",
+        previous: null,
+        next: parsed.data,
+        source: "new_hearing",
+      });
       setCreatedTrialId(parsed.data.trial.trialId);
       window.history.replaceState(
         null,
@@ -454,6 +699,11 @@ function HearingPageContent() {
   }
 
   async function commitIntentOrThrow(intent: HearingPlayerIntent): Promise<void> {
+    if (interruptionRecoveryPromiseRef.current !== null) {
+      throw new Error(
+        "The court is finishing an interrupted ruling. Retry this action afterward.",
+      );
+    }
     await executeOrThrow(async () => {
       const previous = viewRef.current;
       if (previous === null) throw new Error("The hearing is not ready.");
@@ -496,7 +746,12 @@ function HearingPageContent() {
         pendingCommand.current = undefined;
         setPendingIntentState(null);
         publishView(parsed.data);
-        queueSpeech({ previous, next: parsed.data, source: "command" });
+        queueSpeech({
+          kind: "view",
+          previous,
+          next: parsed.data,
+          source: "command",
+        });
       } catch (caught) {
         try {
           const recovery = await fetch(
@@ -511,7 +766,12 @@ function HearingPageContent() {
             throw new Error("The refreshed hearing response was invalid.");
           }
           publishView(refreshed.data);
-          queueSpeech({ previous, next: refreshed.data, source: "recovery" });
+          queueSpeech({
+            kind: "view",
+            previous,
+            next: refreshed.data,
+            source: "recovery",
+          });
         } catch (recoveryError) {
           throw new Error(
             "The action is still pending and the durable record could not be refreshed. Retry when the service is available.",
@@ -599,6 +859,7 @@ function HearingPageContent() {
     view?.transcript.filter((turn) => turn.actor.role === "witness").length ?? 0;
   const canFinishTrial = Boolean(view?.capabilities.canFinishTrial);
   const speechLifecycle = speechSnapshot?.lifecycle;
+  const courtroomBusy = busy || recoveringInterruption;
   const speechIsRecording = speechLifecycle === "recording";
   const speechCanStartRecording =
     speechLifecycle === "ready" || speechLifecycle === "speaking";
@@ -658,10 +919,10 @@ function HearingPageContent() {
           {!trialId && (
             <button
               className="primary-button"
-              disabled={busy || !caseSelector.success}
+              disabled={courtroomBusy || !caseSelector.success}
               onClick={() => void beginHearing()}
             >
-              {busy
+              {courtroomBusy
                 ? "Creating the event stream…"
                 : pendingStart
                   ? "Retry same hearing request"
@@ -717,7 +978,7 @@ function HearingPageContent() {
                   speechLifecycle === "recoverable_error") && (
                   <button
                     className="voice-primary-button"
-                    disabled={busy || Boolean(pendingIntent)}
+                    disabled={courtroomBusy || Boolean(pendingIntent)}
                     onClick={prepareSpeech}
                     type="button"
                   >
@@ -734,7 +995,7 @@ function HearingPageContent() {
                 {speechLifecycle === "ready" && (
                   <button
                     className="quiet-button voice-button"
-                    disabled={busy || Boolean(pendingIntent)}
+                    disabled={courtroomBusy || Boolean(pendingIntent)}
                     onClick={testSpeaker}
                     type="button"
                   >
@@ -780,7 +1041,7 @@ function HearingPageContent() {
                   )}
                 </article>
               ))}
-              {busy && (
+              {courtroomBusy && (
                 <div className="thinking-line" role="status">
                   <b>Committing the next event…</b>
                   <span> Refresh is safe after the server confirms it.</span>
@@ -804,7 +1065,7 @@ function HearingPageContent() {
                   <button
                     className="voice-primary-button"
                     disabled={
-                      busy ||
+                      courtroomBusy ||
                       Boolean(pendingIntent) ||
                       Boolean(view.activeQuestion) ||
                       (speechIsRecording
@@ -834,7 +1095,7 @@ function HearingPageContent() {
                   <DeveloperTypedInput
                     controller={speechController}
                     disabled={
-                      busy ||
+                      courtroomBusy ||
                       Boolean(pendingIntent) ||
                       speechBlocksCourtroomControls ||
                       speechLifecycle !== "ready"
@@ -850,7 +1111,7 @@ function HearingPageContent() {
                   <button
                     className="quiet-button"
                     disabled={
-                      busy ||
+                      courtroomBusy ||
                       Boolean(pendingIntent) ||
                       speechBlocksCourtroomControls ||
                       Boolean(view.activeQuestion) ||
@@ -877,7 +1138,7 @@ function HearingPageContent() {
                   <button
                     className="voice-primary-button"
                     disabled={
-                      busy ||
+                      courtroomBusy ||
                       Boolean(pendingIntent) ||
                       (speechIsRecording
                         ? !closingIsRecording
@@ -905,7 +1166,7 @@ function HearingPageContent() {
                   <DeveloperTypedInput
                     controller={speechController}
                     disabled={
-                      busy ||
+                      courtroomBusy ||
                       Boolean(pendingIntent) ||
                       speechBlocksCourtroomControls ||
                       speechLifecycle !== "ready"
@@ -919,6 +1180,33 @@ function HearingPageContent() {
                 )}
               </div>
             )}
+            {interruptionRecoveryError && (
+              <div className="error-banner" role="status">
+                <span>{interruptionRecoveryError}</span>
+                <div className="input-actions">
+                  <button
+                    className="quiet-button"
+                    disabled={
+                      recoveringInterruption ||
+                      courtroomBusy ||
+                      Boolean(pendingIntent) ||
+                      speechBlocksCourtroomControls
+                    }
+                    onClick={() => {
+                      const current = viewRef.current;
+                      if (current !== null) {
+                        void recoverDurableInterruption(current);
+                      }
+                    }}
+                    type="button"
+                  >
+                    {recoveringInterruption
+                      ? "Recovering interrupted responseâ€¦"
+                      : "Retry interrupted response"}
+                  </button>
+                </div>
+              </div>
+            )}
             {error && (
               <div className="error-banner" role="alert">
                 <span>{error}</span>
@@ -926,14 +1214,14 @@ function HearingPageContent() {
                   <div className="input-actions">
                     <button
                       className="quiet-button"
-                      disabled={busy}
+                      disabled={courtroomBusy}
                       onClick={() => void commitIntent(pendingIntent)}
                     >
                       Retry pending action
                     </button>
                     <button
                       className="quiet-button"
-                      disabled={busy}
+                      disabled={courtroomBusy}
                       onClick={() => window.location.reload()}
                     >
                       Reload durable record
@@ -963,7 +1251,7 @@ function HearingPageContent() {
                       <button
                         className="quiet-button"
                         disabled={
-                          busy ||
+                          courtroomBusy ||
                           Boolean(pendingIntent) ||
                           speechBlocksCourtroomControls
                         }
