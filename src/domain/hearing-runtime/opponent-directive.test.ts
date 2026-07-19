@@ -13,6 +13,7 @@ import {
   type OpponentPlannerRequest,
 } from "../courtroom-ai/opponent-planner";
 import {
+  MAX_OPPONENT_QUESTIONS_PER_LEG,
   PERSISTED_OPPONENT_DIRECTIVE_MAX_CHARACTERS,
   PERSISTED_OPPONENT_DIRECTIVE_PREFIX,
   PersistedOpponentDirectiveSchema,
@@ -62,7 +63,10 @@ function request(answeredQuestionCount = 0): OpponentPlannerRequest {
     },
     opportunities: {
       callableWitnessIds: ["witness_theo"],
-      questionableWitnessIds: ["witness_rina"],
+      questionableWitnessIds:
+        answeredQuestionCount >= MAX_OPPONENT_QUESTIONS_PER_LEG
+          ? []
+          : ["witness_rina"],
       presentableEvidenceIds: ["evidence_draft"],
       offerableEvidenceIds: [],
       foundationTestimonyIds: [],
@@ -305,6 +309,52 @@ describe("persisted opponent directive", () => {
       kind: "end_examination",
       disposition: "completed",
     });
+  });
+
+  it("closes question opportunities at the canonical per-leg limit", () => {
+    const atLimit = request(MAX_OPPONENT_QUESTIONS_PER_LEG);
+    const unrelatedOutput = output([
+      {
+        kind: "call_witness",
+        witnessId: "witness_theo",
+        rationale: "Preserve the next aligned witness for the case in chief.",
+        citations: citations(),
+      },
+    ]);
+    const record = createPersistedOpponentDirective({
+      request: atLimit,
+      output: unrelatedOutput,
+      canonicalBinding: binding(MAX_OPPONENT_QUESTIONS_PER_LEG),
+    });
+
+    expect(atLimit.opportunities.questionableWitnessIds).toEqual([]);
+    expect(record.directive).toEqual({
+      kind: "end_examination",
+      disposition: "completed",
+    });
+    expect(() =>
+      createPersistedOpponentDirective({
+        request: atLimit,
+        output: output(),
+        canonicalBinding: binding(MAX_OPPONENT_QUESTIONS_PER_LEG),
+      }),
+    ).toThrow(/OPPONENT_DIRECTIVE_PLAN_REJECTED:.*move_not_available/);
+
+    expect(() =>
+      createPersistedOpponentDirective({
+        request: OpponentPlannerRequestSchema.parse({
+          ...atLimit,
+          opportunities: {
+            ...atLimit.opportunities,
+            questionableWitnessIds: ["witness_rina"],
+          },
+        }),
+        output: output(),
+        canonicalBinding: binding(MAX_OPPONENT_QUESTIONS_PER_LEG),
+      }),
+    ).toThrow(
+      "OPPONENT_DIRECTIVE_BINDING_MISMATCH:opportunities.questionableWitnessIds",
+    );
   });
 
   it("round-trips injection-shaped goals strictly as JSON data", () => {

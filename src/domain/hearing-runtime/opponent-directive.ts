@@ -16,6 +16,8 @@ export const PERSISTED_OPPONENT_DIRECTIVE_PREFIX =
   "SUITS_OPPONENT_DIRECTIVE_V1:" as const;
 /** Bound for the private durable pendingDirectiveJson strategy field. */
 export const PERSISTED_OPPONENT_DIRECTIVE_MAX_CHARACTERS = 32_000 as const;
+/** Hard per-leg bound that keeps the private planner/responder loop finite. */
+export const MAX_OPPONENT_QUESTIONS_PER_LEG = 3 as const;
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 
@@ -172,10 +174,14 @@ function assertPlannerRequestBinding(
   }
 
   const questionableWitnessIds = request.opportunities.questionableWitnessIds;
-  if (
-    questionableWitnessIds.length !== 1 ||
-    questionableWitnessIds[0] !== binding.appearance.witnessId
-  ) {
+  const questionLimitReached =
+    binding.appearance.answeredQuestionCount >=
+    MAX_OPPONENT_QUESTIONS_PER_LEG;
+  const opportunitiesMatch = questionLimitReached
+    ? questionableWitnessIds.length === 0
+    : questionableWitnessIds.length === 1 &&
+      questionableWitnessIds[0] === binding.appearance.witnessId;
+  if (!opportunitiesMatch) {
     mismatch("opportunities.questionableWitnessIds");
   }
 }
@@ -185,9 +191,10 @@ function plannerOutputHash(output: OpponentPlannerModelOutput): string {
 }
 
 /**
- * Select the first validated question for the one active witness. Other legal
- * move kinds cannot drive open-court questioning and deterministically fall
- * back to ending the examination.
+ * Select the first validated question for the active witness while its
+ * canonical per-leg budget remains. Other legal move kinds cannot drive
+ * open-court questioning and deterministically fall back to ending the
+ * examination.
  */
 export function createPersistedOpponentDirective(input: Readonly<{
   request: OpponentPlannerRequest;
