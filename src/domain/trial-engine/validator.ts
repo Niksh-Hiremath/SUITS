@@ -126,6 +126,7 @@ function validateQuestionCitations(
   action: TrialActionByType<"ASK_QUESTION">,
 ): ActionValidationResult | null {
   const factIds = action.payload.factIds ?? [];
+  const evidenceIds = action.payload.evidenceIds ?? [];
   const testimonyIds = action.payload.testimonyIds ?? [];
 
   if (hasDuplicateIds(factIds)) {
@@ -140,6 +141,13 @@ function validateQuestionCitations(
       "DUPLICATE_ENTITY_ID",
       "Question testimony citations must be unique",
       "payload.testimonyIds",
+    );
+  }
+  if (hasDuplicateIds(evidenceIds)) {
+    return invalid(
+      "DUPLICATE_ENTITY_ID",
+      "Question evidence citations must be unique",
+      "payload.evidenceIds",
     );
   }
 
@@ -161,6 +169,24 @@ function validateQuestionCitations(
         "INVALID_FACT_STATUS",
         `Question cannot cite ${fact.status} fact ${factId}`,
         "payload.factIds",
+      );
+    }
+  }
+
+  for (const evidenceId of evidenceIds) {
+    const evidence = state.evidence[evidenceId];
+    if (!evidence) {
+      return invalid(
+        "UNKNOWN_EVIDENCE",
+        `Question cites unknown evidence ${evidenceId}`,
+        "payload.evidenceIds",
+      );
+    }
+    if (evidence.status === "excluded" || evidence.status === "withdrawn") {
+      return invalid(
+        "INVALID_EVIDENCE_STATUS",
+        `Question cannot cite ${evidence.status} evidence ${evidenceId}`,
+        "payload.evidenceIds",
       );
     }
   }

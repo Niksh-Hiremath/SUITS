@@ -202,6 +202,7 @@ function askPayload(
   suffix: string,
   citations: Readonly<{
     factIds?: string[];
+    evidenceIds?: string[];
     testimonyIds?: string[];
   }> = {},
 ): TrialActionByType<"ASK_QUESTION">["payload"] {
@@ -283,7 +284,11 @@ function frozenQuestionAction(
 describe("V3 cited courtroom questions", () => {
   it("keeps V1 and V2 question payloads frozen", () => {
     for (const schema of [TrialActionV1Schema, TrialActionV2Schema]) {
-      for (const field of ["factIds", "testimonyIds"] as const) {
+      for (const field of [
+        "factIds",
+        "evidenceIds",
+        "testimonyIds",
+      ] as const) {
         expect(
           schema.safeParse(
             frozenQuestionAction(
@@ -326,6 +331,7 @@ describe("V3 cited courtroom questions", () => {
 
     expect(JSON.stringify(parsed.payload)).toBe(JSON.stringify(payload));
     expect("factIds" in parsed.payload).toBe(false);
+    expect("evidenceIds" in parsed.payload).toBe(false);
     expect("testimonyIds" in parsed.payload).toBe(false);
   });
 
@@ -340,6 +346,7 @@ describe("V3 cited courtroom questions", () => {
       "ASK_QUESTION",
       askPayload("cited", {
         factIds: ["fact_complaint_sent"],
+        evidenceIds: ["evidence_complaint_email"],
         testimonyIds: [testimonyId],
       }),
       ACTORS.userCounsel,
@@ -347,7 +354,7 @@ describe("V3 cited courtroom questions", () => {
 
     expect(result.event.citations).toEqual({
       factIds: ["fact_complaint_sent"],
-      evidenceIds: [],
+      evidenceIds: ["evidence_complaint_email"],
       testimonyIds: [testimonyId],
       eventIds: [],
       sourceSegmentIds: [],
@@ -383,6 +390,25 @@ describe("V3 cited courtroom questions", () => {
       "ASK_QUESTION",
       askPayload("duplicate_fact", {
         factIds: ["fact_complaint_sent", "fact_complaint_sent"],
+      }),
+      ACTORS.userCounsel,
+      "DUPLICATE_ENTITY_ID",
+    );
+    harness.reject(
+      "ASK_QUESTION",
+      askPayload("unknown_evidence", {
+        evidenceIds: ["evidence_unknown"],
+      }),
+      ACTORS.userCounsel,
+      "UNKNOWN_EVIDENCE",
+    );
+    harness.reject(
+      "ASK_QUESTION",
+      askPayload("duplicate_evidence", {
+        evidenceIds: [
+          "evidence_complaint_email",
+          "evidence_complaint_email",
+        ],
       }),
       ACTORS.userCounsel,
       "DUPLICATE_ENTITY_ID",
