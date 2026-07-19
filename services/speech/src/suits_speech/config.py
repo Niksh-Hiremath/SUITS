@@ -29,6 +29,8 @@ _KOKORO_VOICE_ID = re.compile(r"[abefhijpz][fm]_[a-z0-9]+(?:_[a-z0-9]+)*")
 _FIXED_CLIP_VOICE_ROLES = frozenset({"judge", "opposing_counsel"})
 
 SpeechMode = Literal["fake", "cpu", "cuda"]
+FakeSttScenario = Literal["default", "leading-objection"]
+_FAKE_STT_SCENARIOS = frozenset({"default", "leading-objection"})
 
 
 def _parse_int(
@@ -155,6 +157,7 @@ class SpeechSettings:
     stt_model_revision: str
     stt_lookahead_tokens: int
     stt_sample_rate_hz: int
+    fake_stt_scenario: FakeSttScenario
     tts_provider: str
     tts_model_id: str
     tts_model_revision: str
@@ -190,6 +193,19 @@ class SpeechSettings:
         tts_provider = source.get("SUITS_TTS_PROVIDER", default_tts).strip()
         if not stt_provider or not tts_provider:
             raise ValueError("speech provider identifiers must not be empty")
+        fake_stt_scenario_value = (
+            source.get(
+                "SUITS_FAKE_STT_SCENARIO",
+                "default",
+            )
+            .strip()
+            .lower()
+        )
+        if fake_stt_scenario_value not in _FAKE_STT_SCENARIOS:
+            raise ValueError("SUITS_FAKE_STT_SCENARIO must be default or leading-objection")
+        if "SUITS_FAKE_STT_SCENARIO" in source and (mode != "fake" or stt_provider != "fake-stt"):
+            raise ValueError("SUITS_FAKE_STT_SCENARIO is available only with fake speech mode")
+        fake_stt_scenario = cast(FakeSttScenario, fake_stt_scenario_value)
         cache_value = source.get("SUITS_SPEECH_CACHE_DIR")
         origins = _parse_origins(
             source.get(
@@ -255,6 +271,7 @@ class SpeechSettings:
             ),
             stt_lookahead_tokens=stt_lookahead_tokens,
             stt_sample_rate_hz=stt_sample_rate_hz,
+            fake_stt_scenario=fake_stt_scenario,
             tts_provider=tts_provider,
             tts_model_id=source.get("SUITS_TTS_MODEL_ID", DEFAULT_TTS_MODEL_ID),
             tts_model_revision=source.get(

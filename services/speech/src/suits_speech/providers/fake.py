@@ -18,6 +18,26 @@ from .base import (
 )
 
 
+_FAKE_STT_SCENARIOS: dict[str, tuple[tuple[str, ...], str]] = {
+    "default": (
+        (
+            "May",
+            "May it please",
+            "May it please the court.",
+        ),
+        "May it please the court.",
+    ),
+    "leading-objection": (
+        (
+            "Isn't it",
+            "Isn't it true that",
+            "Isn't it true that the warning light was already red, correct?",
+        ),
+        "Isn't it true that the warning light was already red, correct?",
+    ),
+}
+
+
 class FakeSttSession:
     def __init__(
         self,
@@ -87,6 +107,16 @@ class FakeSttProvider:
         self._partials = partials
         self._final_text = final_text
         self._loaded = False
+
+    @classmethod
+    def for_scenario(cls, scenario: str) -> FakeSttProvider:
+        """Create one allowlisted deterministic recognizer fixture for CI/E2E."""
+
+        transcript = _FAKE_STT_SCENARIOS.get(scenario)
+        if transcript is None:
+            raise ValueError("unsupported fake STT scenario")
+        partials, final_text = transcript
+        return cls(partials=partials, final_text=final_text)
 
     @property
     def status(self) -> ProviderStatus:

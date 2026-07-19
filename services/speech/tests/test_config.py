@@ -17,6 +17,7 @@ def test_defaults_are_pinned_local_providers_without_auto_download() -> None:
     assert settings.mode == "cuda"
     assert settings.host == "127.0.0.1"
     assert settings.stt_provider == "nemotron-transformers"
+    assert settings.fake_stt_scenario == "default"
     assert settings.stt_model_id == DEFAULT_STT_MODEL_ID
     assert settings.stt_model_revision == DEFAULT_STT_MODEL_REVISION
     assert settings.stt_lookahead_tokens == 1
@@ -40,6 +41,7 @@ def test_fake_mode_selects_fake_providers_for_ci() -> None:
         {
             "SUITS_SPEECH_MODE": "fake",
             "SUITS_STT_MAX_SESSIONS": "4",
+            "SUITS_FAKE_STT_SCENARIO": "leading-objection",
             "LOCALAPPDATA": "C:/local",
         }
     )
@@ -47,6 +49,18 @@ def test_fake_mode_selects_fake_providers_for_ci() -> None:
     assert settings.stt_provider == "fake-stt"
     assert settings.tts_provider == "fake-tts"
     assert settings.max_stt_sessions == 4
+    assert settings.fake_stt_scenario == "leading-objection"
+
+
+@pytest.mark.parametrize("mode", ["cpu", "cuda"])
+def test_fake_stt_scenario_is_rejected_outside_fake_mode(mode: str) -> None:
+    with pytest.raises(ValueError, match="only with fake speech mode"):
+        SpeechSettings.from_env(
+            {
+                "SUITS_SPEECH_MODE": mode,
+                "SUITS_FAKE_STT_SCENARIO": "leading-objection",
+            }
+        )
 
 
 def test_non_loopback_bind_is_always_rejected() -> None:
@@ -63,6 +77,7 @@ def test_non_loopback_bind_is_always_rejected() -> None:
     "environ",
     [
         {"SUITS_SPEECH_MODE": "cloud"},
+        {"SUITS_SPEECH_MODE": "fake", "SUITS_FAKE_STT_SCENARIO": "private"},
         {"SUITS_SPEECH_PORT": "0"},
         {"SUITS_STT_PROVIDER": ""},
         {"SUITS_TTS_PROVIDER": ""},

@@ -538,7 +538,10 @@ class SpeechRuntime:
     @staticmethod
     def _default_stt_provider(settings: SpeechSettings) -> SttProvider:
         if settings.stt_provider == "fake-stt":
-            return cast(SttProvider, FakeSttProvider())
+            return cast(
+                SttProvider,
+                FakeSttProvider.for_scenario(settings.fake_stt_scenario),
+            )
         if settings.stt_provider == DEFAULT_STT_PROVIDER:
             snapshot = _pinned_snapshot_path(
                 cache_dir=settings.cache_dir,

@@ -52,6 +52,39 @@ async def test_fake_stt_rejects_stale_sequence_and_cancelled_work() -> None:
         await session.finish()
 
 
+async def test_fake_stt_leading_objection_scenario_is_partial_then_final() -> None:
+    provider = FakeSttProvider.for_scenario("leading-objection")
+    await provider.load()
+    session = await provider.create_session(sample_rate_hz=16_000)
+
+    partials = []
+    for sequence in range(3):
+        partials.extend(
+            await session.push_audio(
+                AudioChunk(
+                    sequence=sequence,
+                    pcm_s16le=b"\x00\x00" * 160,
+                    duration_ms=20,
+                )
+            )
+        )
+    final = await session.finish()
+
+    assert [item.text for item in partials] == [
+        "Isn't it",
+        "Isn't it true that",
+        "Isn't it true that the warning light was already red, correct?",
+    ]
+    assert partials[-1].is_final is False
+    assert final.is_final is True
+    assert final.text == partials[-1].text
+
+
+def test_fake_stt_rejects_unknown_scenario() -> None:
+    with pytest.raises(ValueError, match="unsupported fake STT scenario"):
+        FakeSttProvider.for_scenario("private")
+
+
 async def test_fake_tts_is_deterministic_and_voice_specific() -> None:
     provider = FakeTtsProvider()
     await provider.load()

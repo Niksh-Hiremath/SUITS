@@ -10,6 +10,7 @@ from suits_speech.config import SpeechSettings
 from suits_speech.health import SpeechRuntime
 from suits_speech.protocol import CudaCapability
 from suits_speech.providers import (
+    AudioChunk,
     FakeSttProvider,
     FakeTtsProvider,
     KokoroTtsProvider,
@@ -71,6 +72,31 @@ def test_fake_mode_keeps_deterministic_providers(tmp_path: Path) -> None:
 
     assert isinstance(runtime.stt_provider, FakeSttProvider)
     assert isinstance(runtime.tts_provider, FakeTtsProvider)
+
+
+async def test_fake_mode_selects_the_allowlisted_stt_scenario(tmp_path: Path) -> None:
+    settings = SpeechSettings.from_env(
+        {
+            "SUITS_SPEECH_MODE": "fake",
+            "SUITS_FAKE_STT_SCENARIO": "leading-objection",
+            "SUITS_SPEECH_CACHE_DIR": str(tmp_path),
+        }
+    )
+    runtime = SpeechRuntime(settings=settings)
+    await runtime.stt_provider.load()
+    session = await runtime.stt_provider.create_session(sample_rate_hz=16_000)
+
+    partial = ()
+    for sequence in range(3):
+        partial = await session.push_audio(
+            AudioChunk(
+                sequence=sequence,
+                pcm_s16le=b"\x00\x00" * 160,
+                duration_ms=20,
+            )
+        )
+
+    assert partial[0].text.endswith("correct?")
 
 
 def test_snapshot_selection_supports_setup_and_legacy_cache_layouts(tmp_path: Path) -> None:
