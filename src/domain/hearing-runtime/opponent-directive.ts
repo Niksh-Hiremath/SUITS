@@ -44,7 +44,7 @@ export const OpponentDirectiveCanonicalBindingSchema = z
     strategyId: CaseGraphEntityIdSchema,
     strategyRevision: z.number().int().positive(),
     strategyEventId: CaseGraphEntityIdSchema,
-    appearance: OpponentDirectiveAppearanceBindingSchema,
+    appearance: OpponentDirectiveAppearanceBindingSchema.nullable(),
   })
   .strict();
 
@@ -56,7 +56,7 @@ export const OpponentDirectiveCommittedBindingSchema = z
     actorId: CaseGraphEntityIdSchema,
     strategyId: CaseGraphEntityIdSchema,
     strategyRevision: z.number().int().positive(),
-    appearance: OpponentDirectiveAppearanceBindingSchema,
+    appearance: OpponentDirectiveAppearanceBindingSchema.nullable(),
   })
   .strict();
 
@@ -78,7 +78,7 @@ const PersistedOpponentDirectivePayloadSchema = z
       })
       .strict(),
     actorId: CaseGraphEntityIdSchema,
-    appearance: OpponentDirectiveAppearanceBindingSchema,
+    appearance: OpponentDirectiveAppearanceBindingSchema.nullable(),
     directive: CounselResponseDirectiveSchema,
   })
   .strict();
@@ -141,6 +141,35 @@ function assertPlannerRequestBinding(
       binding.expectedLastEventId,
     ],
     ["actorId", request.actorId, binding.actorId],
+    ["knowledgeView.trialId", request.knowledgeView.trialId, binding.trialId],
+    [
+      "knowledgeView.stateVersion",
+      request.knowledgeView.stateVersion,
+      binding.expectedStateVersion,
+    ],
+    ["knowledgeView.actorId", request.knowledgeView.actorId, binding.actorId],
+  ];
+  for (const [field, actual, expected] of comparisons) {
+    if (actual !== expected) mismatch(field);
+  }
+
+  if (binding.appearance === null) {
+    if (
+      request.procedure.phase !== "closing" ||
+      request.procedure.trigger !== "pre_closing" ||
+      request.procedure.activeAppearanceId !== null ||
+      request.procedure.activeWitnessId !== null ||
+      request.procedure.activeExaminationKind !== null ||
+      request.procedure.answeredQuestionCount !== 0 ||
+      request.opportunities.questionableWitnessIds.length !== 0 ||
+      !request.opportunities.canClose
+    ) {
+      mismatch("closingProcedure");
+    }
+    return;
+  }
+
+  for (const [field, actual, expected] of [
     [
       "activeAppearanceId",
       requestAppearance.activeAppearanceId,
@@ -161,15 +190,7 @@ function assertPlannerRequestBinding(
       requestAppearance.answeredQuestionCount,
       binding.appearance.answeredQuestionCount,
     ],
-    ["knowledgeView.trialId", request.knowledgeView.trialId, binding.trialId],
-    [
-      "knowledgeView.stateVersion",
-      request.knowledgeView.stateVersion,
-      binding.expectedStateVersion,
-    ],
-    ["knowledgeView.actorId", request.knowledgeView.actorId, binding.actorId],
-  ];
-  for (const [field, actual, expected] of comparisons) {
+  ] as const) {
     if (actual !== expected) mismatch(field);
   }
 
@@ -215,17 +236,26 @@ export function createPersistedOpponentDirective(input: Readonly<{
     throw new Error(`OPPONENT_DIRECTIVE_PLAN_REJECTED:${codes}`);
   }
 
-  const selectedMoveIndex = validation.output.proposedMoves.findIndex(
-    (move) =>
-      move.kind === "question_witness" &&
-      move.witnessId === binding.appearance.witnessId,
+  const selectedMoveIndex = validation.output.proposedMoves.findIndex((move) =>
+    binding.appearance === null
+      ? move.kind === "give_closing"
+      : move.kind === "question_witness" &&
+        move.witnessId === binding.appearance.witnessId,
   );
   const selectedMove =
     selectedMoveIndex < 0
       ? null
       : validation.output.proposedMoves[selectedMoveIndex];
   const directive =
-    selectedMove?.kind === "question_witness"
+    selectedMove?.kind === "give_closing"
+      ? CounselResponseDirectiveSchema.parse({
+          kind: "give_closing",
+          permittedFactIds: [...selectedMove.citations.factIds],
+          permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
+          permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
+        })
+      : selectedMove?.kind === "question_witness" &&
+          binding.appearance !== null
       ? CounselResponseDirectiveSchema.parse({
           kind: "question_witness",
           witnessId: selectedMove.witnessId,
@@ -235,13 +265,15 @@ export function createPersistedOpponentDirective(input: Readonly<{
           permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
           permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
         })
-      : CounselResponseDirectiveSchema.parse({
+      : binding.appearance !== null
+        ? CounselResponseDirectiveSchema.parse({
           kind: "end_examination",
           disposition:
             binding.appearance.answeredQuestionCount === 0
               ? "waived"
               : "completed",
-        });
+          })
+        : mismatch("closingMove");
 
   const payload = PersistedOpponentDirectivePayloadSchema.parse({
     schemaVersion: PERSISTED_OPPONENT_DIRECTIVE_SCHEMA_VERSION,
@@ -291,25 +323,34 @@ export function assertPersistedOpponentDirectiveBinding(
     ["actorId", record.actorId, binding.actorId],
     ["strategyId", record.strategyId, binding.strategyId],
     ["strategyRevision", record.strategyRevision, binding.strategyRevision],
-    [
-      "appearanceId",
-      record.appearance.appearanceId,
-      binding.appearance.appearanceId,
-    ],
-    ["witnessId", record.appearance.witnessId, binding.appearance.witnessId],
-    [
-      "examinationKind",
-      record.appearance.examinationKind,
-      binding.appearance.examinationKind,
-    ],
-    [
-      "answeredQuestionCount",
-      record.appearance.answeredQuestionCount,
-      binding.appearance.answeredQuestionCount,
-    ],
   ];
   for (const [field, actual, expected] of comparisons) {
     if (actual !== expected) mismatch(field);
+  }
+  if ((record.appearance === null) !== (binding.appearance === null)) {
+    mismatch("appearanceMode");
+  }
+  if (record.appearance !== null && binding.appearance !== null) {
+    for (const [field, actual, expected] of [
+      [
+        "appearanceId",
+        record.appearance.appearanceId,
+        binding.appearance.appearanceId,
+      ],
+      ["witnessId", record.appearance.witnessId, binding.appearance.witnessId],
+      [
+        "examinationKind",
+        record.appearance.examinationKind,
+        binding.appearance.examinationKind,
+      ],
+      [
+        "answeredQuestionCount",
+        record.appearance.answeredQuestionCount,
+        binding.appearance.answeredQuestionCount,
+      ],
+    ] as const) {
+      if (actual !== expected) mismatch(field);
+    }
   }
   return record;
 }

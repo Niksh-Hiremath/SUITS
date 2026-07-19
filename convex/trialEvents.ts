@@ -387,16 +387,41 @@ function requireDirectiveMatchesPlannerOutput(
     return invalidOpponentPlan();
   }
 
+  const appearance = directive.appearance;
+  if (appearance === null) {
+    if (directive.selectedMoveIndex === null) return invalidOpponentPlan();
+    const selectedMove = output.proposedMoves[directive.selectedMoveIndex];
+    if (
+      selectedMove?.kind !== "give_closing" ||
+      directive.directive.kind !== "give_closing" ||
+      !sameOrderedIdentifiers(
+        directive.directive.permittedFactIds,
+        selectedMove.citations.factIds,
+      ) ||
+      !sameOrderedIdentifiers(
+        directive.directive.permittedEvidenceIds,
+        selectedMove.citations.evidenceIds,
+      ) ||
+      !sameOrderedIdentifiers(
+        directive.directive.permittedTestimonyIds,
+        selectedMove.citations.testimonyIds,
+      )
+    ) {
+      return invalidOpponentPlan();
+    }
+    return;
+  }
+
   if (directive.selectedMoveIndex === null) {
     if (
       directive.directive.kind !== "end_examination" ||
       output.proposedMoves.some(
         (move) =>
           move.kind === "question_witness" &&
-          move.witnessId === directive.appearance.witnessId,
+          move.witnessId === appearance.witnessId,
       ) ||
       directive.directive.disposition !==
-        (directive.appearance.answeredQuestionCount === 0
+        (appearance.answeredQuestionCount === 0
           ? "waived"
           : "completed")
     ) {
@@ -409,7 +434,7 @@ function requireDirectiveMatchesPlannerOutput(
   if (
     selectedMove?.kind !== "question_witness" ||
     directive.directive.kind !== "question_witness" ||
-    selectedMove.witnessId !== directive.appearance.witnessId ||
+    selectedMove.witnessId !== appearance.witnessId ||
     directive.directive.witnessId !== selectedMove.witnessId ||
     directive.directive.goal !== selectedMove.goal ||
     !sameOrderedIdentifiers(
@@ -524,19 +549,35 @@ function requireOpponentDirectiveAtCurrentHead(
   } catch {
     return invalidOpponentPlan();
   }
-  const appearance = state.activeAppearanceId
-    ? state.appearances[state.activeAppearanceId]
-    : undefined;
-  const leg = appearance?.legs[directive.appearance.examinationKind];
   if (
     state.version !== action.expectedStateVersion ||
     state.eventIds.at(-1) !== action.causationId ||
-    state.activeAppearanceId !== directive.appearance.appearanceId ||
-    state.activeWitnessId !== directive.appearance.witnessId ||
-    appearance?.witnessId !== directive.appearance.witnessId ||
-    appearance?.stage !== directive.appearance.examinationKind ||
-    leg?.answeredQuestionCount !== directive.appearance.answeredQuestionCount ||
     !sameCanonicalJson(state.actors[action.actor.actorId], action.actor)
+  ) {
+    return staleOpponentPlan();
+  }
+  const binding = directive.appearance;
+  if (binding === null) {
+    if (
+      state.phase !== "closing" ||
+      state.activeAppearanceId !== null ||
+      state.activeWitnessId !== null ||
+      state.closingSides.includes("opposing")
+    ) {
+      return staleOpponentPlan();
+    }
+    return;
+  }
+  const appearance = state.activeAppearanceId
+    ? state.appearances[state.activeAppearanceId]
+    : undefined;
+  const leg = appearance?.legs[binding.examinationKind];
+  if (
+    state.activeAppearanceId !== binding.appearanceId ||
+    state.activeWitnessId !== binding.witnessId ||
+    appearance?.witnessId !== binding.witnessId ||
+    appearance?.stage !== binding.examinationKind ||
+    leg?.answeredQuestionCount !== binding.answeredQuestionCount
   ) {
     return staleOpponentPlan();
   }
@@ -634,7 +675,7 @@ function citationsWithinDirective(
   output: CounselRoleResponseModelOutput,
   directive: PersistedOpponentDirective,
 ): boolean {
-  if (directive.directive.kind !== "question_witness") {
+  if (directive.directive.kind === "end_examination") {
     return output.speechSegments.every(
       (segment) =>
         segment.citations.factIds.length === 0 &&
@@ -659,7 +700,7 @@ function citationsWithinDirective(
 
 type GeneratedCounselAction = Extract<
   TrialActionV3,
-  { type: "ASK_QUESTION" | "END_EXAMINATION" }
+  { type: "ASK_QUESTION" | "END_EXAMINATION" | "GIVE_CLOSING" }
 >;
 
 function requireGeneratedCounselAction(
@@ -668,7 +709,9 @@ function requireGeneratedCounselAction(
   directive: PersistedOpponentDirective,
 ): GeneratedCounselAction {
   if (
-    (action.type !== "ASK_QUESTION" && action.type !== "END_EXAMINATION") ||
+    (action.type !== "ASK_QUESTION" &&
+      action.type !== "END_EXAMINATION" &&
+      action.type !== "GIVE_CLOSING") ||
     action.source !== "ai" ||
     action.actor.role !== "opposing_counsel" ||
     action.actor.side !== "opposing" ||
@@ -692,12 +735,14 @@ function requireGeneratedCounselAction(
   const citations = counselResponseOutputCitations(output);
   const text = materializedCounselText(output);
   if (directive.directive.kind === "question_witness") {
+    const appearance = directive.appearance;
     if (
+      appearance === null ||
       action.type !== "ASK_QUESTION" ||
       output.proposedAction.kind !== "ask_question" ||
       !text.includes("?") ||
-      action.payload.witnessId !== directive.appearance.witnessId ||
-      action.payload.examinationKind !== directive.appearance.examinationKind ||
+      action.payload.witnessId !== appearance.witnessId ||
+      action.payload.examinationKind !== appearance.examinationKind ||
       action.payload.text !== text ||
       !sameOrderedIdentifiers(
         output.proposedAction.presentedEvidenceIds,
@@ -722,16 +767,41 @@ function requireGeneratedCounselAction(
     return action;
   }
 
-  if (directive.directive.kind !== "end_examination") {
-    return invalidCounselResponse();
+  if (directive.directive.kind === "give_closing") {
+    if (
+      directive.appearance !== null ||
+      action.type !== "GIVE_CLOSING" ||
+      output.proposedAction.kind !== "give_closing" ||
+      action.payload.side !== "opposing" ||
+      action.payload.text !== text ||
+      !sameIdentifierSet(action.payload.citations.factIds, citations.factIds) ||
+      !sameIdentifierSet(
+        action.payload.citations.evidenceIds,
+        citations.evidenceIds,
+      ) ||
+      !sameIdentifierSet(
+        action.payload.citations.testimonyIds,
+        citations.testimonyIds,
+      ) ||
+      !sameIdentifierSet(action.payload.citations.eventIds, citations.eventIds) ||
+      !sameIdentifierSet(
+        action.payload.citations.sourceSegmentIds,
+        citations.sourceSegmentIds,
+      )
+    ) {
+      return invalidCounselResponse();
+    }
+    return action;
   }
 
+  const appearance = directive.appearance;
   if (
+    appearance === null ||
     action.type !== "END_EXAMINATION" ||
     output.proposedAction.kind !== "end_examination" ||
     output.proposedAction.disposition !== directive.directive.disposition ||
-    action.payload.witnessId !== directive.appearance.witnessId ||
-    action.payload.examinationKind !== directive.appearance.examinationKind ||
+    action.payload.witnessId !== appearance.witnessId ||
+    action.payload.examinationKind !== appearance.examinationKind ||
     action.payload.disposition !== directive.directive.disposition ||
     action.payload.turnId === undefined ||
     action.payload.text !== text ||
@@ -782,6 +852,11 @@ function requireCounselContinuation(
       return invalidCounselResponse();
     }
     return continuation;
+  }
+
+  if (primary.type === "GIVE_CLOSING") {
+    if (continuation !== null) return invalidCounselResponse();
+    return null;
   }
 
   if (continuation === null) return null;

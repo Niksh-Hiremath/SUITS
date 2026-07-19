@@ -421,7 +421,66 @@ function opportunityIssues(
         ),
       );
     }
+    if (move.kind === "give_closing" && opportunities.canClose) {
+      const publicFacts = new Set(
+        request.knowledgeView.publicRecord.facts.map(({ factId }) => factId),
+      );
+      const publicEvidence = new Set(
+        request.knowledgeView.publicRecord.evidence.map(
+          ({ evidenceId }) => evidenceId,
+        ),
+      );
+      const publicTestimony = new Set(
+        request.knowledgeView.publicRecord.testimony.map(
+          ({ testimonyId }) => testimonyId,
+        ),
+      );
+      const closingCitations = [
+        ...move.citations.factIds,
+        ...move.citations.evidenceIds,
+        ...move.citations.testimonyIds,
+      ];
+      if (closingCitations.length === 0) {
+        issues.push(
+          issue(
+            "semantic_contract_invalid",
+            [...movePath, "citations"],
+            "A planned closing requires jury-considerable citations",
+          ),
+        );
+      }
+      for (const [field, identifiers, allowed] of [
+        ["factIds", move.citations.factIds, publicFacts],
+        ["evidenceIds", move.citations.evidenceIds, publicEvidence],
+        ["testimonyIds", move.citations.testimonyIds, publicTestimony],
+      ] as const) {
+        identifiers.forEach((identifier, citationIndex) => {
+          if (!allowed.has(identifier)) {
+            issues.push(
+              issue(
+                "move_not_available",
+                [...movePath, "citations", field, citationIndex],
+                "A closing may rely only on the jury-considerable public record",
+              ),
+            );
+          }
+        });
+      }
+    }
   });
+
+  if (
+    opportunities.canClose &&
+    !output.proposedMoves.some((move) => move.kind === "give_closing")
+  ) {
+    issues.push(
+      issue(
+        "move_not_available",
+        ["proposedMoves"],
+        "A closing opportunity requires one explicit closing move",
+      ),
+    );
+  }
 
   if (
     request.knowledgeView.counsel.privateSettlement === null &&

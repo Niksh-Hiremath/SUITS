@@ -536,9 +536,12 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
     if (!event) return null;
     if (
       event.source !== "ai" ||
-      !["UPDATE_OPPOSING_STRATEGY", "ASK_QUESTION", "END_EXAMINATION"].includes(
-        event.eventType,
-      )
+      ![
+        "UPDATE_OPPOSING_STRATEGY",
+        "ASK_QUESTION",
+        "END_EXAMINATION",
+        "GIVE_CLOSING",
+      ].includes(event.eventType)
     ) {
       throw new Error("COURTROOM_GENERATION_INVALID");
     }
@@ -1210,19 +1213,51 @@ function lastEventId(state: TrialStateV3): string {
   return eventId;
 }
 
-function opponentDecisionMaterial(
-  state: TrialStateV3,
-  actor: ActorRef,
-): Readonly<{
+type OpponentDecisionMaterialBase = Readonly<{
   trialId: string;
   stateVersion: number;
   lastEventId: string;
   actorId: string;
-  appearanceId: string;
-  witnessId: string;
-  examinationKind: "cross" | "recross";
   answeredQuestionCount: number;
-}> {
+}>;
+type OpponentDecisionMaterial =
+  | (OpponentDecisionMaterialBase &
+      Readonly<{
+        mode: "examination";
+        appearanceId: string;
+        witnessId: string;
+        examinationKind: "cross" | "recross";
+      }>)
+  | (OpponentDecisionMaterialBase &
+      Readonly<{
+        mode: "closing";
+        appearanceId: null;
+        witnessId: null;
+        examinationKind: null;
+      }>);
+
+function opponentDecisionMaterial(
+  state: TrialStateV3,
+  actor: ActorRef,
+): OpponentDecisionMaterial {
+  if (
+    state.phase === "closing" &&
+    state.activeAppearanceId === null &&
+    state.activeWitnessId === null &&
+    !state.closingSides.includes("opposing")
+  ) {
+    return {
+      mode: "closing",
+      trialId: state.trialId,
+      stateVersion: state.version,
+      lastEventId: lastEventId(state),
+      actorId: actor.actorId,
+      appearanceId: null,
+      witnessId: null,
+      examinationKind: null,
+      answeredQuestionCount: 0,
+    };
+  }
   const appearance = activeAppearance(state);
   if (appearance.stage !== "cross" && appearance.stage !== "recross") {
     throw new Error("RUNTIME_AI_EXAMINATION_REQUIRED");
@@ -1232,6 +1267,7 @@ function opponentDecisionMaterial(
     throw new Error("RUNTIME_AI_EXAMINATION_REQUIRED");
   }
   return {
+    mode: "examination",
     trialId: state.trialId,
     stateVersion: state.version,
     lastEventId: lastEventId(state),
@@ -1269,21 +1305,31 @@ function canonicalOpponentPlannerRequest(
   const counselEvidenceIds = new Set(
     knowledgeView.counsel.evidence.map((evidence) => evidence.evidenceId),
   );
-  const witness = input.graph.witnesses.find(
-    (candidate) => candidate.witnessId === material.witnessId,
+  const witness =
+    material.witnessId === null
+      ? null
+      : input.graph.witnesses.find(
+          (candidate) => candidate.witnessId === material.witnessId,
+        );
+  if (material.mode === "examination" && !witness) {
+    throw new Error("UNKNOWN_WITNESS");
+  }
+  const seenEvidenceIds = new Set(
+    witness?.knowledgeBoundary.seenEvidenceIds ?? [],
   );
-  if (!witness) throw new Error("UNKNOWN_WITNESS");
-  const seenEvidenceIds = new Set(witness.knowledgeBoundary.seenEvidenceIds);
-  const presentableEvidenceIds = Object.values(input.state.evidence)
-    .filter(
-      (evidence) =>
-        counselEvidenceIds.has(evidence.evidenceId) &&
-        seenEvidenceIds.has(evidence.evidenceId) &&
-        evidence.status !== "excluded" &&
-        evidence.status !== "withdrawn",
-    )
-    .map((evidence) => evidence.evidenceId)
-    .sort((left, right) => left.localeCompare(right));
+  const presentableEvidenceIds =
+    material.mode === "closing"
+      ? []
+      : Object.values(input.state.evidence)
+          .filter(
+            (evidence) =>
+              counselEvidenceIds.has(evidence.evidenceId) &&
+              seenEvidenceIds.has(evidence.evidenceId) &&
+              evidence.status !== "excluded" &&
+              evidence.status !== "withdrawn",
+          )
+          .map((evidence) => evidence.evidenceId)
+          .sort((left, right) => left.localeCompare(right));
 
   return OpponentPlannerRequestSchema.parse({
     schemaVersion: "opponent-planner.request.v1",
@@ -1296,7 +1342,9 @@ function canonicalOpponentPlannerRequest(
     procedure: {
       phase: input.state.phase,
       trigger:
-        material.answeredQuestionCount === 0
+        material.mode === "closing"
+          ? "pre_closing"
+          : material.answeredQuestionCount === 0
           ? "player_examination_completed"
           : "opponent_turn_continues",
       activeAppearanceId: material.appearanceId,
@@ -1307,9 +1355,12 @@ function canonicalOpponentPlannerRequest(
     opportunities: {
       callableWitnessIds: [],
       questionableWitnessIds:
+        material.mode === "closing" ||
         material.answeredQuestionCount >= MAX_OPPONENT_QUESTIONS_PER_LEG
           ? []
-          : [material.witnessId],
+          : material.witnessId === null
+            ? []
+            : [material.witnessId],
       presentableEvidenceIds,
       offerableEvidenceIds: [],
       foundationTestimonyIds: [],
@@ -1318,7 +1369,7 @@ function canonicalOpponentPlannerRequest(
       canObject: false,
       canRequestNegotiation: false,
       canRest: false,
-      canClose: false,
+      canClose: material.mode === "closing",
     },
     knowledgeView,
   });
@@ -1408,12 +1459,15 @@ function canonicalCounselResponseRequest(
       actorId: input.actor.actorId,
       strategyId: strategy.strategyId,
       strategyRevision: strategy.revision,
-      appearance: {
-        appearanceId: material.appearanceId,
-        witnessId: material.witnessId,
-        examinationKind: material.examinationKind,
-        answeredQuestionCount: material.answeredQuestionCount,
-      },
+      appearance:
+        material.mode === "closing"
+          ? null
+          : {
+              appearanceId: material.appearanceId,
+              witnessId: material.witnessId,
+              examinationKind: material.examinationKind,
+              answeredQuestionCount: material.answeredQuestionCount,
+            },
     },
   );
   if (
@@ -1557,33 +1611,40 @@ async function canonicalContinuation(
     });
   }
 
-  if (head.state.activeAppearanceId === null) {
+  const needsOpponentClosing =
+    head.state.phase === "closing" &&
+    head.state.activeAppearanceId === null &&
+    head.state.activeWitnessId === null &&
+    !head.state.closingSides.includes("opposing");
+  if (head.state.activeAppearanceId === null && !needsOpponentClosing) {
     return HearingCommandPreparationSchema.parse({
       schemaVersion: "hearing-command-preparation.v1",
       status: "completed",
       view: head.view,
     });
   }
-  const appearance = activeAppearance(head.state);
-  if (appearance.stage === "ready_for_release") {
-    await releaseReadyWitness(ctx, ownerId, head);
-    head = await loadHead(ctx, ownerId, trialId);
-    return HearingCommandPreparationSchema.parse({
-      schemaVersion: "hearing-command-preparation.v1",
-      status: "completed",
-      view: head.view,
-    });
-  }
-  if (
-    appearance.stage === "awaiting_oath" ||
-    appearance.stage === "direct" ||
-    appearance.stage === "redirect"
-  ) {
-    return HearingCommandPreparationSchema.parse({
-      schemaVersion: "hearing-command-preparation.v1",
-      status: "completed",
-      view: head.view,
-    });
+  if (head.state.activeAppearanceId !== null) {
+    const appearance = activeAppearance(head.state);
+    if (appearance.stage === "ready_for_release") {
+      await releaseReadyWitness(ctx, ownerId, head);
+      head = await loadHead(ctx, ownerId, trialId);
+      return HearingCommandPreparationSchema.parse({
+        schemaVersion: "hearing-command-preparation.v1",
+        status: "completed",
+        view: head.view,
+      });
+    }
+    if (
+      appearance.stage === "awaiting_oath" ||
+      appearance.stage === "direct" ||
+      appearance.stage === "redirect"
+    ) {
+      return HearingCommandPreparationSchema.parse({
+        schemaVersion: "hearing-command-preparation.v1",
+        status: "completed",
+        view: head.view,
+      });
+    }
   }
 
   const actor = opposingCounselForAiRuntime(head.state);
@@ -2090,12 +2151,18 @@ export const commitOpponentPlanGeneration = internalAction({
         strategyId: strategy.strategyId,
         strategyRevision: strategy.revision,
         strategyEventId,
-        appearance: {
-          appearanceId: request.procedure.activeAppearanceId!,
-          witnessId: request.procedure.activeWitnessId!,
-          examinationKind: request.procedure.activeExaminationKind!,
-          answeredQuestionCount: request.procedure.answeredQuestionCount,
-        },
+        appearance:
+          request.procedure.activeAppearanceId === null ||
+          request.procedure.activeWitnessId === null ||
+          request.procedure.activeExaminationKind === null
+            ? null
+            : {
+                appearanceId: request.procedure.activeAppearanceId,
+                witnessId: request.procedure.activeWitnessId,
+                examinationKind: request.procedure.activeExaminationKind,
+                answeredQuestionCount:
+                  request.procedure.answeredQuestionCount,
+              },
       },
     });
     const action = actionFromIntent({
@@ -2147,6 +2214,7 @@ function counselContinuationForAction(
     action: TrialActionV3;
   }>,
 ): TrialActionV3 | null {
+  if (input.action.type === "GIVE_CLOSING") return null;
   const appearance = activeAppearance(input.state);
   if (input.action.type === "ASK_QUESTION") {
     const witnessActor = Object.values(input.state.actors).find(
@@ -2274,7 +2342,8 @@ export const commitCounselGeneration = internalAction({
       if (
         !existingAction.success ||
         (existingAction.data.type !== "ASK_QUESTION" &&
-          existingAction.data.type !== "END_EXAMINATION")
+          existingAction.data.type !== "END_EXAMINATION" &&
+          existingAction.data.type !== "GIVE_CLOSING")
       ) {
         return invalidCounselGeneration();
       }
@@ -2319,9 +2388,9 @@ export const commitCounselGeneration = internalAction({
     const validation = validateCounselResponseOutput(request, envelope.output);
     if (!validation.accepted) return invalidCounselGeneration();
     const response = validation.response;
-    if (request.appearance === null) return invalidCounselGeneration();
     let action: TrialActionV3;
     if (response.action.kind === "ask_question") {
+      if (request.appearance === null) return invalidCounselGeneration();
       const questionId = stableRuntimeId("question:counsel", {
         trialId: args.trialId,
         decisionId: request.decisionId,
@@ -2352,6 +2421,7 @@ export const commitCounselGeneration = internalAction({
         },
       });
     } else if (response.action.kind === "end_examination") {
+      if (request.appearance === null) return invalidCounselGeneration();
       action = actionFromIntent({
         actionId,
         trialId: args.trialId,
@@ -2367,6 +2437,33 @@ export const commitCounselGeneration = internalAction({
           examinationKind: request.appearance.examinationKind,
           disposition: response.action.disposition,
           turnId: stableRuntimeId("turn:counsel-end", {
+            trialId: args.trialId,
+            decisionId: request.decisionId,
+          }),
+          text: response.text,
+          citations: {
+            ...emptyCourtroomCitations(),
+            factIds: response.factIds,
+            evidenceIds: response.evidenceIds,
+            testimonyIds: response.testimonyIds,
+          },
+        },
+      });
+    } else if (response.action.kind === "give_closing") {
+      if (request.appearance !== null) return invalidCounselGeneration();
+      action = actionFromIntent({
+        actionId,
+        trialId: args.trialId,
+        expectedStateVersion: request.expectedStateVersion,
+        actor,
+        source: "ai",
+        requestedAt: envelope.trace.completedAt,
+        causationId: request.expectedLastEventId,
+        modelMetadata: envelope.modelMetadata,
+        type: "GIVE_CLOSING",
+        payload: {
+          side: "opposing",
+          turnId: stableRuntimeId("turn:counsel-closing", {
             trialId: args.trialId,
             decisionId: request.decisionId,
           }),

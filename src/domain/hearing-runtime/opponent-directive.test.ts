@@ -197,6 +197,60 @@ function committedBinding(
   };
 }
 
+function closingRequest(): OpponentPlannerRequest {
+  const value = request();
+  return OpponentPlannerRequestSchema.parse({
+    ...value,
+    callId:
+      "call:trial_directive:decision_closing:00000000-0000-4000-8000-000000000001",
+    decisionId: "decision:closing:directive",
+    procedure: {
+      phase: "closing",
+      trigger: "pre_closing",
+      activeAppearanceId: null,
+      activeWitnessId: null,
+      activeExaminationKind: null,
+      answeredQuestionCount: 0,
+    },
+    opportunities: {
+      callableWitnessIds: [],
+      questionableWitnessIds: [],
+      presentableEvidenceIds: [],
+      offerableEvidenceIds: [],
+      foundationTestimonyIds: [],
+      strikeableTestimonyIds: [],
+      permittedObjectionGrounds: [],
+      canObject: false,
+      canRequestNegotiation: false,
+      canRest: false,
+      canClose: true,
+    },
+  });
+}
+
+function closingBinding(): OpponentDirectiveCanonicalBinding {
+  return { ...binding(), appearance: null };
+}
+
+function committedClosingBinding(): OpponentDirectiveCommittedBinding {
+  return { ...committedBinding(), appearance: null };
+}
+
+function closingOutput(
+  factIds: string[] = [],
+): OpponentPlannerModelOutput {
+  return output([
+    {
+      kind: "give_closing",
+      rationale: "Synthesize only the jury-considerable trial record.",
+      citations: citations({
+        factIds,
+        testimonyIds: ["testimony_foundation"],
+      }),
+    },
+  ]);
+}
+
 function questionMove(
   goal: string,
   factId: "fact_timing" | "fact_revision",
@@ -233,6 +287,43 @@ function output(
 }
 
 describe("persisted opponent directive", () => {
+  it("persists a closing directive without fabricating a witness appearance", () => {
+    const plannerRequest = closingRequest();
+    const plannerOutput = closingOutput();
+    const directive = createPersistedOpponentDirective({
+      request: plannerRequest,
+      output: plannerOutput,
+      canonicalBinding: closingBinding(),
+    });
+
+    expect(directive).toMatchObject({
+      selectedMoveIndex: 0,
+      appearance: null,
+      directive: {
+        kind: "give_closing",
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: ["testimony_foundation"],
+      },
+    });
+    expect(
+      assertPersistedOpponentDirectiveBinding(
+        directive,
+        committedClosingBinding(),
+      ),
+    ).toEqual(directive);
+  });
+
+  it("rejects a closing directive grounded in counsel-private facts", () => {
+    expect(() =>
+      createPersistedOpponentDirective({
+        request: closingRequest(),
+        output: closingOutput(["fact_timing"]),
+        canonicalBinding: closingBinding(),
+      }),
+    ).toThrow(/OPPONENT_DIRECTIVE_PLAN_REJECTED:.*move_not_available/);
+  });
+
   it("deterministically selects the first grounded question for the active witness", () => {
     const plannerRequest = request();
     const plannerOutput = output();
@@ -471,11 +562,14 @@ describe("persisted opponent directive", () => {
         strategyRevision: 4,
       }),
     ).toThrow("OPPONENT_DIRECTIVE_BINDING_MISMATCH:strategyRevision");
+    const current = committedBinding();
+    if (current.appearance === null) throw new Error("Expected appearance");
+    const currentAppearance = current.appearance;
     expect(() =>
       assertPersistedOpponentDirectiveBinding(record, {
-        ...committedBinding(),
+        ...current,
         appearance: {
-          ...committedBinding().appearance,
+          ...currentAppearance,
           appearanceId: "appearance_other",
         },
       }),
