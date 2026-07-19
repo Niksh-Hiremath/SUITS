@@ -163,6 +163,7 @@ const HearingFinalBoundInterruptionScopeMetadataSchema = z.object({
   questionEventId: CaseGraphEntityIdSchema,
   objectionEventId: CaseGraphEntityIdSchema,
   interruptionEventId: CaseGraphEntityIdSchema,
+  ground: TrialPolicyObjectionGroundSchema,
   sourceHead: FinalBoundInterruptionTrialHeadSchema,
   committedHead: FinalBoundInterruptionTrialHeadSchema,
 });
@@ -473,6 +474,7 @@ export function assertFinalBoundInterruptionScopedPreparation(
       parsed.data.objection.objectionId !== metadata.objectionId ||
       parsed.data.objection.sourceEventId !== metadata.objectionEventId ||
       parsed.data.objection.questionId !== metadata.questionId ||
+      parsed.data.objection.ground !== metadata.ground ||
       parsed.data.objection.interruptedResponseId !== metadata.responseId ||
       parsed.data.question.questionId !== metadata.questionId ||
       parsed.data.question.eventId !== metadata.questionEventId ||

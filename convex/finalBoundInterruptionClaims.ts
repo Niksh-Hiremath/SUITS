@@ -1,9 +1,10 @@
 import { v } from "convex/values";
 
+import { FINAL_BOUND_INTERRUPTION_LEASE_DURATION_MS } from "../src/domain/objections/final-bound-lease";
 import { TrialStateV3Schema } from "../src/domain/trial-engine";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 
-export const FINAL_BOUND_INTERRUPTION_LEASE_DURATION_MS = 30_000;
+export { FINAL_BOUND_INTERRUPTION_LEASE_DURATION_MS };
 
 function nextLeaseGeneration(current: number): number {
   if (!Number.isSafeInteger(current) || current < 1) return invalidClaim();
