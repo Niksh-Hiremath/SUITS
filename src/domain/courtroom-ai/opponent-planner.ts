@@ -302,6 +302,19 @@ function opportunityIssues(
       );
     }
     if (move.kind === "question_witness") {
+      if (
+        move.citations.factIds.length === 0 &&
+        move.citations.evidenceIds.length === 0 &&
+        move.citations.testimonyIds.length === 0
+      ) {
+        issues.push(
+          issue(
+            "semantic_contract_invalid",
+            [...movePath, "citations"],
+            "A planned question requires a fact, evidence, or testimony basis",
+          ),
+        );
+      }
       if (!questionable.has(move.witnessId)) {
         issues.push(
           issue(
