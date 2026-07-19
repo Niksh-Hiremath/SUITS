@@ -52,6 +52,7 @@ import {
 import {
   CourtroomCommandOrchestrationError,
   orchestrateCourtroomCommand,
+  orchestratePreparedCourtroomCommand,
   type CourtroomCommandDurableService,
 } from "./courtroom-command";
 
@@ -379,6 +380,132 @@ describe("orchestrateCourtroomCommand", () => {
     expect(commitNegotiationDecision).toHaveBeenCalledTimes(1);
     expect(commitJuryResponse).toHaveBeenCalledTimes(1);
     expect(commitDebrief).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes an already committed objection preparation without preparing a player command", async () => {
+    const objectionRequest = createObjectionRulingRequestFixture();
+    const prepare = vi.fn<CourtroomCommandDurableService["prepare"]>();
+    const commitObjectionRuling = vi.fn(async (precommit) => {
+      expect(HearingObjectionRulingPrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      expect(precommit).toMatchObject({
+        trialId: objectionRequest.trialId,
+        callId: objectionRequest.callId,
+        decisionId: objectionRequest.decisionId,
+        objectionEventId: objectionRequest.objection.sourceEventId,
+        responseId: objectionRequest.interruption?.interruptedResponseId,
+      });
+      return completedPreparation();
+    });
+    const durableService: CourtroomCommandDurableService = {
+      prepare,
+      commitOpponentPlan: vi.fn(),
+      commitCounselResponse: vi.fn(),
+      commitObjectionRuling,
+      commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
+      recordTerminalTrace: vi.fn(async () => undefined),
+    };
+    const provider = new ScriptedCourtroomModelProvider(
+      [{ type: "output", output: createObjectionRulingOutputFixture() }],
+      { repeatLastStep: false },
+    );
+
+    await expect(
+      orchestratePreparedCourtroomCommand({
+        preparation: modelPreparation(objectionRequest),
+        provider,
+        durableService,
+      }),
+    ).resolves.toEqual(completedView());
+
+    expect(prepare).not.toHaveBeenCalled();
+    expect(commitObjectionRuling).toHaveBeenCalledTimes(1);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]).toMatchObject({
+      callClass: "objection_resolver",
+      task: "resolve_objection",
+    });
+  });
+
+  it("records terminal failures while resuming a committed preparation", async () => {
+    const recordTerminalTrace = vi.fn<
+      CourtroomCommandDurableService["recordTerminalTrace"]
+    >(async () => undefined);
+    const durableService: CourtroomCommandDurableService = {
+      prepare: vi.fn(),
+      commitOpponentPlan: vi.fn(),
+      commitCounselResponse: vi.fn(),
+      commitObjectionRuling: vi.fn(),
+      commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
+      recordTerminalTrace,
+    };
+    const provider = new ScriptedCourtroomModelProvider(
+      [
+        {
+          type: "error",
+          code: "service_unavailable",
+          message: "raw provider detail",
+          retryable: true,
+        },
+      ],
+      { repeatLastStep: false },
+    );
+
+    await expect(
+      orchestratePreparedCourtroomCommand({
+        preparation: modelPreparation(createObjectionRulingRequestFixture()),
+        provider,
+        durableService,
+      }),
+    ).rejects.toMatchObject({
+      code: "HEARING_MODEL_GENERATION_FAILED",
+      task: "objection_ruling",
+      terminalTracePersistence: "recorded",
+    });
+    expect(durableService.prepare).not.toHaveBeenCalled();
+    expect(recordTerminalTrace).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a resumed nonterminating model loop", async () => {
+    const plannerPreparation = modelPreparation(
+      createOpponentPlannerRequestFixture(),
+    );
+    const durableService: CourtroomCommandDurableService = {
+      prepare: vi.fn(),
+      commitOpponentPlan: vi.fn(async () => plannerPreparation),
+      commitCounselResponse: vi.fn(),
+      commitObjectionRuling: vi.fn(),
+      commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
+      recordTerminalTrace: vi.fn(async () => undefined),
+    };
+    const provider = new ScriptedCourtroomModelProvider(
+      [{ type: "output", output: createOpponentPlannerOutputFixture() }],
+      { repeatLastStep: true },
+    );
+
+    await expect(
+      orchestratePreparedCourtroomCommand({
+        preparation: plannerPreparation,
+        provider,
+        durableService,
+        maxModelSteps: 2,
+      }),
+    ).rejects.toMatchObject({
+      code: "HEARING_MODEL_LOOP_EXHAUSTED",
+      task: null,
+    });
+    expect(durableService.prepare).not.toHaveBeenCalled();
+    expect(provider.requests).toHaveLength(2);
   });
 
   it("durably records a failed private planner trace with a fresh signal", async () => {

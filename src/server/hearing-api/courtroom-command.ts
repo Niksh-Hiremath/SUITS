@@ -286,6 +286,14 @@ export type OrchestrateCourtroomCommandOptions = Readonly<{
   maxModelSteps?: number;
 }>;
 
+export type OrchestratePreparedCourtroomCommandOptions = Readonly<{
+  preparation: HearingCommandPreparation;
+  provider: CourtroomModelProvider;
+  durableService: CourtroomCommandDurableService;
+  signal?: AbortSignal;
+  maxModelSteps?: number;
+}>;
+
 function modelStepLimit(value: number | undefined): number {
   const limit = value ?? MAX_HEARING_MODEL_STEPS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HEARING_MODEL_STEPS) {
@@ -305,9 +313,37 @@ export async function orchestrateCourtroomCommand(
 ): Promise<HearingRuntimeViewV1> {
   const command = HearingPlayerCommandSchema.parse(options.command);
   const limit = modelStepLimit(options.maxModelSteps);
-  let preparation = HearingCommandPreparationSchema.parse(
+  const preparation = HearingCommandPreparationSchema.parse(
     await options.durableService.prepare(command, options.signal),
   );
+
+  return runPreparedCourtroomCommand(preparation, options, limit);
+}
+
+/**
+ * Resume the private model loop from a preparation already committed by a
+ * protected durable boundary. This is used by speech interruptions whose
+ * atomic event prefix must not be reconstructed as a player command.
+ */
+export async function orchestratePreparedCourtroomCommand(
+  options: OrchestratePreparedCourtroomCommandOptions,
+): Promise<HearingRuntimeViewV1> {
+  const preparation = HearingCommandPreparationSchema.parse(options.preparation);
+  const limit = modelStepLimit(options.maxModelSteps);
+
+  return runPreparedCourtroomCommand(preparation, options, limit);
+}
+
+async function runPreparedCourtroomCommand(
+  initialPreparation: HearingCommandPreparation,
+  options: Readonly<{
+    provider: CourtroomModelProvider;
+    durableService: CourtroomCommandDurableService;
+    signal?: AbortSignal;
+  }>,
+  limit: number,
+): Promise<HearingRuntimeViewV1> {
+  let preparation = initialPreparation;
 
   for (let step = 0; step < limit; step += 1) {
     if (preparation.status === "completed") {
