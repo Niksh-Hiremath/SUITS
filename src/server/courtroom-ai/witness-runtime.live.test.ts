@@ -9,6 +9,8 @@ import {
   isHearingWitnessModelRequiredPreparation,
   type HearingCounselResponsePrecommit,
   type HearingCommandPreparation,
+  type HearingDebriefGeneratorPrecommit,
+  type HearingJuryResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
@@ -52,7 +54,7 @@ function commandFor(
 
 liveDescribe("live Luna courtroom runtime", () => {
   it(
-    "commits two role-isolated witnesses and opposing-counsel turns through protected Convex boundaries",
+    "completes a multi-role Luna/Terra trial through protected Convex boundaries",
     async () => {
       const config = readConvexCaseServiceConfig();
       const ownerId = `owner:${crypto.randomUUID()}`;
@@ -81,12 +83,16 @@ liveDescribe("live Luna courtroom runtime", () => {
         witnessCalls: HearingWitnessGenerationPrecommit[];
         opponentPlans: HearingOpponentPlanPrecommit[];
         counselResponses: HearingCounselResponsePrecommit[];
+        juryResponses: HearingJuryResponsePrecommit[];
+        debriefs: HearingDebriefGeneratorPrecommit[];
       } = {
         preparation: null,
         generation: null,
         witnessCalls: [],
         opponentPlans: [],
         counselResponses: [],
+        juryResponses: [],
+        debriefs: [],
       };
       const capturedPreparation = (): HearingCommandPreparation | null =>
         captures.preparation;
@@ -139,24 +145,28 @@ liveDescribe("live Luna courtroom runtime", () => {
             signal,
           });
         },
-        commitJuryResponse: async (generation, signal) =>
-          await callConvexCaseService({
+        commitJuryResponse: async (generation, signal) => {
+          captures.juryResponses.push(generation);
+          return await callConvexCaseService({
             path: "/service/hearings/jury-response/commit",
             body: { ownerId, trialId, generation },
             responseSchema: HearingCommandPreparationSchema,
             config,
             timeoutMs: 120_000,
             signal,
-          }),
-        commitDebrief: async (generation, signal) =>
-          await callConvexCaseService({
+          });
+        },
+        commitDebrief: async (generation, signal) => {
+          captures.debriefs.push(generation);
+          return await callConvexCaseService({
             path: "/service/hearings/debrief/commit",
             body: { ownerId, trialId, generation },
             responseSchema: HearingCommandPreparationSchema,
             config,
             timeoutMs: 120_000,
             signal,
-          }),
+          });
+        },
         recordTerminalTrace: async (trace, signal) => {
           await callConvexCaseService({
             path: "/service/hearings/model-call/terminal",
@@ -260,6 +270,32 @@ liveDescribe("live Luna courtroom runtime", () => {
         expect(view.activeAppearance).toBeNull();
       }
 
+      await execute({
+        type: "finish_trial",
+        closingText:
+          "The admitted testimony establishes the sequence and supports relief under the fictional instructions.",
+      });
+      expect(view.trial).toMatchObject({ phase: "complete", status: "complete" });
+      expect(captures.juryResponses).toHaveLength(1);
+      expect(captures.debriefs).toHaveLength(1);
+      expect(captures.juryResponses[0]?.trace).toMatchObject({
+        status: "accepted",
+        model: "gpt-5.6-luna",
+        task: "jury_deliberation",
+        actorRole: "jury",
+      });
+      expect(captures.debriefs[0]?.trace).toMatchObject({
+        status: "accepted",
+        model: "gpt-5.6-terra",
+        task: "generate_debrief",
+        actorRole: "debrief",
+      });
+      expect(captures.juryResponses[0]?.trace.usage?.totalTokens).toBeGreaterThan(
+        0,
+      );
+      expect(captures.debriefs[0]?.trace.usage?.totalTokens).toBeGreaterThan(0);
+      expect(captures.debriefs[0]?.output.limitations.length).toBeGreaterThan(0);
+
       const reloaded = await callConvexCaseService({
         path: "/service/hearings/read",
         body: { ownerId, trialId },
@@ -294,8 +330,9 @@ liveDescribe("live Luna courtroom runtime", () => {
             generation.trace.task === "counsel_response",
         ),
       ).toBe(true);
+      expect(reloaded.trial).toMatchObject({ phase: "complete", status: "complete" });
 
-      console.info("live_courtroom_multi_actor_smoke", {
+      console.info("live_courtroom_complete_trial_smoke", {
         trialId,
         witnessIds,
         calls: acceptedCalls.map((call) => ({
@@ -310,8 +347,12 @@ liveDescribe("live Luna courtroom runtime", () => {
         counselResponseCalls: captures.counselResponses.map(
           (call) => call.callId,
         ),
+        juryCall: captures.juryResponses[0]?.callId ?? null,
+        debriefCall: captures.debriefs[0]?.callId ?? null,
+        juryCostUsd: captures.juryResponses[0]?.trace.estimatedCostUsd ?? null,
+        debriefCostUsd: captures.debriefs[0]?.trace.estimatedCostUsd ?? null,
       });
     },
-    300_000,
+    600_000,
   );
 });
