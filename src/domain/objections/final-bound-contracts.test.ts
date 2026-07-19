@@ -195,6 +195,20 @@ describe("FinalBoundInterruptionRequestSchema", () => {
     );
   });
 
+  it.each(["\u0000", "\u200b", "\u202e", "\u2066", "\u2069"])(
+    "rejects embedded Unicode control or format character %j",
+    (character) => {
+      for (const field of ["trigger", "final"] as const) {
+        const request = requestFixture();
+        (request[field] as { text: string }).text =
+          `Did you ${character}see the alert?`;
+        expect(
+          FinalBoundInterruptionRequestSchema.safeParse(request).success,
+        ).toBe(false);
+      }
+    },
+  );
+
   it.each([
     ["head state", (request: Record<string, unknown>) => ((request.head as { stateVersion: number }).stateVersion = Number.MAX_SAFE_INTEGER + 1)],
     ["generation", (request: Record<string, unknown>) => ((request.utterance as { generation: number }).generation = 0)],

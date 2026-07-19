@@ -44,6 +44,10 @@ function normalizedTranscriptText(maximumCharacters: number) {
         .refine(
           (text) => /[^\p{White_Space}\p{C}]/u.test(text),
           "Transcript text must contain visible content",
+        )
+        .refine(
+          (text) => !/\p{C}/u.test(text),
+          "Transcript text cannot contain control or format characters",
         ),
     );
 }
