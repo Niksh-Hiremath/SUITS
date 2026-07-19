@@ -51,7 +51,7 @@ describe("hearing speech controller privacy boundary", () => {
   it("keeps the final-bound interruption transport injected and actorless", () => {
     expect(source).toContain("interruptFinal?: HearingFinalBoundInterruptionPort");
     expect(source).toContain("FinalBoundInterruptionRequestSchema.parse({");
-    expect(source).toContain("FinalBoundInterruptionResponseSchema.parse(");
+    expect(source).toContain("FinalBoundInterruptionResolutionSchema.parse(");
 
     const requestStart = source.indexOf(
       "private async requestFinalBoundInterruption(",

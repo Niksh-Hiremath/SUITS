@@ -125,6 +125,16 @@ export const FinalBoundInterruptionRemedySchema = z.enum([
   "resume_response",
 ]);
 
+export const FinalBoundInterruptionContinuationSchema = z.enum([
+  "complete",
+  "pending",
+]);
+
+export const FinalBoundInterruptionPerformanceSchema = z.strictObject({
+  disposition: z.enum(["current", "historical"]),
+  answerTurnId: CaseGraphEntityIdSchema.nullable(),
+});
+
 /**
  * Protected result after the durable objection/ruling transaction completes.
  * `replayed` identifies an exact idempotent retry; it never asks the browser to
@@ -135,10 +145,14 @@ export const FinalBoundInterruptionResponseSchema = z
     schemaVersion: z.literal(
       FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
     ),
+    disposition: z.literal("ruling_committed"),
     interruptId: CaseGraphEntityIdSchema,
     ruling: FinalBoundInterruptionRulingSchema,
     remedy: FinalBoundInterruptionRemedySchema,
     replayed: z.boolean(),
+    targetCompletionHead: FinalBoundInterruptionTrialHeadSchema,
+    continuation: FinalBoundInterruptionContinuationSchema,
+    performance: FinalBoundInterruptionPerformanceSchema,
     view: HearingRuntimeViewV1Schema,
   })
   .superRefine((response, context) => {
@@ -155,7 +169,137 @@ export const FinalBoundInterruptionResponseSchema = z
           "The remedy must be executable for the committed interruption ruling",
       });
     }
+
+    const viewHead = response.view.trial;
+    const targetHead = response.targetCompletionHead;
+    if (viewHead.trialId !== targetHead.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["view", "trial", "trialId"],
+        message:
+          "The canonical view and target completion head must identify the same trial",
+      });
+    }
+
+    const viewIsExactTarget =
+      viewHead.version === targetHead.stateVersion &&
+      viewHead.lastEventId === targetHead.lastEventId;
+    const viewIsLaterThanTarget =
+      viewHead.version > targetHead.stateVersion;
+    if (!viewIsExactTarget && !viewIsLaterThanTarget) {
+      context.addIssue({
+        code: "custom",
+        path: ["view", "trial"],
+        message:
+          "The canonical view must be at or after the exact target completion head",
+      });
+    }
+    if (
+      response.performance.disposition === "current" &&
+      !viewIsExactTarget
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["performance", "disposition"],
+        message:
+          "Current performance is allowed only at the exact target completion head",
+      });
+    }
+    if (
+      response.performance.disposition === "historical" &&
+      !viewIsLaterThanTarget
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["performance", "disposition"],
+        message:
+          "Historical performance requires a canonical view later than the target completion head",
+      });
+    }
+
+    if (response.ruling === "sustained") {
+      if (response.continuation !== "complete") {
+        context.addIssue({
+          code: "custom",
+          path: ["continuation"],
+          message: "A sustained interruption cannot leave a response pending",
+        });
+      }
+      if (response.performance.answerTurnId !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["performance", "answerTurnId"],
+          message: "A sustained interruption cannot expose answer audio",
+        });
+      }
+      return;
+    }
+
+    if (response.continuation === "pending") {
+      if (response.performance.disposition !== "current") {
+        context.addIssue({
+          code: "custom",
+          path: ["performance", "disposition"],
+          message: "A pending resumed response must be current",
+        });
+      }
+      if (response.performance.answerTurnId !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["performance", "answerTurnId"],
+          message: "A pending resumed response cannot expose answer audio",
+        });
+      }
+      return;
+    }
+
+    if (response.performance.disposition === "historical") {
+      if (response.performance.answerTurnId !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["performance", "answerTurnId"],
+          message: "Historical completion cannot replay answer audio",
+        });
+      }
+      return;
+    }
+
+    const answerTurnId = response.performance.answerTurnId;
+    const matchingAnswerTurns = response.view.transcript.filter(
+      (turn) => turn.turnId === answerTurnId,
+    );
+    const exactAnswerTurn = matchingAnswerTurns[0];
+    if (
+      answerTurnId === null ||
+      matchingAnswerTurns.length !== 1 ||
+      response.view.transcript.at(-1)?.turnId !== answerTurnId ||
+      exactAnswerTurn?.actor.role !== "witness" ||
+      exactAnswerTurn?.status !== "active" ||
+      exactAnswerTurn?.testimonyId === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["performance", "answerTurnId"],
+        message:
+          "A current completed response must identify its exact final answer turn",
+      });
+    }
   });
+
+export const FinalBoundInterruptionCandidateWithdrawnSchema = z.strictObject({
+  schemaVersion: z.literal(FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION),
+  disposition: z.literal("candidate_withdrawn"),
+  withdrawalId: CaseGraphEntityIdSchema,
+  head: FinalBoundInterruptionTrialHeadSchema,
+});
+
+export const FinalBoundInterruptionResolutionSchema = z.discriminatedUnion(
+  "disposition",
+  [
+    FinalBoundInterruptionResponseSchema,
+    FinalBoundInterruptionCandidateWithdrawnSchema,
+  ],
+);
 
 export type FinalBoundInterruptionTrialHead = z.infer<
   typeof FinalBoundInterruptionTrialHeadSchema
@@ -169,6 +313,18 @@ export type FinalBoundInterruptionRuling = z.infer<
 export type FinalBoundInterruptionRemedy = z.infer<
   typeof FinalBoundInterruptionRemedySchema
 >;
+export type FinalBoundInterruptionContinuation = z.infer<
+  typeof FinalBoundInterruptionContinuationSchema
+>;
+export type FinalBoundInterruptionPerformance = z.infer<
+  typeof FinalBoundInterruptionPerformanceSchema
+>;
 export type FinalBoundInterruptionResponse = z.infer<
   typeof FinalBoundInterruptionResponseSchema
+>;
+export type FinalBoundInterruptionCandidateWithdrawn = z.infer<
+  typeof FinalBoundInterruptionCandidateWithdrawnSchema
+>;
+export type FinalBoundInterruptionResolution = z.infer<
+  typeof FinalBoundInterruptionResolutionSchema
 >;

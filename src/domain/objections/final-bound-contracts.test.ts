@@ -9,7 +9,9 @@ import {
   FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
   FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
   FINAL_BOUND_INTERRUPTION_TRIGGER_TEXT_MAX_CHARACTERS,
+  FinalBoundInterruptionCandidateWithdrawnSchema,
   FinalBoundInterruptionRequestSchema,
+  FinalBoundInterruptionResolutionSchema,
   FinalBoundInterruptionResponseSchema,
 } from "./final-bound-contracts";
 import { PARTIAL_OBJECTION_MINIMUM_STT_CONFIDENCE } from "./partial-detector";
@@ -40,7 +42,15 @@ function requestFixture(): Record<string, unknown> {
   };
 }
 
-function hearingView(): HearingRuntimeViewV1 {
+function hearingView(
+  options: Readonly<{
+    trialId?: string;
+    version?: number;
+    lastEventId?: string;
+    transcript?: HearingRuntimeViewV1["transcript"];
+  }> = {},
+): HearingRuntimeViewV1 {
+  const version = options.version ?? 20;
   return {
     schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
     case: {
@@ -59,12 +69,13 @@ function hearingView(): HearingRuntimeViewV1 {
       issues: [],
     },
     trial: {
-      trialId: TRIAL_ID,
+      trialId: options.trialId ?? TRIAL_ID,
       phase: "case_in_chief",
       status: "active",
-      version: 20,
-      sequence: 20,
-      lastEventId: "event:interruption-resolved:020",
+      version,
+      sequence: version,
+      lastEventId:
+        options.lastEventId ?? "event:interruption-resolved:020",
       userSide: "user",
     },
     activeAppearance: null,
@@ -91,8 +102,35 @@ function hearingView(): HearingRuntimeViewV1 {
       evidence: [],
       settlement: null,
     },
-    transcript: [],
+    transcript: [...(options.transcript ?? [])],
     permittedObjectionGrounds: ["leading"],
+  };
+}
+
+const ANSWER_TURN_ID = "turn:witness-answer:020";
+
+function answerTurn(
+  turnId = ANSWER_TURN_ID,
+): HearingRuntimeViewV1["transcript"][number] {
+  return {
+    ordinal: 1,
+    turnId,
+    actor: {
+      actorId: "actor:witness:fixture",
+      role: "witness",
+      side: "neutral",
+      witnessId: "witness:fixture",
+    },
+    text: "I saw the alert that morning.",
+    testimonyId: "testimony:fixture:020",
+    status: "active",
+    citations: {
+      factIds: [],
+      evidenceIds: [],
+      testimonyIds: [],
+      eventIds: [],
+      sourceSegmentIds: [],
+    },
   };
 }
 
@@ -226,22 +264,317 @@ describe("FinalBoundInterruptionRequestSchema", () => {
 });
 
 describe("FinalBoundInterruptionResponseSchema", () => {
-  function responseFixture() {
+  type ResponseFixtureOptions = Readonly<{
+    ruling?: "sustained" | "overruled";
+    remedy?: "rephrase" | "cancel_response" | "resume_response";
+    continuation?: "complete" | "pending";
+    performanceDisposition?: "current" | "historical";
+    answerTurnId?: string | null;
+    targetTrialId?: string;
+    targetVersion?: number;
+    targetLastEventId?: string;
+    viewTrialId?: string;
+    viewVersion?: number;
+    viewLastEventId?: string;
+    transcript?: HearingRuntimeViewV1["transcript"];
+  }>;
+
+  function responseFixture(options: ResponseFixtureOptions = {}) {
+    const targetVersion = options.targetVersion ?? 20;
+    const targetLastEventId =
+      options.targetLastEventId ?? "event:interruption-resolved:020";
     return {
       schemaVersion: FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
+      disposition: "ruling_committed" as const,
       interruptId: "interrupt:partial:007",
-      ruling: "sustained" as const,
-      remedy: "rephrase" as const,
+      ruling: options.ruling ?? ("sustained" as const),
+      remedy: options.remedy ?? ("rephrase" as const),
       replayed: false,
-      view: hearingView(),
+      targetCompletionHead: {
+        trialId: options.targetTrialId ?? TRIAL_ID,
+        stateVersion: targetVersion,
+        lastEventId: targetLastEventId,
+      },
+      continuation: options.continuation ?? ("complete" as const),
+      performance: {
+        disposition:
+          options.performanceDisposition ?? ("current" as const),
+        answerTurnId: options.answerTurnId ?? null,
+      },
+      view: hearingView({
+        trialId: options.viewTrialId,
+        version: options.viewVersion ?? targetVersion,
+        lastEventId: options.viewLastEventId ?? targetLastEventId,
+        transcript: options.transcript,
+      }),
     };
   }
 
-  it("returns only the durable ruling outcome and canonical redacted view", () => {
-    expect(FinalBoundInterruptionResponseSchema.parse(responseFixture())).toEqual(
-      responseFixture(),
-    );
-  });
+  const outcomeCrossProduct = (["sustained", "overruled"] as const).flatMap(
+    (ruling) =>
+      (["complete", "pending"] as const).flatMap((continuation) =>
+        (["current", "historical"] as const).flatMap(
+          (performanceDisposition) =>
+            ([false, true] as const).map((hasAnswerTurn) => {
+              const expected =
+                ruling === "sustained"
+                  ? continuation === "complete" && !hasAnswerTurn
+                  : continuation === "pending"
+                    ? performanceDisposition === "current" && !hasAnswerTurn
+                    : performanceDisposition === "current"
+                      ? hasAnswerTurn
+                      : !hasAnswerTurn;
+              return [
+                ruling,
+                continuation,
+                performanceDisposition,
+                hasAnswerTurn,
+                expected,
+              ] as const;
+            }),
+        ),
+      ),
+  );
+
+  it.each(outcomeCrossProduct)(
+    "validates the complete outcome cross-product: %s/%s/%s/answer=%s",
+    (
+      ruling,
+      continuation,
+      performanceDisposition,
+      hasAnswerTurn,
+      expected,
+    ) => {
+      const historical = performanceDisposition === "historical";
+      expect(
+        FinalBoundInterruptionResponseSchema.safeParse(
+          responseFixture({
+            ruling,
+            remedy:
+              ruling === "overruled" ? "resume_response" : "rephrase",
+            continuation,
+            performanceDisposition,
+            answerTurnId: hasAnswerTurn ? ANSWER_TURN_ID : null,
+            transcript: hasAnswerTurn ? [answerTurn()] : [],
+            viewVersion: historical ? 21 : 20,
+            viewLastEventId: historical
+              ? "event:later:021"
+              : "event:interruption-resolved:020",
+          }),
+        ).success,
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    [
+      "current sustained completion",
+      {
+        ruling: "sustained",
+        remedy: "rephrase",
+        continuation: "complete",
+        performanceDisposition: "current",
+        answerTurnId: null,
+      },
+    ],
+    [
+      "historical sustained completion",
+      {
+        ruling: "sustained",
+        remedy: "cancel_response",
+        continuation: "complete",
+        performanceDisposition: "historical",
+        answerTurnId: null,
+        viewVersion: 21,
+        viewLastEventId: "event:later:021",
+      },
+    ],
+    [
+      "current overruled pending continuation",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "pending",
+        performanceDisposition: "current",
+        answerTurnId: null,
+      },
+    ],
+    [
+      "current overruled completed answer",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        performanceDisposition: "current",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [answerTurn()],
+      },
+    ],
+    [
+      "historical overruled completion without answer audio",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        performanceDisposition: "historical",
+        answerTurnId: null,
+        viewVersion: 21,
+        viewLastEventId: "event:later:021",
+      },
+    ],
+  ] satisfies ReadonlyArray<readonly [string, ResponseFixtureOptions]>) (
+    "accepts %s",
+    (_name, options) => {
+      const fixture = responseFixture(options);
+      expect(FinalBoundInterruptionResponseSchema.parse(fixture)).toEqual(
+        fixture,
+      );
+      expect(FinalBoundInterruptionResolutionSchema.parse(fixture)).toEqual(
+        fixture,
+      );
+    },
+  );
+
+  it.each([
+    [
+      "a sustained pending continuation",
+      { ruling: "sustained", continuation: "pending" },
+    ],
+    [
+      "a sustained answer turn",
+      {
+        ruling: "sustained",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [answerTurn()],
+      },
+    ],
+    [
+      "an overruled pending historical continuation",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "pending",
+        performanceDisposition: "historical",
+        viewVersion: 21,
+        viewLastEventId: "event:later:021",
+      },
+    ],
+    [
+      "an overruled pending answer turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "pending",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [answerTurn()],
+      },
+    ],
+    [
+      "an overruled current completion without an answer turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        performanceDisposition: "current",
+      },
+    ],
+    [
+      "an overruled current completion with an unknown answer turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: "turn:witness-answer:unknown",
+        transcript: [answerTurn()],
+      },
+    ],
+    [
+      "an overruled current completion with a non-final answer turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [
+          answerTurn(),
+          { ...answerTurn("turn:later:021"), ordinal: 2 },
+        ],
+      },
+    ],
+    [
+      "an overruled current completion with a duplicate answer identity",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [answerTurn(), { ...answerTurn(), ordinal: 2 }],
+      },
+    ],
+    [
+      "an overruled current completion with a counsel-authored turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [
+          {
+            ...answerTurn(),
+            actor: {
+              actorId: "actor:user-counsel",
+              role: "user_counsel",
+              side: "user",
+              witnessId: null,
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "an overruled current completion with a stricken witness turn",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [{ ...answerTurn(), status: "stricken" }],
+      },
+    ],
+    [
+      "an overruled current completion without testimony",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        answerTurnId: ANSWER_TURN_ID,
+        transcript: [{ ...answerTurn(), testimonyId: null }],
+      },
+    ],
+    [
+      "an overruled historical completion with answer audio",
+      {
+        ruling: "overruled",
+        remedy: "resume_response",
+        continuation: "complete",
+        performanceDisposition: "historical",
+        answerTurnId: ANSWER_TURN_ID,
+        viewVersion: 21,
+        viewLastEventId: "event:later:021",
+        transcript: [answerTurn()],
+      },
+    ],
+  ] satisfies ReadonlyArray<readonly [string, ResponseFixtureOptions]>) (
+    "rejects %s",
+    (_name, options) => {
+      expect(
+        FinalBoundInterruptionResponseSchema.safeParse(
+          responseFixture(options),
+        ).success,
+      ).toBe(false);
+    },
+  );
 
   it.each([
     ["sustained", "rephrase", true],
@@ -250,16 +583,55 @@ describe("FinalBoundInterruptionResponseSchema", () => {
     ["sustained", "resume_response", false],
     ["overruled", "rephrase", false],
     ["overruled", "cancel_response", false],
-  ] as const)(
-    "validates %s with %s",
-    (ruling, remedy, expected) => {
+  ] as const)("validates %s with %s", (ruling, remedy, expected) => {
+    const options: ResponseFixtureOptions =
+      ruling === "overruled"
+        ? {
+            ruling,
+            remedy,
+            continuation: "pending",
+          }
+        : { ruling, remedy };
+    expect(
+      FinalBoundInterruptionResponseSchema.safeParse(
+        responseFixture(options),
+      ).success,
+    ).toBe(expected);
+  });
+
+  it.each([
+    [
+      "a view before the target head",
+      { targetVersion: 21, viewVersion: 20 },
+    ],
+    [
+      "an equal-version view with a different event",
+      { viewLastEventId: "event:fork:020" },
+    ],
+    [
+      "current performance at a later view",
+      { viewVersion: 21, viewLastEventId: "event:later:021" },
+    ],
+    [
+      "historical performance at the exact target",
+      { performanceDisposition: "historical" },
+    ],
+    [
+      "a target from a different trial",
+      { targetTrialId: `trial_${"b".repeat(32)}` },
+    ],
+    [
+      "a view from a different trial",
+      { viewTrialId: `trial_${"b".repeat(32)}` },
+    ],
+  ] satisfies ReadonlyArray<readonly [string, ResponseFixtureOptions]>) (
+    "rejects %s",
+    (_name, options) => {
       expect(
-        FinalBoundInterruptionResponseSchema.safeParse({
-          ...responseFixture(),
-          ruling,
-          remedy,
-        }).success,
-      ).toBe(expected);
+        FinalBoundInterruptionResponseSchema.safeParse(
+          responseFixture(options),
+        ).success,
+      ).toBe(false);
     },
   );
 
@@ -290,6 +662,21 @@ describe("FinalBoundInterruptionResponseSchema", () => {
     },
   );
 
+  it.each([
+    ["target head", "targetCompletionHead", "ownerId"],
+    ["performance", "performance", "speakerActorId"],
+  ] as const)(
+    "rejects protected authority at the %s boundary",
+    (_name, field, authorityField) => {
+      const fixture = responseFixture();
+      (fixture[field] as Record<string, unknown>)[authorityField] =
+        "actor:forged";
+      expect(FinalBoundInterruptionResponseSchema.safeParse(fixture).success).toBe(
+        false,
+      );
+    },
+  );
+
   it("rejects an invalid interrupt identity or redacted hearing view", () => {
     expect(
       FinalBoundInterruptionResponseSchema.safeParse({
@@ -301,6 +688,84 @@ describe("FinalBoundInterruptionResponseSchema", () => {
       FinalBoundInterruptionResponseSchema.safeParse({
         ...responseFixture(),
         view: { ...hearingView(), ownerId: "owner:forged" },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("FinalBoundInterruptionResolutionSchema", () => {
+  function withdrawnFixture() {
+    return {
+      schemaVersion: FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
+      disposition: "candidate_withdrawn" as const,
+      withdrawalId: "withdrawal:partial:007",
+      head: {
+        trialId: TRIAL_ID,
+        stateVersion: 14,
+        lastEventId: "event:question-window:014",
+      },
+    };
+  }
+
+  it("parses the strict candidate-withdrawn branch", () => {
+    const fixture = withdrawnFixture();
+    expect(
+      FinalBoundInterruptionCandidateWithdrawnSchema.parse(fixture),
+    ).toEqual(fixture);
+    expect(FinalBoundInterruptionResolutionSchema.parse(fixture)).toEqual(
+      fixture,
+    );
+  });
+
+  it.each([
+    ["root owner", (fixture: Record<string, unknown>) => Object.assign(fixture, { ownerId: "owner:forged" })],
+    ["root actor", (fixture: Record<string, unknown>) => Object.assign(fixture, { actorId: "actor:forged" })],
+    ["head actor", (fixture: Record<string, unknown>) => Object.assign(fixture.head as object, { actorId: "actor:forged" })],
+    ["ruling-branch view", (fixture: Record<string, unknown>) => Object.assign(fixture, { view: hearingView() })],
+  ])("rejects candidate-withdrawn authority or mixed field %s", (_name, mutate) => {
+    const fixture = withdrawnFixture();
+    mutate(fixture);
+    expect(
+      FinalBoundInterruptionCandidateWithdrawnSchema.safeParse(fixture)
+        .success,
+    ).toBe(false);
+    expect(FinalBoundInterruptionResolutionSchema.safeParse(fixture).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects a missing, unknown, or branch-inconsistent disposition", () => {
+    const missing: Partial<ReturnType<typeof withdrawnFixture>> =
+      withdrawnFixture();
+    delete missing.disposition;
+    expect(FinalBoundInterruptionResolutionSchema.safeParse(missing).success).toBe(
+      false,
+    );
+    expect(
+      FinalBoundInterruptionResolutionSchema.safeParse({
+        ...withdrawnFixture(),
+        disposition: "pending",
+      }).success,
+    ).toBe(false);
+    expect(
+      FinalBoundInterruptionResolutionSchema.safeParse({
+        ...withdrawnFixture(),
+        disposition: "ruling_committed",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an invalid withdrawal identity or canonical head", () => {
+    expect(
+      FinalBoundInterruptionResolutionSchema.safeParse({
+        ...withdrawnFixture(),
+        withdrawalId: "bad withdrawal id",
+      }).success,
+    ).toBe(false);
+    expect(
+      FinalBoundInterruptionResolutionSchema.safeParse({
+        ...withdrawnFixture(),
+        head: { ...withdrawnFixture().head, stateVersion: -1 },
       }).success,
     ).toBe(false);
   });

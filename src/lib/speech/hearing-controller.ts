@@ -6,8 +6,10 @@ import {
 import {
   FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
   FinalBoundInterruptionRequestSchema,
+  FinalBoundInterruptionResolutionSchema,
   FinalBoundInterruptionResponseSchema,
   type FinalBoundInterruptionRequest,
+  type FinalBoundInterruptionResolution,
   type FinalBoundInterruptionResponse,
 } from "@/domain/objections/final-bound-contracts";
 import {
@@ -75,6 +77,9 @@ const SUSTAINED_CLIP_ID = "courtroom.sustained.v1";
 const OVERRULED_CLIP_ID = "courtroom.overruled.v1";
 const OBJECTION_ACTOR_ID = "actor.opposing_counsel.objection";
 const JUDGE_ACTOR_ID = "actor.judge";
+const COURTROOM_DIRECTOR_ACTOR_ID = "actor.courtroom.director";
+const WITHDRAWAL_CORRECTION_PHRASE =
+  "Correction. The objection is withdrawn.";
 const MAX_RECENT_SAME_LEG_QUESTIONS = 32;
 const TRANSCRIPT_DIVERGED_MESSAGE =
   "The courtroom transcript changed unexpectedly; earlier turns will not be replayed.";
@@ -203,6 +208,7 @@ export type HearingControllerOptions = Readonly<{
   getActivity: () => Readonly<{ busy: boolean; pending: boolean }>;
   commitFinal: (submission: HearingFinalSubmission) => Promise<void>;
   interruptFinal?: HearingFinalBoundInterruptionPort;
+  onInterruptionPending?: (response: FinalBoundInterruptionResponse) => void;
   clientId?: string;
   idFactory?: (prefix: string) => string;
   onStateChange?: (snapshot: HearingControllerSnapshot) => void;
@@ -255,8 +261,9 @@ type PartialInterruptionState = {
   envelope: PartialObjectionEnvelope | null;
   finalRevision: number | null;
   finalText: string | null;
-  durableResponse: FinalBoundInterruptionResponse | null;
+  durableResponse: FinalBoundInterruptionResolution | null;
   reactionPlayback: Promise<void> | null;
+  candidateCorrectionCompleted: boolean;
 };
 
 type PlaybackJobState = {
@@ -528,10 +535,11 @@ export class HearingController {
   private readonly playback: HearingAudioPlaybackPort;
   private readonly finalTimeoutMs: number;
   private readonly ttsTimeoutMs: number;
-  private readonly partialObjections: PartialObjectionCoordinator<FinalBoundInterruptionResponse> | null;
+  private readonly partialObjections: PartialObjectionCoordinator<FinalBoundInterruptionResolution> | null;
   private readonly listeners = new Set<
     (snapshot: HearingControllerSnapshot) => void
   >();
+  private readonly deliveredInterruptionRulings = new Set<string>();
 
   private snapshotValue: HearingControllerSnapshot;
   private generation = 0;
@@ -608,7 +616,7 @@ export class HearingController {
     this.partialObjections =
       options.interruptFinal === undefined
         ? null
-        : new PartialObjectionCoordinator<FinalBoundInterruptionResponse>({
+        : new PartialObjectionCoordinator<FinalBoundInterruptionResolution>({
             modelDispatch: "after_final_seal",
             requestModelCandidate: (envelope, signal) =>
               this.requestFinalBoundInterruption(envelope, signal),
@@ -777,6 +785,71 @@ export class HearingController {
       throw error;
     }
     if (units.length > 0) await this.speakUnits(units);
+  }
+
+  /**
+   * Adopt an owner-recovered interruption after reload or a failed witness
+   * continuation. The durable head advances before local audio, and exact
+   * ruling/answer authority comes only from the strict protected response.
+   */
+  async adoptRecoveredInterruption(
+    previous: HearingRuntimeViewV1,
+    responseInput: FinalBoundInterruptionResponse,
+  ): Promise<void> {
+    this.requireReady();
+    const response = FinalBoundInterruptionResponseSchema.parse(responseInput);
+    if (!sameBaseline(this.baseline, previous)) {
+      const error = new HearingControllerError(
+        "TRANSCRIPT_DIVERGED",
+        TRANSCRIPT_DIVERGED_MESSAGE,
+      );
+      this.setRecoverable(error);
+      throw error;
+    }
+    const previousHead = previous.trial;
+    const nextHead = response.view.trial;
+    if (
+      previousHead.trialId !== nextHead.trialId ||
+      nextHead.version < previousHead.version ||
+      (nextHead.version === previousHead.version &&
+        nextHead.lastEventId !== previousHead.lastEventId)
+    ) {
+      const error = new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+      this.setRecoverable(error);
+      throw error;
+    }
+    this.baseline = response.view;
+    this.partialObjections?.invalidateHead(headFromView(response.view));
+    if (response.performance.disposition === "historical") return;
+    const answerUnits = this.recoveredWitnessUnits(response);
+
+    if (!this.deliveredInterruptionRulings.has(response.interruptId)) {
+      const clipId =
+        response.ruling === "sustained"
+          ? SUSTAINED_CLIP_ID
+          : OVERRULED_CLIP_ID;
+      const clipAvailable =
+        this.snapshotValue.capabilities?.cachedClipIds.includes(clipId) ??
+        false;
+      await this.speakUnits([
+        Object.freeze(
+          clipAvailable
+            ? { actor: JUDGE_ACTOR_ID, clipId }
+            : {
+                actor: JUDGE_ACTOR_ID,
+                text:
+                  response.ruling === "sustained"
+                    ? "Sustained."
+                    : "Overruled.",
+              },
+        ),
+      ]);
+      this.deliveredInterruptionRulings.add(response.interruptId);
+    }
+    if (answerUnits.length > 0) await this.speakUnits(answerUnits);
   }
 
   async startRecording(mode: HearingVoiceInputMode): Promise<void> {
@@ -1399,6 +1472,7 @@ export class HearingController {
       finalText: null,
       durableResponse: null,
       reactionPlayback: null,
+      candidateCorrectionCompleted: false,
     };
     recording.partialInterruption = partialInterruption;
 
@@ -1447,7 +1521,7 @@ export class HearingController {
   private async requestFinalBoundInterruption(
     envelope: PartialObjectionEnvelope,
     signal: AbortSignal,
-  ): Promise<FinalBoundInterruptionResponse> {
+  ): Promise<FinalBoundInterruptionResolution> {
     const recording = this.recording;
     const partialInterruption = recording?.partialInterruption ?? null;
     if (
@@ -1503,14 +1577,21 @@ export class HearingController {
       },
     });
     recording.commitStarted = true;
-    const response = FinalBoundInterruptionResponseSchema.parse(
+    const response = FinalBoundInterruptionResolutionSchema.parse(
       await interruptFinal(request, signal),
     );
-    if (
-      response.view.trial.trialId !== envelope.head.trialId ||
-      response.view.trial.version <= envelope.head.stateVersion ||
-      response.view.trial.lastEventId === envelope.head.lastEventId
-    ) {
+    const invalidWithdrawal =
+      response.disposition === "candidate_withdrawn" &&
+      !sameHead(response.head, envelope.head);
+    const invalidCommitted =
+      response.disposition === "ruling_committed" &&
+      (response.view.trial.trialId !== envelope.head.trialId ||
+        response.targetCompletionHead.trialId !== envelope.head.trialId ||
+        response.targetCompletionHead.stateVersion <=
+          envelope.head.stateVersion ||
+        response.view.trial.version <= envelope.head.stateVersion ||
+        response.view.trial.lastEventId === envelope.head.lastEventId);
+    if (invalidWithdrawal || invalidCommitted) {
       throw new HearingControllerError(
         "INTERRUPTION_STALE",
         SAFE_MESSAGES.INTERRUPTION_STALE,
@@ -1522,7 +1603,7 @@ export class HearingController {
 
   private async deliverFinalBoundInterruption(
     envelope: PartialObjectionEnvelope,
-    response: FinalBoundInterruptionResponse,
+    response: FinalBoundInterruptionResolution,
     fence: PartialObjectionDeliveryFence,
   ): Promise<void> {
     const recording = this.recording;
@@ -1546,14 +1627,24 @@ export class HearingController {
       );
     }
     const currentView = this.options.getView();
-    if (
-      !viewMatchesHead(currentView, envelope.head) &&
-      !viewMatchesHead(currentView, headFromView(response.view))
-    ) {
+    const expectedPublishedHead =
+      response.disposition === "ruling_committed"
+        ? headFromView(response.view)
+        : envelope.head;
+    if (!viewMatchesHead(currentView, expectedPublishedHead)) {
       throw new HearingControllerError(
         "INTERRUPTION_STALE",
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
+    }
+
+    if (response.disposition === "candidate_withdrawn") {
+      await this.deliverWithdrawnCandidate(
+        recording,
+        partialInterruption,
+        fence,
+      );
+      return;
     }
 
     // The route has already published this durable view before resolving the
@@ -1561,6 +1652,11 @@ export class HearingController {
     // a missing clip, audio-device failure, or timeout cannot leave the
     // controller behind the canonical trial record.
     this.baseline = response.view;
+    const resumedUnits = this.resumedWitnessUnits(
+      recording.partialSourceView,
+      response,
+      recording.context.witnessId,
+    );
 
     const reactionPlayback = partialInterruption.reactionPlayback;
     if (reactionPlayback === null) {
@@ -1575,6 +1671,11 @@ export class HearingController {
         "INTERRUPTION_STALE",
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
+    }
+
+    if (response.performance.disposition === "historical") {
+      this.completeDeliveredInterruption(recording);
+      return;
     }
 
     let rulingPlayback: Promise<void> | null = null;
@@ -1602,42 +1703,108 @@ export class HearingController {
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
     }
+    this.deliveredInterruptionRulings.add(response.interruptId);
 
-    await this.speakResumedWitnessDelta(
-      recording,
-      recording.partialSourceView,
-      response,
-      fence,
-    );
+    const canSpeak = this.completeDeliveredInterruption(recording);
+    if (!canSpeak) return;
+    if (response.continuation === "pending") {
+      try {
+        this.options.onInterruptionPending?.(response);
+      } catch {
+        // Recovery scheduling is best-effort; the durable pending head remains.
+      }
+      return;
+    }
+    if (resumedUnits.length === 0) return;
+
+    // Resumed testimony uses the normal speaking lifecycle so the player can
+    // barge in with the next spoken question. The durable view was adopted
+    // above, so local playback failure never replays or rolls back the answer.
+    try {
+      await this.speakUnits(resumedUnits);
+    } catch {
+      // speakUnits has already fenced/cancelled playback and exposed a safe
+      // recoverable state, or a new recording deliberately barged in.
+    }
+  }
+
+  private async deliverWithdrawnCandidate(
+    recording: RecordingState,
+    partialInterruption: PartialInterruptionState,
+    fence: PartialObjectionDeliveryFence,
+  ): Promise<void> {
+    let localFailure: HearingControllerError | null = null;
+    try {
+      if (partialInterruption.reactionPlayback === null) {
+        throw new HearingControllerError(
+          "REACTION_UNAVAILABLE",
+          SAFE_MESSAGES.REACTION_UNAVAILABLE,
+        );
+      }
+      await partialInterruption.reactionPlayback;
+      if (!partialInterruption.candidateCorrectionCompleted) {
+        let correctionPlayback: Promise<void> | null = null;
+        await this.dispatchInterruptionSpeechUnit(
+          recording,
+          Object.freeze({
+            actor: COURTROOM_DIRECTOR_ACTOR_ID,
+            text: WITHDRAWAL_CORRECTION_PHRASE,
+          }),
+          fence.signal,
+          (completion) => {
+            correctionPlayback = completion;
+          },
+        );
+        if (correctionPlayback === null) {
+          throw new HearingControllerError(
+            "REACTION_UNAVAILABLE",
+            SAFE_MESSAGES.REACTION_UNAVAILABLE,
+          );
+        }
+        await correctionPlayback;
+        partialInterruption.candidateCorrectionCompleted = true;
+      }
+    } catch (cause) {
+      localFailure = controllerError(cause);
+    }
     if (!fence.isCurrent() || fence.signal.aborted) {
       throw new HearingControllerError(
         "INTERRUPTION_STALE",
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
     }
-
-    this.recording = null;
-    recording.completion.resolve(null);
-    if (recording.postCommitRecovery !== null) {
-      this.setRecoverable(recording.postCommitRecovery);
-    } else {
-      this.setSnapshot({
-        lifecycle: "ready",
-        code: null,
-        message: null,
-        partialText: "",
-        activeMode: null,
-      });
+    const finalText = partialInterruption.finalText;
+    if (finalText === null) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
     }
+    await this.commitValidatedFinal(
+      recording.context,
+      finalText,
+      recording.generation,
+    );
+    if (localFailure !== null && recording.postCommitRecovery === null) {
+      recording.postCommitRecovery = localFailure;
+    }
+    this.completeDeliveredInterruption(recording);
   }
 
-  private async speakResumedWitnessDelta(
-    recording: RecordingState,
+  private resumedWitnessUnits(
     sourceView: HearingRuntimeViewV1,
     response: FinalBoundInterruptionResponse,
-    fence: PartialObjectionDeliveryFence,
-  ): Promise<void> {
-    if (response.ruling !== "overruled") return;
+    expectedWitnessId: string | null,
+  ): SpeechUnit[] {
+    const answerTurnId = response.performance.answerTurnId;
+    if (
+      response.ruling !== "overruled" ||
+      response.performance.disposition !== "current" ||
+      response.continuation !== "complete" ||
+      answerTurnId === null
+    ) {
+      return [];
+    }
     const selection = selectSpeakableTranscriptDelta(
       sourceView,
       response.view,
@@ -1649,36 +1816,83 @@ export class HearingController {
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
     }
-    const witnessTurns = selection.turns.filter(
-      (turn) => turn.actor.role === "witness" && turn.status === "active",
+    const matchingTurns = selection.turns.filter(
+      (turn) => turn.turnId === answerTurnId,
     );
-    for (const turn of witnessTurns) {
-      const actor = safeActorId(turn.actor);
-      for (const phrase of splitSpeechPhrases(turn.text)) {
-        if (!fence.isCurrent() || fence.signal.aborted) {
-          throw new HearingControllerError(
-            "INTERRUPTION_STALE",
-            SAFE_MESSAGES.INTERRUPTION_STALE,
-          );
-        }
-        let phrasePlayback: Promise<void> | null = null;
-        await this.dispatchInterruptionSpeechUnit(
-          recording,
-          Object.freeze({ actor, text: phrase }),
-          fence.signal,
-          (completion) => {
-            phrasePlayback = completion;
-          },
-        );
-        if (phrasePlayback === null) {
-          throw new HearingControllerError(
-            "PLAYBACK_FAILED",
-            SAFE_MESSAGES.PLAYBACK_FAILED,
-          );
-        }
-        await phrasePlayback;
-      }
+    const turn = matchingTurns[0];
+    if (
+      matchingTurns.length !== 1 ||
+      turn === undefined ||
+      expectedWitnessId === null ||
+      turn.actor.role !== "witness" ||
+      turn.actor.witnessId !== expectedWitnessId ||
+      turn.status !== "active" ||
+      turn.testimonyId === null
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
     }
+    const actor = safeActorId(turn.actor);
+    return splitSpeechPhrases(turn.text).map((text) =>
+      Object.freeze({ actor, text }),
+    );
+  }
+
+  private recoveredWitnessUnits(
+    response: FinalBoundInterruptionResponse,
+  ): SpeechUnit[] {
+    const answerTurnId = response.performance.answerTurnId;
+    if (
+      response.ruling !== "overruled" ||
+      response.performance.disposition !== "current" ||
+      response.continuation !== "complete" ||
+      answerTurnId === null
+    ) {
+      return [];
+    }
+    const matchingTurns = response.view.transcript.filter(
+      (turn) => turn.turnId === answerTurnId,
+    );
+    const turn = matchingTurns[0];
+    const activeWitnessId = response.view.activeAppearance?.witnessId ?? null;
+    if (
+      matchingTurns.length !== 1 ||
+      turn === undefined ||
+      turn.actor.role !== "witness" ||
+      turn.actor.witnessId === null ||
+      (activeWitnessId !== null &&
+        turn.actor.witnessId !== activeWitnessId) ||
+      turn.status !== "active" ||
+      turn.testimonyId === null
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    const actor = safeActorId(turn.actor);
+    return splitSpeechPhrases(turn.text).map((text) =>
+      Object.freeze({ actor, text }),
+    );
+  }
+
+  private completeDeliveredInterruption(recording: RecordingState): boolean {
+    this.recording = null;
+    recording.completion.resolve(null);
+    if (recording.postCommitRecovery !== null) {
+      this.setRecoverable(recording.postCommitRecovery);
+      return false;
+    }
+    this.setSnapshot({
+      lifecycle: "ready",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: null,
+    });
+    return true;
   }
 
   private handlePartialObjectionError(
@@ -1928,6 +2142,18 @@ export class HearingController {
     recording.finalReceived.resolve(error);
     recording.completion.resolve(error);
     this.setRecoverable(error);
+    const durableResponse =
+      recording.partialInterruption?.durableResponse ?? null;
+    if (
+      durableResponse?.disposition === "ruling_committed" &&
+      durableResponse.continuation === "pending"
+    ) {
+      try {
+        this.options.onInterruptionPending?.(durableResponse);
+      } catch {
+        // Owner recovery remains available on reload when local scheduling fails.
+      }
+    }
   }
 
   private handleTtsStarted(event: Extract<SpeechClientEvent, { type: "tts_started" }>): void {

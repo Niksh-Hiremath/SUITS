@@ -7,6 +7,8 @@ import {
 } from "@/domain/hearing-runtime";
 import {
   FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
+  FinalBoundInterruptionResolutionSchema,
+  type FinalBoundInterruptionCandidateWithdrawn,
   type FinalBoundInterruptionRequest,
   type FinalBoundInterruptionResponse,
 } from "@/domain/objections/final-bound-contracts";
@@ -198,13 +200,47 @@ function interruptionResponse(
   ruling: "sustained" | "overruled",
   view = runtimeView(14),
 ): FinalBoundInterruptionResponse {
+  const answerTurn = [...view.transcript]
+    .reverse()
+    .find(
+      (turn) =>
+        turn.actor.role === "witness" &&
+        turn.status === "active" &&
+        turn.testimonyId !== null,
+    );
   return {
     schemaVersion: FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
+    disposition: "ruling_committed",
     interruptId: "interrupt:durable:001",
     ruling,
     remedy: ruling === "sustained" ? "rephrase" : "resume_response",
     replayed: false,
+    targetCompletionHead: {
+      trialId: view.trial.trialId,
+      stateVersion: view.trial.version,
+      lastEventId: view.trial.lastEventId,
+    },
+    continuation:
+      ruling === "overruled" && answerTurn === undefined
+        ? "pending"
+        : "complete",
+    performance: {
+      disposition: "current",
+      answerTurnId:
+        ruling === "overruled" ? (answerTurn?.turnId ?? null) : null,
+    },
     view,
+  };
+}
+
+function withdrawnResponse(
+  request: FinalBoundInterruptionRequest,
+): FinalBoundInterruptionCandidateWithdrawn {
+  return {
+    schemaVersion: FINAL_BOUND_INTERRUPTION_RESPONSE_SCHEMA_VERSION,
+    disposition: "candidate_withdrawn",
+    withdrawalId: "withdrawal:final-bound:test",
+    head: request.head,
   };
 }
 
@@ -548,6 +584,8 @@ function harness(
       request: FinalBoundInterruptionRequest,
       signal: AbortSignal,
     ) => Promise<unknown>;
+    onInterruptionPending?: (response: FinalBoundInterruptionResponse) => void;
+    publishInterruption?: boolean;
   }> = {},
 ): Harness {
   const client = new FakeSpeechClient(capabilityValue);
@@ -574,7 +612,28 @@ function harness(
     },
     ...(options.interruptFinal === undefined
       ? {}
-      : { interruptFinal: options.interruptFinal }),
+      : {
+          interruptFinal: async (
+            request: FinalBoundInterruptionRequest,
+            signal: AbortSignal,
+          ) => {
+            const response = await options.interruptFinal?.(request, signal);
+            const parsed = FinalBoundInterruptionResolutionSchema.safeParse(
+              response,
+            );
+            if (
+              options.publishInterruption !== false &&
+              parsed.success &&
+              parsed.data.disposition === "ruling_committed"
+            ) {
+              view = parsed.data.view;
+            }
+            return response;
+          },
+        }),
+    ...(options.onInterruptionPending === undefined
+      ? {}
+      : { onInterruptionPending: options.onInterruptionPending }),
     idFactory: (prefix) => `${prefix}-${++nextId}`,
     clientFactory: () => client,
     captureFactory: (options) => capture.configure(options),
@@ -924,6 +983,167 @@ describe("HearingController", () => {
     expect(test.controller.snapshot.lifecycle).toBe("ready");
   });
 
+  it("commits a revised noncandidate final exactly once after the cached objection", async () => {
+    const requests: FinalBoundInterruptionRequest[] = [];
+    const finalQuestion = "Thank you. What did you review before the shift?";
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      interruptFinal: async (request) => {
+        requests.push(request);
+        return withdrawnResponse(request);
+      },
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+
+    emitSttPartial(
+      test.client,
+      utteranceId,
+      1,
+      "Isn't it true that you ignored the safety alert that morning?",
+      0.99,
+    );
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 2, finalQuestion);
+    await flushAsync();
+
+    const objection = await completeLatestClip(test);
+    expect(objection.clipId).toBe("courtroom.objection.v1");
+    const correction = await completeLatestClip(test);
+    expect(correction.clipId).toBeUndefined();
+    expect(correction.actor).toBe("actor.courtroom.director");
+    expect(correction.text).toBe("Correction. The objection is withdrawn.");
+    await stopped;
+
+    expect(requests).toHaveLength(1);
+    expect(test.commits).toEqual([
+      expect.objectContaining({
+        text: finalQuestion,
+        intent: expect.objectContaining({
+          type: "ask_question",
+          witnessId: "witness-one",
+          text: finalQuestion,
+        }),
+      }),
+    ]);
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("does not drop a withdrawn-candidate final when neutral correction speech fails", async () => {
+    const finalQuestion = "What did you review before the shift?";
+    const test = harness(capabilities(true, ["courtroom.objection.v1"]), {
+      view: objectionView(),
+      interruptFinal: async (request) => withdrawnResponse(request),
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    emitSttPartial(
+      test.client,
+      utteranceId,
+      1,
+      "Isn't it true that you ignored the safety alert that morning?",
+      0.99,
+    );
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 2, finalQuestion);
+    await completeLatestClip(test);
+    await waitForSynthesisCount(test, 2);
+    const correction = latestSynthesis(test.client);
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "error",
+      code: "tts_failed",
+      message: "untrusted local synthesis detail",
+      requestId: null,
+      utteranceId: null,
+      jobId: correction.jobId,
+      retryable: true,
+      fatal: false,
+    });
+    await stopped;
+
+    expect(test.commits).toHaveLength(1);
+    expect(test.commits[0]?.text).toBe(finalQuestion);
+    expect(test.controller.snapshot).toMatchObject({
+      lifecycle: "recoverable_error",
+      code: "SPEECH_SERVICE_ERROR",
+    });
+  });
+
+  it.each(["sustained", "overruled"] as const)(
+    "suppresses stale ruling and unrelated witness audio on %s historical replay",
+    async (ruling) => {
+    const finalQuestion =
+      "Isn't it true that you ignored the safety alert that morning?";
+    const laterView = runtimeView(18, [
+      transcriptTurn(1, "actor-user", "user_counsel", "user", finalQuestion),
+      transcriptTurn(
+        2,
+        "actor-witness",
+        "witness",
+        "neutral",
+        "I reviewed the alert before the shift.",
+      ),
+      transcriptTurn(
+        3,
+        "actor-user",
+        "user_counsel",
+        "user",
+        "What happened after the meeting?",
+      ),
+      transcriptTurn(
+        4,
+        "actor-witness",
+        "witness",
+        "neutral",
+        "I filed a separate report that afternoon.",
+      ),
+    ]);
+    const historical: FinalBoundInterruptionResponse = {
+      ...interruptionResponse(ruling, laterView),
+      targetCompletionHead: {
+        trialId: TRIAL_ID,
+        stateVersion: 14,
+        lastEventId: "event-14",
+      },
+      performance: { disposition: "historical", answerTurnId: null },
+    };
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      interruptFinal: async () => {
+        test.setView(laterView);
+        return historical;
+      },
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    emitSttPartial(test.client, utteranceId, 1, finalQuestion, 0.99);
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 2, finalQuestion);
+
+    const objection = await completeLatestClip(test);
+    expect(objection.clipId).toBe("courtroom.objection.v1");
+    await stopped;
+
+    expect(test.client.synthesis).toHaveLength(1);
+    expect(test.client.synthesis.map(({ text }) => text)).not.toContain(
+      "I filed a separate report that afternoon.",
+    );
+    await expect(
+      test.controller.adoptView(laterView, laterView, "command"),
+    ).resolves.toBeUndefined();
+    },
+  );
+
   it("retains the durable interruption baseline when ruling playback cannot start", async () => {
     const durableView = runtimeView(14);
     const response = interruptionResponse("sustained", durableView);
@@ -968,6 +1188,68 @@ describe("HearingController", () => {
       test.controller.adoptView(durableView, durableView, "command"),
     ).resolves.toBeUndefined();
     expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("schedules owner recovery after pending ruling delivery exhausts its retry", async () => {
+    const durableView = runtimeView(14);
+    const pending = interruptionResponse("overruled", durableView);
+    const observations: Array<{
+      response: FinalBoundInterruptionResponse;
+      lifecycle: HearingController["snapshot"]["lifecycle"];
+      activeMode: HearingController["snapshot"]["activeMode"];
+      captureStatus: HearingController["snapshot"]["captureStatus"];
+    }> = [];
+    const test = harness(capabilities(true, ["courtroom.objection.v1"]), {
+      view: objectionView(),
+      interruptFinal: async () => {
+        test.setView(durableView);
+        return pending;
+      },
+      onInterruptionPending: (response) => {
+        observations.push({
+          response,
+          lifecycle: test.controller.snapshot.lifecycle,
+          activeMode: test.controller.snapshot.activeMode,
+          captureStatus: test.controller.snapshot.captureStatus,
+        });
+      },
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+
+    emitSttPartial(
+      test.client,
+      utteranceId,
+      1,
+      "Isn't it true that you ignored the safety alert that morning?",
+      0.99,
+    );
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(
+      test.client,
+      utteranceId,
+      2,
+      "Isn't it true that you ignored the safety alert that morning?",
+    );
+    await completeLatestClip(test);
+    await flushAsync();
+
+    await expect(stopped).rejects.toMatchObject({
+      code: "INTERRUPTION_STALE",
+    });
+    await flushAsync();
+
+    expect(observations).toEqual([
+      {
+        response: pending,
+        lifecycle: "recoverable_error",
+        activeMode: null,
+        captureStatus: "stopped",
+      },
+    ]);
   });
 
   it("cancels failed interruption playback and ACKs its late frames", async () => {
@@ -1115,6 +1397,108 @@ describe("HearingController", () => {
     expect(test.controller.snapshot.lifecycle).toBe("ready");
   });
 
+  it("refuses resumed answer audio from a different witness", async () => {
+    const finalQuestion =
+      "Isn't it true that you ignored the safety alert that morning?";
+    const wrongWitnessTurn = transcriptTurn(
+      2,
+      "actor-witness-two",
+      "witness",
+      "neutral",
+      "I was not the witness who received that question.",
+    );
+    const responseView = runtimeView(14, [
+      transcriptTurn(1, "actor-user", "user_counsel", "user", finalQuestion),
+      {
+        ...wrongWitnessTurn,
+        actor: { ...wrongWitnessTurn.actor, witnessId: "witness-two" },
+      },
+    ]);
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      interruptFinal: async () =>
+        interruptionResponse("overruled", responseView),
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    emitSttPartial(test.client, utteranceId, 1, finalQuestion, 0.99);
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 2, finalQuestion);
+
+    await expect(stopped).rejects.toMatchObject({
+      code: "INTERRUPTION_STALE",
+    });
+    expect(test.client.synthesis).toHaveLength(1);
+    expect(test.client.synthesis[0]?.clipId).toBe("courtroom.objection.v1");
+    expect(test.client.synthesis.map(({ text }) => text)).not.toContain(
+      wrongWitnessTurn.text,
+    );
+  });
+
+  it("allows a new spoken question to barge into exact resumed testimony", async () => {
+    const finalQuestion =
+      "Isn't it true that you ignored the safety alert that morning?";
+    const resumedAnswer = "I reviewed the alert before the shift began.";
+    const responseView = runtimeView(14, [
+      transcriptTurn(1, "actor-user", "user_counsel", "user", finalQuestion),
+      transcriptTurn(
+        2,
+        "actor-witness",
+        "witness",
+        "neutral",
+        resumedAnswer,
+      ),
+    ]);
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      interruptFinal: async () => {
+        test.setView(responseView);
+        return interruptionResponse("overruled", responseView);
+      },
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const firstUtteranceId = test.client.utterances[0]?.utteranceId;
+    if (firstUtteranceId === undefined) throw new Error("missing utterance");
+    emitSttPartial(test.client, firstUtteranceId, 1, finalQuestion, 0.99);
+    await flushAsync();
+    const firstStopped = test.controller.stopRecording();
+    emitSttFinal(test.client, firstUtteranceId, 2, finalQuestion);
+    await completeLatestClip(test);
+    await completeLatestClip(test);
+    await waitForSynthesisCount(test, 3);
+
+    const resumedSpeech = latestSynthesis(test.client);
+    expect(resumedSpeech.text).toBe(resumedAnswer);
+    expect(test.controller.snapshot.lifecycle).toBe("speaking");
+    await test.controller.startRecording("question");
+    await firstStopped;
+
+    expect(test.client.synthesisCancellations).toContainEqual({
+      scope: "all",
+      reason: "barge_in",
+    });
+    expect(test.controller.snapshot.lifecycle).toBe("recording");
+    const secondUtteranceId = test.client.utterances[1]?.utteranceId;
+    if (secondUtteranceId === undefined) throw new Error("missing utterance");
+    const secondStopped = test.controller.stopRecording();
+    emitSttFinal(
+      test.client,
+      secondUtteranceId,
+      1,
+      "What did you do after reviewing it?",
+    );
+    await secondStopped;
+
+    expect(test.commits).toHaveLength(1);
+    await expect(
+      test.controller.adoptView(responseView, responseView, "command"),
+    ).resolves.toBeUndefined();
+  });
+
   it("supplies only recent questions from the current examination leg to the detector", async () => {
     const repeatedQuestion =
       "Did you review the safety alert before the morning shift?";
@@ -1203,6 +1587,31 @@ describe("HearingController", () => {
 
     expect(attempts).toBe(2);
     expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("rejects a committed interruption until its durable view is published", async () => {
+    const finalQuestion =
+      "Isn't it true that you ignored the safety alert that morning?";
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      publishInterruption: false,
+      interruptFinal: async () => interruptionResponse("sustained"),
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    emitSttPartial(test.client, utteranceId, 1, finalQuestion, 0.99);
+    await flushAsync();
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 2, finalQuestion);
+
+    await expect(stopped).rejects.toMatchObject({
+      code: "INTERRUPTION_STALE",
+    });
+    expect(test.client.synthesis).toHaveLength(1);
+    expect(test.client.synthesis[0]?.clipId).toBe("courtroom.objection.v1");
+    expect(test.commits).toHaveLength(0);
   });
 
   it("fails closed when the durable head changes before interruption dispatch", async () => {
@@ -1779,6 +2188,55 @@ describe("HearingController", () => {
     emitTtsFinished(test.client, request);
     test.playback.resolveAudible(request.jobId);
     await adopted;
+  });
+
+  it("recovers a pending interruption without replaying its ruling before the exact answer", async () => {
+    const previous = objectionView();
+    const pendingView = runtimeView(10);
+    const completedView = runtimeView(14, [
+      transcriptTurn(
+        1,
+        "actor-witness",
+        "witness",
+        "neutral",
+        "I reviewed the alert before the shift began.",
+      ),
+    ]);
+    const pending = interruptionResponse("overruled", pendingView);
+    const completed = interruptionResponse("overruled", completedView);
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: previous,
+    });
+    await test.controller.prepare();
+    test.controller.baselineView(previous);
+
+    const pendingAdoption = test.controller.adoptRecoveredInterruption(
+      previous,
+      pending,
+    );
+    await waitForSynthesisCount(test, 1);
+    const ruling = await completeLatestClip(test);
+    expect(ruling.clipId).toBe("courtroom.overruled.v1");
+    await pendingAdoption;
+
+    const completedAdoption = test.controller.adoptRecoveredInterruption(
+      pendingView,
+      completed,
+    );
+    await waitForSynthesisCount(test, 2);
+    const answer = await completeLatestClip(test);
+    expect(answer.clipId).toBeUndefined();
+    expect(answer.text).toBe(
+      "I reviewed the alert before the shift began.",
+    );
+    await completedAdoption;
+
+    expect(
+      test.client.synthesis.filter(
+        ({ clipId }) => clipId === "courtroom.overruled.v1",
+      ),
+    ).toHaveLength(1);
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
   });
 
   it("rejects a shorter caller prefix instead of replaying the internal baseline", async () => {
