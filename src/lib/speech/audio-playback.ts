@@ -76,6 +76,7 @@ export type AudioPlaybackTimingBatch = AudioPlaybackJobIdentity &
 
 export type ScheduledAudioPlaybackTiming = AudioPlaybackJobIdentity &
   Readonly<{
+    audioClockTimeSeconds: number;
     marks: readonly (AudioPlaybackTimingMark &
       Readonly<{
         audioStartTimeSeconds: number;
@@ -1028,7 +1029,11 @@ export class BrowserAudioPlaybackController {
           }),
         ),
       );
-      const timing = Object.freeze({ ...job.identity, marks });
+      const timing = Object.freeze({
+        ...job.identity,
+        audioClockTimeSeconds: this.context?.currentTime ?? 0,
+        marks,
+      });
       this.notifyObserver("timing", () => this.options.onTiming?.(timing));
     }
   }

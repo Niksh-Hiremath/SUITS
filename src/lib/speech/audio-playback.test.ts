@@ -140,10 +140,14 @@ function frame(
 describe("BrowserAudioPlaybackController", () => {
   it("schedules ordered PCM directly and resolves only after audible drain", async () => {
     const context = new FakePlaybackContext();
-    const timing = vi.fn();
+    const observerOrder: string[] = [];
+    const timing = vi.fn(() => observerOrder.push("timing"));
     const controller = new BrowserAudioPlaybackController({
       createAudioContext: () => context,
       scheduleLeadMs: 0,
+      onStatusChange: (status) => {
+        if (status === "playing") observerOrder.push("playing");
+      },
       onTiming: timing,
     });
     await controller.activateResponse(IDENTITY.responseId);
@@ -168,6 +172,7 @@ describe("BrowserAudioPlaybackController", () => {
     );
     expect(timing).toHaveBeenCalledWith({
       ...IDENTITY,
+      audioClockTimeSeconds: 10,
       marks: [
         {
           kind: "word",
@@ -179,6 +184,7 @@ describe("BrowserAudioPlaybackController", () => {
         },
       ],
     });
+    expect(observerOrder).toEqual(["playing", "timing"]);
 
     expect(controller.finishJob(IDENTITY)).toBe(completion);
     let settled = false;
