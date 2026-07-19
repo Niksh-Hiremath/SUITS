@@ -517,7 +517,7 @@ Gate:
 
 - [ ] Mock integration suite passes all role and validation scenarios.
 - [ ] With a key available, at least one live GPT-5.6 multi-witness trial completes without knowledge leakage or unsupported admitted facts.
-- [ ] Runtime witness/counsel answers are accepted GPT-5.6 outputs, not authored golden-answer replacements.
+- [x] Runtime witness/counsel answers are accepted GPT-5.6 outputs, not authored golden-answer replacements.
 
 ### Milestone 5 — Local real-time STT/TTS companion
 
@@ -805,6 +805,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. The local file intentionally lacks the Convex service secret; the live command loaded the already-configured development secret into that PowerShell process without printing or persisting it.
   - Commits: implementation series `a623b80` through `01c0471`, plus generated binding refresh `920f60a`; this PLAN checkpoint is committed separately.
 
+- 2026-07-19 06:59 IST — Milestone 4 opposing-counsel runtime and live checkpoint
+  - Changed: added a private opposing-counsel planning KnowledgeView, public-only counsel responder, strict planner/counsel schemas and prompts, shared streamed validation/one-repair orchestration, secret Convex prepare/commit boundaries, atomic strategy/dialogue/audit commits, resumable planner-to-counsel-to-witness continuation, durable examination-ending speech, exact partial-chain recovery, safe failure classification, and a three-question per-leg bound. Removed the public raw canonical reload wrapper, rejected unsupported user-side and ambiguous counsel rosters before writes, and kept redirect as an explicit player decision.
+  - Verified: the current repository gate passes lint with only four generated-file warnings, both TypeScript surfaces, 720 tests with three expected live-only skips, three evals, and the 17/17 production build. The real Luna multi-actor smoke passed in 124.294 seconds for `trial_c1a64355e5144fb2899f6e06a38a4313`: two direct witnesses plus both bounded opposing cross examinations produced 24 accepted calls (eight witness, eight planner, eight counsel), 93,200 input and 7,926 output tokens, one accepted targeted planner repair, zero terminal failures, and estimated total cost $0.1101875. The final redacted owner reload exactly matched the returned head, all scoped citation assertions passed, and no authored witness or counsel response was substituted.
+  - Remaining: this is still not the full Milestone 4 gate. Judge objection/ruling orchestration, settlement evaluation, jury deliberation/verdict, and Terra final coaching need role-specific prompt/runtime cutovers; the live smoke must then finish the complete trial without leakage or unsupported admitted facts. The unauthenticated legacy Convex public surface found by the security audit must be internalized before it can be treated as deployment-safe.
+  - Blocked: none. Convex remained authenticated and the development deployment synchronized without another login.
+  - Commits: opposing-counsel implementation series `ada5ec9` through `42f5703`; this PLAN checkpoint is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -839,6 +846,11 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Published standard GPT-5.6 pricing supports deterministic estimates for Luna and Terra, but the estimator must return `null` when provider counters cannot be partitioned safely into uncached input, cached reads, cache writes, and output. The recorded rates and provenance are [OpenAI's model catalog](https://developers.openai.com/api/docs/models) and [the GPT-5.6 announcement](https://openai.com/index/gpt-5-6/).
 - The live courtroom test initially failed safely before any model call because `SUITS_CONVEX_SERVICE_SECRET` was absent from local files. Reading the existing development value into one PowerShell process through `npx convex env get`, without printing or persisting it, then produced a successful real two-witness Luna run; no Convex login was needed.
 
+- The first real opponent-planner attempt exposed a prompt-contract ambiguity rather than a schema failure: the planning view includes testimony `transcriptEventId` provenance, while the accepted call-audit citation contract has no `transcriptTurnIds` scope. Luna cited that visible event on both initial and repair attempts. Planner prompt v2 now explicitly limits citations to fact, evidence, testimony, and source-segment IDs and directs the model to cite `testimonyId`, not `transcriptEventId`; the strict validator and audit contract were not weakened.
+- A completed opposing cross must yield explicit player control for redirect. The live smoke initially tried to call the next witness while the prior appearance was correctly at `redirect`; adding an explicit player waiver completed the flow and preserves the no-auto-waiver invariant.
+- The bounded multi-actor live run used four planner decisions and four counsel responses per witness: three grounded cross questions plus one examination-ending decision/speech. Across two witnesses this produced 24 accepted Luna calls and one successful targeted planner repair, providing real latency/cost evidence for the three-question cap.
+- A public-function audit found 25 remotely callable legacy or low-level Convex functions, including unauthenticated legacy records/mutations and billable OpenAI/ElevenLabs actions. The active V3 BFF path remains owner/secret-bound and the public raw V3 reload has been removed, but only the six authenticated `caseUploads` functions should remain public after the legacy surface is internalized. Existing rows must be preserved rather than deleted.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -870,6 +882,12 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Run interactive courtroom intelligence in the Next.js server with `gpt-5.6-luna`, then revalidate a fresh Convex head before trusted append. Keep `gpt-5.6-terra` reserved for case compilation and final coaching, and never substitute authored dialogue when a live provider output is invalid, cancelled, or stale.
 - Commit an accepted generated courtroom action and its accepted audit in the same Convex transaction. The standalone terminal-audit boundary accepts only failed or cancelled calls, so a crash cannot leave accepted model output recorded without its canonical event or vice versa.
 - Allocate a new audited call ID for each provider retry while preserving the pending response/action identity. This keeps immutable failed/cancelled traces replay-safe without allowing multiple material answers for one courtroom request.
+
+- Keep the active AI hearing runtime user-side-only until lead-counsel ownership is modeled. Reject `userSide: "opposing"`, zero/multiple user counsel, and zero/multiple opposing counsel before creating a durable trial instead of selecting an arbitrary actor or failing mid-hearing.
+- Bound each AI-owned examination leg to three answered questions. At the cap, expose no further question opportunity and require a final planner plus counsel examination-ending turn, yielding at most 11 model steps after a completed player examination.
+- Never auto-waive redirect or recross to simplify orchestration. Return the completed AI examination to the player and require an explicit high-level `finish_witness` decision before release or continuation.
+- Keep planner citation categories that lack durable call-audit support empty, even when similarly named provenance IDs are visible as context. Expand the accepted-citation audit contract first if transcript-turn, instruction, rule, issue, or settlement-offer citations later become material.
+- Internalize the unauthenticated legacy Convex records, mutation, eval, and provider actions before further deployment work. Preserve their data and CLI-admin evaluation path, remove browser links to legacy records, and lock the resulting public function allowlist with a regression check.
 
 ## 16. Verification Evidence
 
@@ -971,6 +989,17 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - Initial `$env:RUN_OPENAI_LIVE_COURTROOM='1'; npm run test:live:courtroom-witness` — exited before a provider request with the intended configuration error because the local files do not persist `SUITS_CONVEX_SERVICE_SECRET`; this failed preflight is not counted as a live pass.
   - Process-local development-secret retrieval followed by `$env:RUN_OPENAI_LIVE_COURTROOM='1'; npm run test:live:courtroom-witness` — exit 0; one real test passed in 22.576 seconds for trial `trial_f45026de69a54df5981989d7b05542c7`. Luna answered `witness_rina_shah` with 2,105 input/120 output tokens and estimated cost $0.002825, then `witness_theo_morgan` with 2,199 input/130 output tokens and estimated cost $0.002979. Both calls had zero repairs, distinct call IDs, only request-scoped citations, atomic durable events/audits, and byte-equivalent owner reload at the final head.
   - Opposing counsel, judge, settlement, jury, and Terra coaching were not exercised by this live test and remain unverified; this evidence does not satisfy the full multi-role Milestone 4 gate.
+
+- 2026-07-19 04:53–06:59 IST — Milestone 4 opposing-counsel runtime and live checkpoint
+  - `npm exec -- vitest run src/server/courtroom-ai/opponent-planner-prompt.test.ts src/server/courtroom-ai/opponent-planner.test.ts src/domain/courtroom-ai/opponent-planner.test.ts` — exit 0; 15 strict planner contract, prompt-boundary, validation, repair, and trace tests passed.
+  - `npm exec -- vitest run src/domain/hearing-runtime/model-boundary.test.ts convex/hearingRuntime.integration.test.ts convex/trialEvents.generated.integration.test.ts` — exit 0; 116 tests passed for v2 prompt/precommit binding, private directive replay, atomic model/event commits, bounded continuation, exact recovery, and stale/conflict rejection.
+  - `npm exec -- vitest run src/server/courtroom-ai/witness-runtime.live.test.ts convex/hearingRuntime.integration.test.ts` without the live flag — exit 0; 13 deterministic hearing-runtime tests passed and the one live-only test skipped as intended.
+  - `npm exec -- convex dev --once` — exit 0; the linked `cheery-bandicoot-36` development functions were ready in 6.08 seconds without a login prompt.
+  - The first configured opponent live run stopped safely with a durable failed `plan_opponent` audit: two validation attempts both reported only `unknown_transcript_turn_citation`, 8,895 input/856 output tokens, and estimated cost $0.01244435. No opponent action was committed. This failure drove the versioned citation-prompt correction rather than a validator relaxation.
+  - Process-local Convex secret retrieval followed by `npm run test:live:courtroom-witness` — exit 0; one real multi-actor test passed in 124.294 seconds for `trial_c1a64355e5144fb2899f6e06a38a4313`. Persisted traces contain 24/24 accepted Luna calls: `witness_answer` 8 calls, 17,881 input/1,402 output tokens, $0.026293; `plan_opponent` 8 calls, 46,915 input/4,229 output tokens, one repair, $0.0517069; `counsel_response` 8 calls, 28,404 input/2,295 output tokens, $0.0321876. Totals were 93,200 input/7,926 output tokens, one validation repair, zero failed calls, and $0.1101875 estimated cost.
+  - `npm run lint`, `npm run typecheck`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, `npm test`, `npm run eval`, `npm run build`, and `git diff --check` — exit 0. Lint reported only four generated Convex warnings; 97 files/720 tests passed with three expected live-only skips; three evals passed; Next.js 16.2.10 compiled/typechecked and generated 17/17 pages.
+  - `git push origin main` through `42f5703` — exit 0; all scoped opponent-runtime, security-boundary, prompt-v2, recovery, and live-workflow commits are on `origin/main`.
+  - Judge, objection, settlement, jury, Terra coaching, full-trial completion, local speech, and the unauthenticated legacy public Convex surface remain unverified or unfinished; none are reported as passed by this checkpoint.
 
 ## 17. Blocked external prerequisites
 
