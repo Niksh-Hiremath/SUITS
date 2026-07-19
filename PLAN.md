@@ -524,8 +524,8 @@ Gate:
 Deliverables:
 
 - [x] Python service and versioned WebSocket protocol;
-- [ ] GPU STT adapter, VAD, partial/final revisions;
-- [ ] local multi-voice TTS adapter;
+- [x] GPU STT adapter, VAD, partial/final revisions;
+- [x] local multi-voice TTS adapter;
 - [ ] phrase queue, timing, cancellation, barge-in;
 - [x] cached fixed courtroom clips;
 - [ ] preflight/health/capability UI;
@@ -840,6 +840,14 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none for the CPU/fake protocol gate. No GPU/model/microphone result is claimed at this checkpoint.
   - Commits: Milestone 5 series `76b93b9` through `75afb5d`; this PLAN checkpoint is committed separately.
 
+- 2026-07-19 14:37 IST — Milestone 5 real local-provider checkpoint
+  - Changed: added cache-only Kokoro 0.9.4 and native Transformers 5.13 Nemotron adapters; explicit CPU/CUDA extras; pinned local snapshot selection; strict one-session Nemotron ownership; restart-required worker quarantine; physical cancellation waits; bounded revisioned PCM streaming; three allowlisted voices; a read-only doctor; and a PowerShell setup command that downloads only exact model-file allowlists after explicit opt-in. The offline English spaCy wheel and `librosa` are lockfile dependencies, and Kokoro now fails closed before Misaki can invoke its downloader.
+  - Verified: `scripts/setup-local-speech.ps1 -Runtime local-cuda -DownloadModels` installed `torch==2.11.0+cu130`, `transformers==5.13.1`, and both exact snapshots, then returned `speech-doctor.v1` status `ready` on the RTX 5070. The committed opt-in live smoke loaded both providers and the three immutable reaction clips, produced 2,175 ms of Kokoro speech, streamed 109 ordered 20 ms frames, observed four Nemotron partial revisions with the first at 1,112 ms, finalized in 54 ms, and matched the fixed normalized transcript in 12,001 ms total. The full speech gate passed 172 tests, Ruff, strict mypy over all 20 source modules, `uv lock --check`, and `git diff --check`.
+  - Corrected during the live gate: the first Kokoro run exposed Misaki's implicit `en_core_web_sm` installer, which is now impossible on the runtime path; the first Nemotron load exposed the required `librosa` dependency; the first streaming run exposed tuple-versus-NumPy processor input; and concurrent CUDA model initialization proved nondeterministic, so provider load is serialized TTS-first. These failed attempts are not counted as passes.
+  - Remaining: finish local-speech documentation; build and visually verify the browser AudioWorklet/WebSocket/playback preflight; remove the production text composer; prove a real microphone utterance through partial/final STT and audible local response; and verify that no raw audio reaches OpenAI or Convex. Synthetic in-memory audio is not reported as microphone proof. Milestone 6 still owns material partial-transcript objection decisions and true mid-sentence interruption.
+  - Blocked: none for provider installation or synthetic real-model execution. Browser microphone permission and audible playback have not yet been exercised.
+  - Commits: `a17de38`, `d86ba5b`, `57d86e9`, `1fad5f0`, `bd26311`, `89ded49`, `830450e`, `a6d282a`, and `6697ac2`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -891,6 +899,11 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Python and uv were already installed and visible to the user’s PowerShell PATH; the prior inability to invoke them came from the earlier Codex sandbox profile. With full access enabled, the speech service resolves Python 3.12 and uv normally without repository-specific PATH mutation.
 - Local speech inference needs process-wide ownership, not only per-WebSocket cancellation. An asyncio task can report cancellation while executor-backed provider work is still physically running, so STT leases remain held through real cleanup and the serialized TTS lane quarantines itself if termination cannot be proven. Cached fixed reactions remain available from immutable memory without re-entering that provider lane.
 
+- Misaki 0.9.4 invokes `spacy.cli.download("en_core_web_sm")` when its English package is absent. Because implicit runtime downloads violate the local-provider boundary, `en_core_web_sm==3.8.0` is now an explicit locked extra and the Kokoro adapter performs a fail-closed package preflight before importing the pipeline.
+- Transformers 5.13.1 Nemotron raw-audio feature extraction requires `librosa` and a one-dimensional NumPy array; a Python tuple passes static protocol tests but fails the real feature extractor on `.shape`. The adapter now creates `np.float32` windows lazily and never imports the optional stack in fake/default CI mode.
+- The Transformers Nemotron streaming implementation mutates model-instance streaming fields, so sharing one model across simultaneous generation sessions risks transcript cross-contamination. The adapter and configuration enforce one physical native STT session, use tokenized lane release, and require process restart after unconfirmed termination.
+- Concurrent Kokoro and Nemotron CUDA initialization failed nondeterministically on Windows even though their steady-state allocation was about 1.5 GiB and both fit the 12,227 MiB GPU. Loading TTS and then STT sequentially was stable; the runtime preserves shared-call coalescing while serializing physical initialization.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -939,6 +952,10 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 
 - Keep the local speech transport loopback-only with a strict `suits.speech.v1` subprotocol, bounded JSON/binary frames, hello timeout, connection/session/utterance/queue limits, revision and response identities, and explicit client acknowledgements. Raw microphone PCM stays inside this browser-to-local-service boundary and is neither persisted nor forwarded to Convex or OpenAI.
 - Prewarm the three canonical courtroom reactions atomically from configured local voices during explicit model loading. Publish no partial cache, persist no generated audio, expose only stable clip IDs in capabilities, and allow cached playback without a new synthesis call; failure leaves the full cache unready and retryable.
+
+- Pin the speech extras as two mutually exclusive uv profiles: `local-cpu` uses the official PyTorch CPU index and `local-cuda` uses the official CUDA 13.0 index. Both include the exact Kokoro package, Transformers 5.13.x, `librosa`, and the offline English wheel; the default `dev` sync remains lightweight and must not install real providers.
+- Keep large model transfer behind `setup-local-speech.ps1 -DownloadModels` with exact repository revisions and literal file allowlists. Provider `load()` calls must use explicit local snapshots, `local_files_only=True` where applicable, and must never repair a missing cache by contacting a hub.
+- Count the 2026-07-19 real-model closed loop as provider/STT/TTS evidence only. It is not microphone, browser playback, mid-sentence objection, or end-to-end courtroom proof; those gates remain open until exercised through the production browser path.
 
 ## 16. Verification Evidence
 
@@ -1098,6 +1115,14 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `git diff --check` — exit 0 before the scoped fixed-reaction commit.
   - `git push origin main` — exit 0 through `75afb5d`; the bounded speech actor and fixed-cache implementation are on `origin/main`.
   - Real Nemotron/Kokoro/CUDA and microphone/browser audio verification were not run and are not counted as passed.
+
+- 2026-07-19 13:26–14:54 IST — Milestone 5 real local-provider verification
+  - `scripts/setup-local-speech.ps1 -Runtime local-cuda -DownloadModels` — exit 0 in 215.2 seconds. The locked CUDA extra installed `torch==2.11.0+cu130` and `transformers==5.13.1`; only the literal Nemotron and Kokoro file allowlists were fetched at revisions `df1f0fe9dfdf05152936192b4c8c7653d53bf557` and `f3ff3571791e39611d31c381e3a41a3af07b4987`; the final read-only doctor returned `overallStatus: ready` with the NVIDIA GeForce RTX 5070 and 12,227 MiB visible.
+  - Re-running `scripts/setup-local-speech.ps1 -Runtime local-cuda` after the lockfile corrections — exit 0 in 1.2 seconds; 146 packages resolved, 124 checked, no model download was requested, and every runtime/dependency/artifact doctor check passed, including `en_core_web_sm`, `librosa`, eSpeak NG, and both exact snapshots.
+  - `$env:SUITS_RUN_LIVE_SPEECH_SMOKE='1'; $env:SUITS_SPEECH_MODE='cuda'; $env:SUITS_SPEECH_CACHE_DIR = Join-Path $env:LOCALAPPDATA 'SUITS\speech'; uv run --no-sync python -m suits_speech.smoke` — exit 0 in 13.6 seconds. The safe JSON report returned `status: passed`, `finalMatched: true`, 109 20 ms chunks, four partial revisions, first partial at 1,112 ms, 54 ms finalization, 9,671 ms provider/fixed-clip load, 85 ms subsequent TTS, and 12,001 ms total. The fixed phrase and PCM remained in memory; output contains metrics and the fixed expected normalized phrase, not PCM or arbitrary provider text.
+  - `uv lock --check`, `uv run ruff format src tests`, `uv run ruff check src tests`, `uv run mypy --strict src`, `uv run pytest -q`, and `git diff --check` — exit 0; all 20 source modules passed strict typing and 172 tests passed. The only warning is Starlette TestClient's upstream `httpx` deprecation.
+  - Failed attempts retained as discoveries rather than passes: missing `en_core_web_sm` caused Misaki to install at first real load; missing `librosa` blocked Nemotron; tuple PCM windows caused the real processor to raise `AttributeError`; and concurrent CUDA provider construction made Kokoro loading nondeterministic. Explicit locked dependencies, fail-closed offline preflight, NumPy windows, terminal padding/revision regressions, and serialized TTS-then-STT loading corrected each issue before the passing smoke.
+  - No real browser microphone or audible playback was exercised. This evidence does not close the microphone/browser gate, the raw-audio-to-Convex/OpenAI audit, or Milestone 6 mid-sentence interruption.
 
 ## 17. Blocked external prerequisites
 
