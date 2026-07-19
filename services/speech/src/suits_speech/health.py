@@ -19,7 +19,13 @@ from .providers import (
     UnavailableSttProvider,
     UnavailableTtsProvider,
 )
-from .providers.base import ProviderStatus, SttProvider, TtsProvider
+from .providers.base import (
+    ProviderStatus,
+    SttProvider,
+    SynthesizedPhrase,
+    TtsProvider,
+)
+from .tts_lane import TtsLaneSnapshot, TtsProviderLane
 
 
 def detect_cuda(*, fake_mode: bool) -> CudaCapability:
@@ -97,6 +103,10 @@ class SpeechRuntime:
         self.settings = settings
         self.stt_provider = stt_provider or self._default_stt_provider(settings)
         self.tts_provider = tts_provider or self._default_tts_provider(settings)
+        self._tts_lane = TtsProviderLane(
+            provider=self.tts_provider,
+            call_timeout_seconds=settings.tts_max_phrase_duration_ms / 1_000,
+        )
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
         self.cached_clip_ids: tuple[str, ...] = ()
         self._load_lock = asyncio.Lock()
@@ -104,6 +114,25 @@ class SpeechRuntime:
     @property
     def models_ready(self) -> bool:
         return self.stt_provider.status.ready and self.tts_provider.status.ready
+
+    @property
+    def tts_lane_snapshot(self) -> TtsLaneSnapshot:
+        return self._tts_lane.snapshot
+
+    async def synthesize_phrase(
+        self,
+        *,
+        text: str,
+        voice_id: str,
+        cancel_event: asyncio.Event,
+    ) -> SynthesizedPhrase:
+        """Serialize a physical provider call across all connections."""
+
+        return await self._tts_lane.synthesize_phrase(
+            text=text,
+            voice_id=voice_id,
+            cancel_event=cancel_event,
+        )
 
     async def load_models(self) -> CapabilitiesEvent:
         """Load configured local artifacts. Providers may not download here."""
