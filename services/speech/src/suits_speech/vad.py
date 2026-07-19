@@ -39,15 +39,16 @@ class EnergyVad:
     def active(self) -> bool:
         return self._active
 
-    def process(self, pcm_s16le: bytes, *, duration_ms: int) -> VadObservation:
-        if duration_ms <= 0:
-            raise ValueError("duration_ms must be positive")
+    def process(self, pcm_s16le: bytes, *, sample_rate_hz: int) -> VadObservation:
+        if sample_rate_hz < 8_000 or sample_rate_hz > 48_000:
+            raise ValueError("sample_rate_hz must be between 8000 and 48000")
         if not pcm_s16le or len(pcm_s16le) % 2 != 0:
             raise ValueError("PCM must contain whole signed 16-bit samples")
         samples = array("h")
         samples.frombytes(pcm_s16le)
         if sys.byteorder != "little":
             samples.byteswap()
+        duration_ms = len(samples) * 1_000 / sample_rate_hz
         rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
         is_speech = rms >= self._threshold_rms
         started = False

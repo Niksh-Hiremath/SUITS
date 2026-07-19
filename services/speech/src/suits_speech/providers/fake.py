@@ -30,6 +30,7 @@ class FakeSttSession:
         self._next_sequence = 0
         self._audio_end_ms = 0
         self._cancelled = False
+        self._finished = False
 
     async def push_audio(
         self,
@@ -37,6 +38,8 @@ class FakeSttSession:
     ) -> tuple[TranscriptHypothesis, ...]:
         if self._cancelled:
             raise ProviderCancelled("STT session was cancelled")
+        if self._finished:
+            raise RuntimeError("STT session has already finalized")
         if chunk.sequence != self._next_sequence:
             raise ValueError(f"expected audio sequence {self._next_sequence}, got {chunk.sequence}")
         self._next_sequence += 1
@@ -56,6 +59,9 @@ class FakeSttSession:
     async def finish(self) -> TranscriptHypothesis:
         if self._cancelled:
             raise ProviderCancelled("STT session was cancelled")
+        if self._finished:
+            raise RuntimeError("STT session has already finalized")
+        self._finished = True
         return TranscriptHypothesis(
             text=self._final_text,
             is_final=True,

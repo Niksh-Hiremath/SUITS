@@ -7,7 +7,7 @@ audio is intentionally outside these interfaces.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 
@@ -18,13 +18,13 @@ class ProviderCancelled(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class AudioChunk:
     sequence: int
-    pcm_s16le: bytes
+    pcm_s16le: bytes = field(repr=False)
     duration_ms: int
 
 
 @dataclass(frozen=True, slots=True)
 class TranscriptHypothesis:
-    text: str
+    text: str = field(repr=False)
     is_final: bool
     confidence: float | None
     audio_end_ms: int
@@ -40,7 +40,7 @@ class SynthesisTiming:
 
 @dataclass(frozen=True, slots=True)
 class SynthesizedPhrase:
-    pcm_s16le: bytes
+    pcm_s16le: bytes = field(repr=False)
     sample_rate_hz: int
     channels: Literal[1]
     duration_ms: int

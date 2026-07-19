@@ -7,6 +7,7 @@ WebSocket frame; the runtime rejects text/base64 audio fields as unknown input.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import (
@@ -31,6 +32,10 @@ SpeechText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=8_192),
 ]
+PhraseText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
 
 
 def _to_camel(value: str) -> str:
@@ -38,8 +43,8 @@ def _to_camel(value: str) -> str:
     return head + "".join(part.capitalize() for part in tail)
 
 
-class ProtocolModel(BaseModel):
-    """Base for immutable, strict, camel-cased wire messages."""
+class WireModel(BaseModel):
+    """Base for immutable, strict, camel-cased wire values."""
 
     model_config = ConfigDict(
         alias_generator=_to_camel,
@@ -49,6 +54,10 @@ class ProtocolModel(BaseModel):
         serialize_by_alias=True,
         strict=True,
     )
+
+
+class ProtocolModel(WireModel):
+    """Top-level wire messages carry the exact protocol discriminator."""
 
     protocol: Literal[PROTOCOL_VERSION] = PROTOCOL_VERSION
 
@@ -105,9 +114,10 @@ class SynthesizeControl(ProtocolModel):
     response_id: Identifier
     actor: Identifier
     sequence: int = Field(ge=0, le=2_147_483_647)
-    text: SpeechText | None = None
+    text: PhraseText | None = None
     clip_id: Identifier | None = None
     voice_id: Identifier | None = None
+    is_final: bool = True
 
     @model_validator(mode="after")
     def require_exactly_one_source(self) -> SynthesizeControl:
@@ -139,6 +149,7 @@ class AckTtsAudioControl(ProtocolModel):
     job_id: Identifier
     response_id: Identifier
     frame_sequence: int = Field(ge=0)
+    frame_token: Identifier
     byte_length: int = Field(ge=2, multiple_of=2)
 
 
@@ -170,7 +181,7 @@ ClientControlMessage: TypeAlias = Annotated[
 ]
 
 
-class CudaCapability(ProtocolModel):
+class CudaCapability(WireModel):
     available: bool
     device_name: ShortText | None = None
     driver_version: ShortText | None = None
@@ -179,7 +190,7 @@ class CudaCapability(ProtocolModel):
     diagnostic: ShortText | None = None
 
 
-class ProviderCapability(ProtocolModel):
+class ProviderCapability(WireModel):
     provider_id: Identifier
     kind: Literal["stt", "tts", "vad"]
     configured: bool
@@ -263,6 +274,7 @@ class TtsAudioEvent(ProtocolModel):
     actor: Identifier
     sequence: int = Field(ge=0)
     frame_sequence: int = Field(ge=0)
+    frame_token: Identifier
     byte_length: int = Field(ge=2, multiple_of=2)
     duration_ms: int = Field(gt=0)
     sample_rate_hz: int = Field(ge=8_000, le=48_000)
@@ -271,7 +283,7 @@ class TtsAudioEvent(ProtocolModel):
     ack_required: Literal[True] = True
 
 
-class TimingMark(ProtocolModel):
+class TimingMark(WireModel):
     kind: Literal["phrase", "word", "viseme"]
     value: ShortText
     start_ms: int = Field(ge=0)
@@ -318,9 +330,9 @@ class CancelledEvent(ProtocolModel):
         return self
 
 
-class Metric(ProtocolModel):
+class Metric(WireModel):
     name: Identifier
-    value: float
+    value: float = Field(allow_inf_nan=False)
     unit: Literal["count", "bytes", "milliseconds", "ratio"]
 
 
@@ -379,15 +391,44 @@ _CLIENT_ADAPTER = TypeAdapter(ClientControlMessage)
 _SERVER_ADAPTER = TypeAdapter(ServerEvent)
 
 
+class ProtocolDecodeError(ValueError):
+    """Raised when JSON does not use the exact public wire shape."""
+
+
+def _check_wire_shape(payload: str) -> None:
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ProtocolDecodeError("message must be valid JSON") from error
+    if not isinstance(value, dict):
+        raise ProtocolDecodeError("message must be a JSON object")
+    if value.get("protocol") != PROTOCOL_VERSION:
+        raise ProtocolDecodeError("message must declare the exact protocol")
+
+    def reject_python_field_names(candidate: object) -> None:
+        if isinstance(candidate, dict):
+            for key, nested in candidate.items():
+                if not isinstance(key, str) or "_" in key:
+                    raise ProtocolDecodeError("wire keys must use camelCase")
+                reject_python_field_names(nested)
+        elif isinstance(candidate, list):
+            for nested in candidate:
+                reject_python_field_names(nested)
+
+    reject_python_field_names(value)
+
+
 def parse_client_control(payload: str) -> ClientControlMessage:
     """Parse one JSON control frame. Binary audio is handled separately."""
 
+    _check_wire_shape(payload)
     return _CLIENT_ADAPTER.validate_json(payload)
 
 
 def parse_server_event(payload: str) -> ServerEvent:
     """Parse one server JSON event."""
 
+    _check_wire_shape(payload)
     return _SERVER_ADAPTER.validate_json(payload)
 
 

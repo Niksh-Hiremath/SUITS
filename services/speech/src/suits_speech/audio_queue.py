@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 
@@ -22,10 +23,11 @@ class TtsJob:
     response_id: str
     actor: str
     sequence: int
-    text: str | None
+    text: str | None = field(repr=False)
     clip_id: str | None
     voice_id: str
     enqueued_at_ms: int
+    is_final: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +82,9 @@ class PhraseQueue:
         self._terminal_order: deque[str] = deque()
         self._active_job_id: str | None = None
         self._next_sequence_by_response: dict[str, int] = {}
+        self._response_live_jobs: dict[str, int] = {}
+        self._closed_responses: set[str] = set()
+        self._closed_response_order: deque[str] = deque()
         self._closed = False
 
     async def enqueue(self, job: TtsJob) -> None:
@@ -88,6 +93,8 @@ class PhraseQueue:
                 raise RuntimeError("phrase queue is closed")
             if job.job_id in self._entries:
                 raise ValueError(f"duplicate TTS jobId: {job.job_id}")
+            if job.response_id in self._closed_responses:
+                raise ValueError(f"TTS response is already final: {job.response_id}")
             expected_sequence = self._next_sequence_by_response.get(job.response_id, 0)
             if job.sequence != expected_sequence:
                 raise ValueError(
@@ -97,6 +104,11 @@ class PhraseQueue:
             if len(self._pending) >= self._max_depth:
                 raise TtsBackpressureError("TTS phrase queue is full")
             self._next_sequence_by_response[job.response_id] = expected_sequence + 1
+            self._response_live_jobs[job.response_id] = (
+                self._response_live_jobs.get(job.response_id, 0) + 1
+            )
+            if job.is_final:
+                self._closed_responses.add(job.response_id)
             self._entries[job.job_id] = _QueueEntry(
                 job=job,
                 epoch=0,
@@ -144,7 +156,18 @@ class PhraseQueue:
     ) -> bool:
         async with self._condition:
             entry = self._current_entry(lease)
-            if entry is None or entry.status not in {"generating", "streaming"}:
+            if entry is None:
+                cancelled_entry = self._entries.get(lease.job.job_id)
+                if (
+                    cancelled_entry is not None
+                    and cancelled_entry.status == "cancelled"
+                    and cancelled_entry.cancel_event is lease.cancel_event
+                    and self._active_job_id == lease.job.job_id
+                ):
+                    self._active_job_id = None
+                    self._condition.notify_all()
+                return False
+            if entry.status not in {"generating", "streaming"}:
                 return False
             entry.status = "failed" if failed else "finished"
             if self._active_job_id == lease.job.job_id:
@@ -187,8 +210,6 @@ class PhraseQueue:
                     )
                 )
                 self._record_terminal(job_id)
-                if self._active_job_id == job_id:
-                    self._active_job_id = None
             cancelled_ids = {item.job_id for item in cancellations}
             if cancelled_ids:
                 self._pending = deque(
@@ -229,6 +250,17 @@ class PhraseQueue:
     def _record_terminal(self, job_id: str) -> None:
         if job_id in self._terminal_order:
             return
+        entry = self._entries[job_id]
+        entry.job = replace(entry.job, text=None)
+        response_id = entry.job.response_id
+        remaining_jobs = self._response_live_jobs[response_id] - 1
+        if remaining_jobs == 0:
+            del self._response_live_jobs[response_id]
+            if response_id in self._closed_responses:
+                self._next_sequence_by_response.pop(response_id, None)
+                self._closed_response_order.append(response_id)
+        else:
+            self._response_live_jobs[response_id] = remaining_jobs
         self._terminal_order.append(job_id)
         while len(self._terminal_order) > self._tombstone_limit:
             expired_id = self._terminal_order.popleft()
@@ -239,13 +271,26 @@ class PhraseQueue:
                 "failed",
             }:
                 del self._entries[expired_id]
+        while len(self._closed_response_order) > self._tombstone_limit:
+            expired_response_id = self._closed_response_order.popleft()
+            self._closed_responses.discard(expired_response_id)
 
 
 @dataclass(frozen=True, slots=True)
 class AckReservation:
     job_id: str
+    response_id: str
     frame_sequence: int
+    frame_token: str
     byte_length: int
+
+    def __post_init__(self) -> None:
+        if self.frame_sequence < 0:
+            raise ValueError("frame_sequence must be non-negative")
+        if self.byte_length <= 0:
+            raise ValueError("byte_length must be positive")
+        if not self.job_id or not self.response_id or not self.frame_token:
+            raise ValueError("ACK reservation identities must be non-empty")
 
 
 class TtsAckWindow:
@@ -256,8 +301,8 @@ class TtsAckWindow:
             raise ValueError("max_outstanding_bytes must be positive")
         self._maximum = max_outstanding_bytes
         self._condition = asyncio.Condition()
-        self._reservations: dict[tuple[str, int], AckReservation] = {}
-        self._pending_keys: set[tuple[str, int]] = set()
+        self._reservations: dict[str, AckReservation] = {}
+        self._pending_keys: set[str] = set()
         self._outstanding_bytes = 0
 
     @property
@@ -269,10 +314,14 @@ class TtsAckWindow:
         reservation: AckReservation,
         *,
         cancel_event: asyncio.Event,
+        timeout_seconds: float = 5,
     ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         if reservation.byte_length > self._maximum:
             raise TtsBackpressureError("one TTS frame exceeds the ACK window")
-        key = (reservation.job_id, reservation.frame_sequence)
+        key = reservation.frame_token
+        deadline = time.monotonic() + timeout_seconds
         async with self._condition:
             if key in self._reservations or key in self._pending_keys:
                 raise ValueError("duplicate TTS frame reservation")
@@ -281,8 +330,13 @@ class TtsAckWindow:
                 while self._outstanding_bytes + reservation.byte_length > self._maximum:
                     if cancel_event.is_set():
                         raise asyncio.CancelledError
+                    if time.monotonic() >= deadline:
+                        raise TtsBackpressureError("timed out waiting for browser TTS ACKs")
                     try:
-                        await asyncio.wait_for(self._condition.wait(), timeout=0.05)
+                        await asyncio.wait_for(
+                            self._condition.wait(),
+                            timeout=min(0.05, max(0.001, deadline - time.monotonic())),
+                        )
                     except TimeoutError:
                         continue
                 if cancel_event.is_set():
@@ -296,16 +350,25 @@ class TtsAckWindow:
         self,
         *,
         job_id: str,
+        response_id: str,
         frame_sequence: int,
+        frame_token: str,
         byte_length: int,
     ) -> bool:
-        key = (job_id, frame_sequence)
+        if byte_length <= 0 or frame_sequence < 0:
+            raise ValueError("invalid TTS acknowledgement accounting")
+        key = frame_token
         async with self._condition:
             reservation = self._reservations.get(key)
             if reservation is None:
                 return False
-            if reservation.byte_length != byte_length:
-                raise ValueError("TTS acknowledgement byteLength mismatch")
+            if (
+                reservation.job_id != job_id
+                or reservation.response_id != response_id
+                or reservation.frame_sequence != frame_sequence
+                or reservation.byte_length != byte_length
+            ):
+                return False
             del self._reservations[key]
             self._outstanding_bytes -= reservation.byte_length
             self._condition.notify_all()
@@ -313,7 +376,11 @@ class TtsAckWindow:
 
     async def cancel_job(self, job_id: str) -> int:
         async with self._condition:
-            removed = [key for key in self._reservations if key[0] == job_id]
+            removed = [
+                key
+                for key, reservation in self._reservations.items()
+                if reservation.job_id == job_id
+            ]
             released = 0
             for key in removed:
                 released += self._reservations.pop(key).byte_length
@@ -324,6 +391,14 @@ class TtsAckWindow:
     async def outstanding_bytes(self) -> int:
         async with self._condition:
             return self._outstanding_bytes
+
+    async def clear(self) -> int:
+        async with self._condition:
+            released = self._outstanding_bytes
+            self._reservations.clear()
+            self._outstanding_bytes = 0
+            self._condition.notify_all()
+            return released
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +420,8 @@ class InputCreditWindow:
         self._reserved_bytes = 0
 
     async def reserve(self, *, utterance_id: str, sequence: int, byte_length: int) -> None:
+        if sequence < 0 or byte_length <= 0:
+            raise ValueError("invalid microphone credit accounting")
         key = (utterance_id, sequence)
         async with self._lock:
             if key in self._reserved:
@@ -372,3 +449,19 @@ class InputCreditWindow:
                 available_frames=self._max_frames - len(self._reserved),
                 available_bytes=self._max_bytes - self._reserved_bytes,
             )
+
+    async def release_utterance(self, utterance_id: str) -> int:
+        async with self._lock:
+            keys = [key for key in self._reserved if key[0] == utterance_id]
+            released = 0
+            for key in keys:
+                released += self._reserved.pop(key)
+            self._reserved_bytes -= released
+            return released
+
+    async def clear(self) -> int:
+        async with self._lock:
+            released = self._reserved_bytes
+            self._reserved.clear()
+            self._reserved_bytes = 0
+            return released

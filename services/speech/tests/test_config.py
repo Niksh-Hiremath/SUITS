@@ -24,6 +24,8 @@ def test_defaults_are_pinned_local_providers_without_auto_download() -> None:
     assert settings.tts_model_id == DEFAULT_TTS_MODEL_ID
     assert settings.tts_model_revision == DEFAULT_TTS_MODEL_REVISION
     assert "opposing_counsel=bm_george" in settings.tts_voices
+    assert settings.stt_input_max_frames == 8
+    assert settings.tts_ack_window_bytes == 96_000
     assert settings.auto_download_models is False
 
 
@@ -34,23 +36,14 @@ def test_fake_mode_selects_fake_providers_for_ci() -> None:
     assert settings.tts_provider == "fake-tts"
 
 
-def test_non_loopback_bind_requires_explicit_opt_in() -> None:
-    with pytest.raises(ValueError, match="non-loopback"):
+def test_non_loopback_bind_is_always_rejected() -> None:
+    with pytest.raises(ValueError, match="loopback"):
         SpeechSettings.from_env(
             {
                 "SUITS_SPEECH_HOST": "0.0.0.0",
                 "LOCALAPPDATA": "C:/local",
             }
         )
-
-    settings = SpeechSettings.from_env(
-        {
-            "SUITS_SPEECH_HOST": "0.0.0.0",
-            "SUITS_SPEECH_ALLOW_REMOTE": "1",
-            "LOCALAPPDATA": "C:/local",
-        }
-    )
-    assert settings.host == "0.0.0.0"
 
 
 @pytest.mark.parametrize(
@@ -60,6 +53,13 @@ def test_non_loopback_bind_requires_explicit_opt_in() -> None:
         {"SUITS_SPEECH_PORT": "0"},
         {"SUITS_STT_LOOKAHEAD_TOKENS": "14"},
         {"SUITS_SPEECH_ALLOWED_ORIGINS": ""},
+        {"SUITS_SPEECH_ALLOWED_ORIGINS": "*"},
+        {"SUITS_SPEECH_ALLOWED_ORIGINS": "null"},
+        {"SUITS_SPEECH_ALLOWED_ORIGINS": "http://user:pass@localhost:3000"},
+        {"SUITS_SPEECH_ALLOWED_ORIGINS": "http://localhost:3000/path"},
+        {"SUITS_SPEECH_ALLOWED_ORIGINS": "http://localhost:3000?query=1"},
+        {"SUITS_SPEECH_CACHE_DIR": "relative/cache"},
+        {"SUITS_SPEECH_CACHE_DIR": "C:/bad\x00cache"},
     ],
 )
 def test_invalid_configuration_fails_closed(environ: dict[str, str]) -> None:

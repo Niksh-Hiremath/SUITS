@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping, cast
+from urllib.parse import urlsplit
 
 DEFAULT_STT_PROVIDER = "nemotron-transformers"
 DEFAULT_STT_MODEL_ID = "nvidia/nemotron-speech-streaming-en-0.6b"
@@ -21,17 +22,6 @@ DEFAULT_VOICES = (
 )
 
 SpeechMode = Literal["fake", "cpu", "cuda"]
-
-
-def _parse_bool(value: str | None, *, default: bool) -> bool:
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"invalid boolean value: {value!r}")
 
 
 def _parse_int(
@@ -60,7 +50,7 @@ def _default_cache_dir(environ: Mapping[str, str]) -> Path:
     return Path.home() / ".cache" / "suits" / "speech"
 
 
-def _validate_bind_host(host: str, *, allow_remote: bool) -> str:
+def _validate_bind_host(host: str) -> str:
     normalized = host.strip().lower()
     if normalized == "localhost":
         return normalized
@@ -68,9 +58,58 @@ def _validate_bind_host(host: str, *, allow_remote: bool) -> str:
         is_loopback = ipaddress.ip_address(normalized).is_loopback
     except ValueError as error:
         raise ValueError("SUITS_SPEECH_HOST must be an IP address or localhost") from error
-    if not is_loopback and not allow_remote:
-        raise ValueError("refusing a non-loopback speech bind without SUITS_SPEECH_ALLOW_REMOTE=1")
+    if not is_loopback:
+        raise ValueError("the local speech service must bind to a loopback address")
     return normalized
+
+
+def _parse_origins(value: str) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for raw_origin in value.split(","):
+        origin = raw_origin.strip()
+        if not origin:
+            continue
+        if origin in {"*", "null"} or any(
+            ord(character) < 32 or ord(character) == 127 for character in origin
+        ):
+            raise ValueError("speech origins must be exact HTTP(S) origins")
+        parsed = urlsplit(origin)
+        try:
+            parsed_port = parsed.port
+        except ValueError as error:
+            raise ValueError("speech origin has an invalid port") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("speech origins must be exact HTTP(S) origins")
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        canonical = f"{parsed.scheme.lower()}://{host}"
+        if parsed_port is not None:
+            canonical += f":{parsed_port}"
+        if canonical not in normalized:
+            normalized.append(canonical)
+    if not normalized:
+        raise ValueError("at least one speech-service origin is required")
+    return tuple(normalized)
+
+
+def _parse_cache_dir(value: str | None, environ: Mapping[str, str]) -> Path:
+    if value is None:
+        return _default_cache_dir(environ)
+    if "\x00" in value:
+        raise ValueError("SUITS_SPEECH_CACHE_DIR contains a null character")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError("SUITS_SPEECH_CACHE_DIR must be absolute")
+    return path
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +131,10 @@ class SpeechSettings:
     tts_model_revision: str
     tts_voices: tuple[str, ...]
     max_tts_queue_depth: int
+    stt_input_max_frames: int
+    stt_input_max_bytes: int
+    tts_ack_window_bytes: int
+    tts_audio_frame_ms: int
     auto_download_models: Literal[False] = False
 
     @classmethod
@@ -105,27 +148,16 @@ class SpeechSettings:
             raise ValueError("SUITS_SPEECH_MODE must be fake, cpu, or cuda")
         mode = cast(SpeechMode, mode_value)
 
-        allow_remote = _parse_bool(
-            source.get("SUITS_SPEECH_ALLOW_REMOTE"),
-            default=False,
-        )
-        host = _validate_bind_host(
-            source.get("SUITS_SPEECH_HOST", "127.0.0.1"),
-            allow_remote=allow_remote,
-        )
+        host = _validate_bind_host(source.get("SUITS_SPEECH_HOST", "127.0.0.1"))
         default_stt = "fake-stt" if mode == "fake" else DEFAULT_STT_PROVIDER
         default_tts = "fake-tts" if mode == "fake" else DEFAULT_TTS_PROVIDER
         cache_value = source.get("SUITS_SPEECH_CACHE_DIR")
-        origins = tuple(
-            origin.strip()
-            for origin in source.get(
+        origins = _parse_origins(
+            source.get(
                 "SUITS_SPEECH_ALLOWED_ORIGINS",
                 "http://localhost:3000,http://127.0.0.1:3000",
-            ).split(",")
-            if origin.strip()
+            )
         )
-        if not origins:
-            raise ValueError("at least one speech-service origin is required")
         voices = tuple(
             value.strip()
             for value in source.get(
@@ -148,9 +180,7 @@ class SpeechSettings:
                 name="SUITS_SPEECH_PORT",
             ),
             allowed_origins=origins,
-            cache_dir=(
-                Path(cache_value).expanduser() if cache_value else _default_cache_dir(source)
-            ),
+            cache_dir=_parse_cache_dir(cache_value, source),
             stt_provider=source.get("SUITS_STT_PROVIDER", default_stt),
             stt_model_id=source.get("SUITS_STT_MODEL_ID", DEFAULT_STT_MODEL_ID),
             stt_model_revision=source.get(
@@ -184,5 +214,33 @@ class SpeechSettings:
                 minimum=1,
                 maximum=256,
                 name="SUITS_TTS_MAX_QUEUE_DEPTH",
+            ),
+            stt_input_max_frames=_parse_int(
+                source.get("SUITS_STT_INPUT_MAX_FRAMES"),
+                default=8,
+                minimum=1,
+                maximum=128,
+                name="SUITS_STT_INPUT_MAX_FRAMES",
+            ),
+            stt_input_max_bytes=_parse_int(
+                source.get("SUITS_STT_INPUT_MAX_BYTES"),
+                default=524_288,
+                minimum=640,
+                maximum=16_777_216,
+                name="SUITS_STT_INPUT_MAX_BYTES",
+            ),
+            tts_ack_window_bytes=_parse_int(
+                source.get("SUITS_TTS_ACK_WINDOW_BYTES"),
+                default=96_000,
+                minimum=640,
+                maximum=16_777_216,
+                name="SUITS_TTS_ACK_WINDOW_BYTES",
+            ),
+            tts_audio_frame_ms=_parse_int(
+                source.get("SUITS_TTS_AUDIO_FRAME_MS"),
+                default=40,
+                minimum=20,
+                maximum=200,
+                name="SUITS_TTS_AUDIO_FRAME_MS",
             ),
         )

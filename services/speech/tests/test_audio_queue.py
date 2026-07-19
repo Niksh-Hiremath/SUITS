@@ -20,6 +20,7 @@ def _job(
     *,
     response_id: str = "response:1",
     sequence: int = 0,
+    is_final: bool = False,
 ) -> TtsJob:
     return TtsJob(
         job_id=job_id,
@@ -30,6 +31,24 @@ def _job(
         clip_id=None,
         voice_id="am_michael",
         enqueued_at_ms=100,
+        is_final=is_final,
+    )
+
+
+def _reservation(
+    job_id: str,
+    *,
+    frame_sequence: int,
+    response_id: str = "response:1",
+    frame_token: str | None = None,
+    byte_length: int = 640,
+) -> AckReservation:
+    return AckReservation(
+        job_id=job_id,
+        response_id=response_id,
+        frame_sequence=frame_sequence,
+        frame_token=frame_token or f"frame:{job_id}:{frame_sequence}",
+        byte_length=byte_length,
     )
 
 
@@ -93,14 +112,16 @@ async def test_cancellation_purges_queued_jobs_and_invalidates_active_epoch() ->
     assert active.cancel_event.is_set()
     assert await queue.is_current(active) is False
     assert snapshot.queued_job_ids == ()
-    assert snapshot.active_job_id is None
+    assert snapshot.active_job_id == "job:1"
+    assert await queue.finish(active) is False
+    assert (await queue.snapshot()).active_job_id is None
 
 
 async def test_ack_window_blocks_until_browser_acknowledges_audio() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     cancel_event = asyncio.Event()
-    first = AckReservation(job_id="job:1", frame_sequence=0, byte_length=640)
-    second = AckReservation(job_id="job:1", frame_sequence=1, byte_length=640)
+    first = _reservation("job:1", frame_sequence=0)
+    second = _reservation("job:1", frame_sequence=1)
     await window.reserve(first, cancel_event=cancel_event)
 
     blocked = asyncio.create_task(window.reserve(second, cancel_event=cancel_event))
@@ -108,7 +129,9 @@ async def test_ack_window_blocks_until_browser_acknowledges_audio() -> None:
     assert blocked.done() is False
     assert await window.acknowledge(
         job_id="job:1",
+        response_id="response:1",
         frame_sequence=0,
+        frame_token="frame:job:1:0",
         byte_length=640,
     )
     await asyncio.wait_for(blocked, timeout=0.25)
@@ -120,12 +143,12 @@ async def test_ack_window_cancellation_releases_bytes_and_wakes_waiter() -> None
     first_cancel = asyncio.Event()
     second_cancel = asyncio.Event()
     await window.reserve(
-        AckReservation(job_id="job:1", frame_sequence=0, byte_length=640),
+        _reservation("job:1", frame_sequence=0),
         cancel_event=first_cancel,
     )
     blocked = asyncio.create_task(
         window.reserve(
-            AckReservation(job_id="job:2", frame_sequence=0, byte_length=640),
+            _reservation("job:2", frame_sequence=0),
             cancel_event=second_cancel,
         )
     )
@@ -137,7 +160,9 @@ async def test_ack_window_cancellation_releases_bytes_and_wakes_waiter() -> None
     assert (
         await window.acknowledge(
             job_id="job:missing",
+            response_id="response:1",
             frame_sequence=0,
+            frame_token="frame:missing",
             byte_length=640,
         )
         is False
@@ -147,13 +172,13 @@ async def test_ack_window_cancellation_releases_bytes_and_wakes_waiter() -> None
 async def test_ack_window_wakes_a_cancelled_waiter_without_releasing_other_job() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     await window.reserve(
-        AckReservation(job_id="job:1", frame_sequence=0, byte_length=640),
+        _reservation("job:1", frame_sequence=0),
         cancel_event=asyncio.Event(),
     )
     second_cancel = asyncio.Event()
     blocked = asyncio.create_task(
         window.reserve(
-            AckReservation(job_id="job:2", frame_sequence=0, byte_length=640),
+            _reservation("job:2", frame_sequence=0),
             cancel_event=second_cancel,
         )
     )
@@ -169,13 +194,13 @@ async def test_ack_window_wakes_a_cancelled_waiter_without_releasing_other_job()
 async def test_ack_window_observes_cancel_event_without_external_notification() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     await window.reserve(
-        AckReservation(job_id="job:1", frame_sequence=0, byte_length=640),
+        _reservation("job:1", frame_sequence=0),
         cancel_event=asyncio.Event(),
     )
     cancel_event = asyncio.Event()
     blocked = asyncio.create_task(
         window.reserve(
-            AckReservation(job_id="job:2", frame_sequence=0, byte_length=640),
+            _reservation("job:2", frame_sequence=0),
             cancel_event=cancel_event,
         )
     )
@@ -189,13 +214,13 @@ async def test_ack_window_observes_cancel_event_without_external_notification() 
 async def test_ack_window_rejects_duplicate_waiting_frame_keys() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     await window.reserve(
-        AckReservation(job_id="job:1", frame_sequence=0, byte_length=640),
+        _reservation("job:1", frame_sequence=0),
         cancel_event=asyncio.Event(),
     )
     waiting_cancel = asyncio.Event()
     blocked = asyncio.create_task(
         window.reserve(
-            AckReservation(job_id="job:2", frame_sequence=0, byte_length=640),
+            _reservation("job:2", frame_sequence=0),
             cancel_event=waiting_cancel,
         )
     )
@@ -203,13 +228,64 @@ async def test_ack_window_rejects_duplicate_waiting_frame_keys() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         await window.reserve(
-            AckReservation(job_id="job:2", frame_sequence=0, byte_length=640),
+            _reservation("job:2", frame_sequence=0),
             cancel_event=asyncio.Event(),
         )
     waiting_cancel.set()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(blocked, timeout=0.15)
     assert await window.outstanding_bytes() == 640
+
+
+async def test_ack_identity_includes_response_and_server_frame_token() -> None:
+    window = TtsAckWindow(max_outstanding_bytes=640)
+    reservation = _reservation("job:1", frame_sequence=0)
+    await window.reserve(reservation, cancel_event=asyncio.Event())
+
+    assert (
+        await window.acknowledge(
+            job_id="job:1",
+            response_id="response:wrong",
+            frame_sequence=0,
+            frame_token=reservation.frame_token,
+            byte_length=640,
+        )
+        is False
+    )
+    assert await window.outstanding_bytes() == 640
+    assert await window.acknowledge(
+        job_id="job:1",
+        response_id="response:1",
+        frame_sequence=0,
+        frame_token=reservation.frame_token,
+        byte_length=640,
+    )
+
+
+@pytest.mark.parametrize("byte_length", [0, -10])
+async def test_credit_accounting_rejects_non_positive_lengths(byte_length: int) -> None:
+    with pytest.raises(ValueError):
+        _reservation("job:1", frame_sequence=0, byte_length=byte_length)
+
+    credits = InputCreditWindow(max_frames=1, max_bytes=640)
+    with pytest.raises(ValueError):
+        await credits.reserve(
+            utterance_id="utterance:1",
+            sequence=0,
+            byte_length=byte_length,
+        )
+
+
+async def test_final_response_retires_sequence_state_and_scrubs_repr() -> None:
+    queue = PhraseQueue(max_depth=1)
+    job = _job("job:final", is_final=True)
+    assert "The court is ready" not in repr(job)
+    await queue.enqueue(job)
+    lease = await queue.next()
+    assert await queue.finish(lease) is True
+
+    with pytest.raises(ValueError, match="already final"):
+        await queue.enqueue(_job("job:late"))
 
 
 async def test_input_credit_window_is_bounded_and_replenished() -> None:

@@ -12,6 +12,9 @@ from suits_speech.protocol import (
     CapabilitiesEvent,
     CudaCapability,
     HelloControl,
+    Metric,
+    MetricsEvent,
+    ProtocolDecodeError,
     ProviderCapability,
     SttFinalEvent,
     SynthesizeControl,
@@ -85,6 +88,7 @@ def test_client_control_round_trips_with_camel_case_wire_fields() -> None:
             "actor": "witness:maya",
             "sequence": 2,
             "text": "I saw the signal change.",
+            "isFinal": True,
         },
         {
             "protocol": PROTOCOL_VERSION,
@@ -99,6 +103,7 @@ def test_client_control_round_trips_with_camel_case_wire_fields() -> None:
             "jobId": "job:1",
             "responseId": "response:1",
             "frameSequence": 0,
+            "frameToken": "frame:1",
             "byteLength": 640,
         },
         {
@@ -130,7 +135,7 @@ def test_audio_chunk_is_metadata_only_and_rejects_raw_audio_fields() -> None:
     payload = json.loads(dump_message(valid))
     payload["audioBase64"] = "AAECAw=="
 
-    with pytest.raises(ValidationError):
+    with pytest.raises((ValidationError, ProtocolDecodeError)):
         parse_client_control(json.dumps(payload))
 
 
@@ -179,11 +184,26 @@ def test_protocol_is_strict_and_version_pinned() -> None:
         "nonce": "ping:1",
         "sentAtMs": "10",
     }
+    missing_protocol = {
+        "type": "ping",
+        "nonce": "ping:1",
+        "sentAtMs": 10,
+    }
+    snake_case = {
+        "protocol": PROTOCOL_VERSION,
+        "type": "ping",
+        "nonce": "ping:1",
+        "sent_at_ms": 10,
+    }
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ProtocolDecodeError):
         parse_client_control(json.dumps(wrong_version))
     with pytest.raises(ValidationError):
         parse_client_control(json.dumps(coerced_integer))
+    with pytest.raises(ProtocolDecodeError):
+        parse_client_control(json.dumps(missing_protocol))
+    with pytest.raises(ProtocolDecodeError):
+        parse_client_control(json.dumps(snake_case))
 
 
 def test_server_events_round_trip_without_embedding_audio() -> None:
@@ -217,6 +237,7 @@ def test_server_events_round_trip_without_embedding_audio() -> None:
         actor="judge",
         sequence=0,
         frame_sequence=0,
+        frame_token="frame:1",
         byte_length=640,
         duration_ms=20,
         sample_rate_hz=16_000,
@@ -226,3 +247,15 @@ def test_server_events_round_trip_without_embedding_audio() -> None:
         parsed = parse_server_event(dump_message(event))
         assert parsed == event
         assert "audioBase64" not in dump_message(event)
+
+    capabilities_wire = json.loads(dump_message(capabilities))
+    assert "protocol" not in capabilities_wire["providers"][0]
+    assert "protocol" not in capabilities_wire["cuda"]
+
+
+def test_metric_rejects_non_finite_wire_values() -> None:
+    with pytest.raises(ValidationError):
+        Metric(name="latency", value=float("nan"), unit="milliseconds")
+
+    event = MetricsEvent(metrics=(Metric(name="latency", value=12.5, unit="milliseconds"),))
+    assert parse_server_event(dump_message(event)) == event

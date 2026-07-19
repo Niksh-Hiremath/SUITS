@@ -30,6 +30,12 @@ async def test_fake_stt_emits_ordered_partials_and_one_final() -> None:
     assert final.is_final is True
     assert final.text == "May it please the court."
     assert final.audio_end_ms == 40
+    assert "May it please the court" not in repr(final)
+
+    with pytest.raises(RuntimeError, match="already finalized"):
+        await session.finish()
+    with pytest.raises(RuntimeError, match="already finalized"):
+        await session.push_audio(AudioChunk(sequence=2, pcm_s16le=b"\x00\x00", duration_ms=20))
 
 
 async def test_fake_stt_rejects_stale_sequence_and_cancelled_work() -> None:
@@ -69,6 +75,7 @@ async def test_fake_tts_is_deterministic_and_voice_specific() -> None:
     assert first.pcm_s16le != other_voice.pcm_s16le
     assert first.sample_rate_hz == 24_000
     assert first.duration_ms > 0
+    assert "pcm_s16le" not in repr(first)
     assert [mark.value for mark in first.timings] == ["Objection", "sustained."]
     assert all(mark.start_ms <= mark.end_ms for mark in first.timings)
 
