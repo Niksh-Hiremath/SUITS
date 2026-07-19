@@ -26,6 +26,14 @@ import {
   type HearingCommandPreparation,
   type HearingRuntimeViewV1,
 } from "../src/domain/hearing-runtime";
+import {
+  DURABLE_PREFLIGHT_PERMIT_SCHEMA_VERSION,
+  DURABLE_SERVICE_HEALTH_SCHEMA_VERSION,
+  DurablePreflightPermitRequestSchema,
+  DurablePreflightPermitResponseSchema,
+  DurableServiceHealthRequestSchema,
+  DurableServiceHealthResponseSchema,
+} from "../src/domain/preflight";
 
 import { httpAction } from "./_generated/server";
 import {
@@ -58,6 +66,10 @@ import {
   type HeartbeatCaseCompileClaimRequest,
   type ReleaseCaseCompileClaimRequest,
 } from "./caseCompileClaims";
+import type {
+  CaseCompilePermitRequest,
+  CaseCompilePermitResponse,
+} from "./caseCompileQuota";
 import {
   CaseUploadCleanupRequestSchema,
   CaseUploadCleanupResponseSchema,
@@ -138,6 +150,9 @@ type ReleaseCaseCompileClaimResponse = z.infer<
   typeof ReleaseCaseCompileClaimResponseSchema
 >;
 
+const PREFLIGHT_GLOBAL_QUOTA_KEY_HASH =
+  "1d1a657273d59d351cb8295a313c94f90100f1aca827cc463c5ffb2a6420d10d";
+
 const generateUploadUrlReference = makeFunctionReference<
   "mutation",
   Record<string, never>,
@@ -158,6 +173,11 @@ const acquireCaseCompileClaimReference = makeFunctionReference<
   AcquireCaseCompileClaimRequest,
   AcquireCaseCompileClaimResponse
 >("caseCompileClaims:acquire");
+const acquirePreflightPermitReference = makeFunctionReference<
+  "mutation",
+  CaseCompilePermitRequest,
+  CaseCompilePermitResponse
+>("caseCompileQuota:consumePermit");
 const heartbeatCaseCompileClaimReference = makeFunctionReference<
   "mutation",
   HeartbeatCaseCompileClaimRequest,
@@ -736,8 +756,49 @@ const readHearing = httpAction(async (ctx, request) => {
   }
 });
 
+const serviceHealth = httpAction(async (_ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    await parseCaseServiceJson(request, DurableServiceHealthRequestSchema);
+    return caseServiceJson(
+      DurableServiceHealthResponseSchema.parse({
+        schemaVersion: DURABLE_SERVICE_HEALTH_SCHEMA_VERSION,
+        status: "ready",
+      }),
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const acquirePreflightPermit = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    await parseCaseServiceJson(request, DurablePreflightPermitRequestSchema);
+    const permit = await ctx.runMutation(acquirePreflightPermitReference, {
+      clientKeyHash: PREFLIGHT_GLOBAL_QUOTA_KEY_HASH,
+    });
+    return caseServiceJson(
+      DurablePreflightPermitResponseSchema.parse({
+        schemaVersion: DURABLE_PREFLIGHT_PERMIT_SCHEMA_VERSION,
+        ...permit,
+      }),
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const http = httpRouter();
 
+http.route({ path: "/service/health", method: "POST", handler: serviceHealth });
+http.route({ path: "/service/preflight-permit/acquire", method: "POST", handler: acquirePreflightPermit });
 http.route({ path: "/service/case-compile-claim/acquire", method: "POST", handler: acquireCaseCompileClaim });
 http.route({ path: "/service/case-compile-claim/heartbeat", method: "POST", handler: heartbeatCaseCompileClaim });
 http.route({ path: "/service/case-compile-claim/release", method: "POST", handler: releaseCaseCompileClaim });
