@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .base import ProviderStatus, SynthesizedPhrase
+from .base import ProviderStatus, StreamingSttSession, SynthesizedPhrase
 
 
 class UnavailableSttProvider:
@@ -29,7 +29,7 @@ class UnavailableSttProvider:
     async def load(self) -> ProviderStatus:
         return self._status
 
-    async def create_session(self, *, sample_rate_hz: int) -> None:
+    async def create_session(self, *, sample_rate_hz: int) -> StreamingSttSession:
         del sample_rate_hz
         raise RuntimeError(self._status.diagnostic or "STT provider unavailable")
 

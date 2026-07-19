@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 from .capacity import BoundedLeasePool, CapacityLease, CapacitySnapshot
 from .clip_cache import FixedClip, FixedClipCache, FixedClipSpec, FixedClipVoiceRole
-from .config import SpeechSettings
+from .config import DEFAULT_STT_PROVIDER, DEFAULT_TTS_PROVIDER, SpeechSettings
 from .protocol import (
     CapabilitiesEvent,
     CudaCapability,
@@ -20,6 +22,8 @@ from .protocol import (
 from .providers import (
     FakeSttProvider,
     FakeTtsProvider,
+    KokoroTtsProvider,
+    NemotronSttProvider,
     UnavailableSttProvider,
     UnavailableTtsProvider,
 )
@@ -36,6 +40,53 @@ from .tts_lane import TtsLaneSnapshot, TtsProviderLane
 
 
 _LOGGER = logging.getLogger(__name__)
+_MODEL_ID = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_MODEL_REVISION = re.compile(r"[0-9a-f]{40}")
+_VOICE_ROLE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_KOKORO_VOICE_ID = re.compile(r"[abefhijpz][fm]_[a-z0-9]+(?:_[a-z0-9]+)*")
+_FIXED_CLIP_VOICE_ROLES = frozenset({"judge", "opposing_counsel"})
+
+
+def _pinned_snapshot_path(
+    *,
+    cache_dir: Path,
+    model_id: str,
+    revision: str,
+) -> Path | None:
+    """Select a supported immutable Hub cache location without creating it."""
+
+    if _MODEL_ID.fullmatch(model_id) is None or _MODEL_REVISION.fullmatch(revision) is None:
+        return None
+    repository_slug = f"models--{model_id.replace('/', '--')}"
+    direct = cache_dir / repository_slug / "snapshots" / revision
+    candidates = (direct, cache_dir / "hub" / repository_slug / "snapshots" / revision)
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return direct
+
+
+def _kokoro_voice_ids(entries: tuple[str, ...]) -> tuple[str, ...] | None:
+    actors: set[str] = set()
+    voices: list[str] = []
+    for entry in entries:
+        actor, separator, voice_id = entry.partition("=")
+        if (
+            separator != "="
+            or _VOICE_ROLE.fullmatch(actor) is None
+            or _KOKORO_VOICE_ID.fullmatch(voice_id) is None
+            or actor in actors
+        ):
+            return None
+        actors.add(actor)
+        if voice_id not in voices:
+            voices.append(voice_id)
+    if not _FIXED_CLIP_VOICE_ROLES.issubset(actors):
+        return None
+    return tuple(voices)
 
 
 def detect_cuda(*, fake_mode: bool) -> CudaCapability:
@@ -483,15 +534,46 @@ class SpeechRuntime:
     def _default_stt_provider(settings: SpeechSettings) -> SttProvider:
         if settings.stt_provider == "fake-stt":
             return cast(SttProvider, FakeSttProvider())
+        if settings.stt_provider == DEFAULT_STT_PROVIDER:
+            snapshot = _pinned_snapshot_path(
+                cache_dir=settings.cache_dir,
+                model_id=settings.stt_model_id,
+                revision=settings.stt_model_revision,
+            )
+            if snapshot is not None and settings.mode in {"cpu", "cuda"}:
+                device = cast(Literal["cpu", "cuda"], settings.mode)
+                try:
+                    return cast(
+                        SttProvider,
+                        NemotronSttProvider(
+                            artifact_path=snapshot,
+                            cache_dir=settings.cache_dir,
+                            model_id=settings.stt_model_id,
+                            model_revision=settings.stt_model_revision,
+                            lookahead_tokens=settings.stt_lookahead_tokens,
+                            sample_rate_hz=settings.stt_sample_rate_hz,
+                            device=device,
+                        ),
+                    )
+                except ValueError as error:
+                    _LOGGER.warning(
+                        "invalid Nemotron provider configuration errorType=%s",
+                        type(error).__name__,
+                    )
+            return cast(
+                SttProvider,
+                UnavailableSttProvider(
+                    provider_id=DEFAULT_STT_PROVIDER,
+                    model_id="unavailable",
+                    diagnostic="configured Nemotron settings are invalid or inconsistent",
+                ),
+            )
         return cast(
             SttProvider,
             UnavailableSttProvider(
-                provider_id=settings.stt_provider,
-                model_id=(f"{settings.stt_model_id}@{settings.stt_model_revision}"),
-                diagnostic=(
-                    "configured Nemotron adapter is not installed or its pinned "
-                    "artifacts are not ready"
-                ),
+                provider_id="unsupported-stt",
+                model_id="unavailable",
+                diagnostic="configured STT provider is not supported by this local service",
             ),
         )
 
@@ -499,14 +581,44 @@ class SpeechRuntime:
     def _default_tts_provider(settings: SpeechSettings) -> TtsProvider:
         if settings.tts_provider == "fake-tts":
             return cast(TtsProvider, FakeTtsProvider())
+        if settings.tts_provider == DEFAULT_TTS_PROVIDER:
+            snapshot = _pinned_snapshot_path(
+                cache_dir=settings.cache_dir,
+                model_id=settings.tts_model_id,
+                revision=settings.tts_model_revision,
+            )
+            voice_ids = _kokoro_voice_ids(settings.tts_voices)
+            if snapshot is not None and voice_ids is not None and settings.mode in {"cpu", "cuda"}:
+                device = cast(Literal["cpu", "cuda"], settings.mode)
+                try:
+                    return cast(
+                        TtsProvider,
+                        KokoroTtsProvider(
+                            model_id=settings.tts_model_id,
+                            model_revision=settings.tts_model_revision,
+                            snapshot_dir=snapshot,
+                            voice_ids=voice_ids,
+                            device=device,
+                        ),
+                    )
+                except ValueError as error:
+                    _LOGGER.warning(
+                        "invalid Kokoro provider configuration errorType=%s",
+                        type(error).__name__,
+                    )
+            return cast(
+                TtsProvider,
+                UnavailableTtsProvider(
+                    provider_id=DEFAULT_TTS_PROVIDER,
+                    model_id="unavailable",
+                    diagnostic="configured Kokoro settings are invalid or inconsistent",
+                ),
+            )
         return cast(
             TtsProvider,
             UnavailableTtsProvider(
-                provider_id=settings.tts_provider,
-                model_id=(f"{settings.tts_model_id}@{settings.tts_model_revision}"),
-                diagnostic=(
-                    "configured Kokoro adapter is not installed or its pinned "
-                    "artifacts are not ready"
-                ),
+                provider_id="unsupported-tts",
+                model_id="unavailable",
+                diagnostic="configured TTS provider is not supported by this local service",
             ),
         )

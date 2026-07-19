@@ -36,10 +36,17 @@ def test_defaults_are_pinned_local_providers_without_auto_download() -> None:
 
 
 def test_fake_mode_selects_fake_providers_for_ci() -> None:
-    settings = SpeechSettings.from_env({"SUITS_SPEECH_MODE": "fake", "LOCALAPPDATA": "C:/local"})
+    settings = SpeechSettings.from_env(
+        {
+            "SUITS_SPEECH_MODE": "fake",
+            "SUITS_STT_MAX_SESSIONS": "4",
+            "LOCALAPPDATA": "C:/local",
+        }
+    )
 
     assert settings.stt_provider == "fake-stt"
     assert settings.tts_provider == "fake-tts"
+    assert settings.max_stt_sessions == 4
 
 
 def test_non_loopback_bind_is_always_rejected() -> None:
@@ -57,9 +64,14 @@ def test_non_loopback_bind_is_always_rejected() -> None:
     [
         {"SUITS_SPEECH_MODE": "cloud"},
         {"SUITS_SPEECH_PORT": "0"},
+        {"SUITS_STT_PROVIDER": ""},
+        {"SUITS_TTS_PROVIDER": ""},
+        {"SUITS_STT_LOOKAHEAD_TOKENS": "2"},
         {"SUITS_STT_LOOKAHEAD_TOKENS": "14"},
+        {"SUITS_STT_SAMPLE_RATE_HZ": "8000"},
         {"SUITS_SPEECH_MAX_CONNECTIONS": "0"},
         {"SUITS_STT_MAX_SESSIONS": "0"},
+        {"SUITS_STT_MAX_SESSIONS": "2"},
         {"SUITS_STT_IDLE_TIMEOUT_MS": "999"},
         {"SUITS_STT_MAX_UTTERANCE_MS": "4999"},
         {"SUITS_SPEECH_HELLO_TIMEOUT_MS": "499"},
@@ -71,6 +83,9 @@ def test_non_loopback_bind_is_always_rejected() -> None:
         {"SUITS_SPEECH_ALLOWED_ORIGINS": "http://localhost:3000?query=1"},
         {"SUITS_SPEECH_CACHE_DIR": "relative/cache"},
         {"SUITS_SPEECH_CACHE_DIR": "C:/bad\x00cache"},
+        {"SUITS_TTS_VOICES": "judge=am_michael"},
+        {"SUITS_TTS_VOICES": ("judge=am_michael,judge=af_heart,opposing_counsel=bm_george")},
+        {"SUITS_TTS_VOICES": ("judge=../../private,opposing_counsel=bm_george,witness=af_heart")},
     ],
 )
 def test_invalid_configuration_fails_closed(environ: dict[str, str]) -> None:
