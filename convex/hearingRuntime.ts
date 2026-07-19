@@ -566,9 +566,6 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
           nextEvent.source === "deterministic"))
         ? storedEventActionJson(nextEvent)
         : null;
-    if (event.eventType === "ASK_QUESTION" && continuation === null) {
-      throw new Error("COURTROOM_GENERATION_INVALID");
-    }
     return {
       actionJson: storedEventActionJson(event),
       continuationActionJson: continuation,
@@ -2156,9 +2153,8 @@ function emptyCourtroomCitations() {
 
 function counselContinuationForAction(input: Readonly<{
   state: TrialStateV3;
-  request: CounselResponseRequest;
+  decisionId: string;
   action: TrialActionV3;
-  completedAt: string;
 }>): TrialActionV3 | null {
   const appearance = activeAppearance(input.state);
   if (input.action.type === "ASK_QUESTION") {
@@ -2170,18 +2166,18 @@ function counselContinuationForAction(input: Readonly<{
     if (!witnessActor) return invalidCounselGeneration();
     const responseId = stableRuntimeId("response:counsel", {
       trialId: input.state.trialId,
-      decisionId: input.request.decisionId,
+      decisionId: input.decisionId,
     });
     return actionFromIntent({
       actionId: stableRuntimeId("action:request-counsel-response", {
         trialId: input.state.trialId,
-        decisionId: input.request.decisionId,
+        decisionId: input.decisionId,
       }),
       trialId: input.state.trialId,
-      expectedStateVersion: input.request.expectedStateVersion + 1,
+      expectedStateVersion: input.action.expectedStateVersion + 1,
       actor: actorByRole(input.state, "system", "neutral"),
       source: "system",
-      requestedAt: requestedAtWithOffset(input.completedAt, 1),
+      requestedAt: requestedAtWithOffset(input.action.requestedAt, 1),
       causationId: eventIdForAction(input.action.actionId),
       type: "REQUEST_RESPONSE",
       payload: {
@@ -2196,7 +2192,7 @@ function counselContinuationForAction(input: Readonly<{
   }
   const shouldRelease =
     input.action.payload.disposition === "waived" ||
-    input.request.appearance.examinationKind === "recross";
+    input.action.payload.examinationKind === "recross";
   if (!shouldRelease) return null;
   const releaseCounsel = actorByRole(
     input.state,
@@ -2206,13 +2202,13 @@ function counselContinuationForAction(input: Readonly<{
   return actionFromIntent({
     actionId: stableRuntimeId("action:release-after-counsel", {
       trialId: input.state.trialId,
-      decisionId: input.request.decisionId,
+      decisionId: input.decisionId,
     }),
     trialId: input.state.trialId,
-    expectedStateVersion: input.request.expectedStateVersion + 1,
+    expectedStateVersion: input.action.expectedStateVersion + 1,
     actor: releaseCounsel,
     source: "deterministic",
-    requestedAt: requestedAtWithOffset(input.completedAt, 1),
+    requestedAt: requestedAtWithOffset(input.action.requestedAt, 1),
     causationId: eventIdForAction(input.action.actionId),
     type: "RELEASE_WITNESS",
     payload: { witnessId: appearance.witnessId },
@@ -2283,11 +2279,34 @@ export const commitCounselGeneration = internalAction({
       actionId,
     });
     if (existing !== null) {
+      const existingAction = TrialActionV3Schema.safeParse(
+        parseJson(existing.actionJson, "stored_counsel_action"),
+      );
+      if (
+        !existingAction.success ||
+        (existingAction.data.type !== "ASK_QUESTION" &&
+          existingAction.data.type !== "END_EXAMINATION")
+      ) {
+        return invalidCounselGeneration();
+      }
+      let continuationActionJson = existing.continuationActionJson;
+      if (continuationActionJson === null) {
+        const currentHead = await loadHead(ctx, ownerId, args.trialId);
+        const recoveredContinuation = counselContinuationForAction({
+          state: currentHead.state,
+          decisionId: envelope.decisionId,
+          action: existingAction.data,
+        });
+        continuationActionJson =
+          recoveredContinuation === null
+            ? null
+            : JSON.stringify(recoveredContinuation);
+      }
       await appendCounselGeneration(
         ctx,
         ownerId,
         existing.actionJson,
-        existing.continuationActionJson,
+        continuationActionJson,
         envelope,
       );
       return await canonicalContinuation(ctx, ownerId, args.trialId);
@@ -2375,9 +2394,8 @@ export const commitCounselGeneration = internalAction({
     }
     const continuation = counselContinuationForAction({
       state: head.state,
-      request,
+      decisionId: request.decisionId,
       action,
-      completedAt: envelope.trace.completedAt,
     });
     await appendCounselGeneration(
       ctx,

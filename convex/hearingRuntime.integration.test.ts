@@ -144,6 +144,10 @@ function playerCommand(
   } as const;
 }
 
+function stableTestRuntimeId(prefix: string, material: unknown): string {
+  return `${prefix}:${sha256Utf8(JSON.stringify(material))}`;
+}
+
 async function start(backend: TestBackend) {
   return HearingRuntimeViewV1Schema.parse(
     await backend.action(startReference, {
@@ -1761,6 +1765,148 @@ describe("V3 hearing runtime facade", () => {
       stored.events.filter((event) => event.eventType === "RELEASE_WITNESS"),
     ).toHaveLength(1);
     expect(stored.calls.filter((call) => call.status === "accepted")).toHaveLength(6);
+  });
+
+  it("recovers an existing counsel question whose response continuation is missing", async () => {
+    const backend = convexTest({ schema, modules });
+    const planPreparation = await prepareInitialOpponentCross(backend);
+    if (!isHearingOpponentPlanModelRequiredPreparation(planPreparation)) {
+      throw new Error("Expected opponent plan preparation");
+    }
+    const planGeneration = await fakeOpponentPlanGeneration(
+      planPreparation,
+      "2026-07-19T03:20:00.000Z",
+      "question",
+    );
+    const counselPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(commitOpponentPlanGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: planPreparation.request.trialId,
+        generationJson: JSON.stringify(planGeneration),
+      }),
+    );
+    if (!isHearingCounselResponseModelRequiredPreparation(counselPreparation)) {
+      throw new Error("Expected counsel response preparation");
+    }
+    const generation = await fakeCounselGeneration(
+      counselPreparation,
+      "2026-07-19T03:20:01.000Z",
+    );
+    if (
+      generation.output.proposedAction.kind !== "ask_question" ||
+      generation.trace.completedAt === null
+    ) {
+      throw new Error("Fixture requires a completed counsel question");
+    }
+    const request = counselPreparation.request;
+    const material = {
+      trialId: request.trialId,
+      decisionId: request.decisionId,
+    };
+    const actor = await backend.run(async (ctx) => {
+      const projection = await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", request.trialId),
+        )
+        .unique();
+      if (!projection) throw new Error("Expected trial projection");
+      const state = TrialStateV3Schema.parse(JSON.parse(projection.stateJson));
+      const counsel = state.actors[request.actorId];
+      if (!counsel) throw new Error("Expected opposing counsel actor");
+      return counsel;
+    });
+    const citations = counselResponseOutputCitations(generation.output);
+    const primary = TrialActionV3Schema.parse({
+      schemaVersion: TRIAL_ACTION_SCHEMA_VERSION,
+      actionId: stableTestRuntimeId("action:counsel-turn", material),
+      trialId: request.trialId,
+      expectedStateVersion: request.expectedStateVersion,
+      actor,
+      source: "ai",
+      requestedAt: generation.trace.completedAt,
+      causationId: request.expectedLastEventId,
+      correlationId: request.trialId,
+      responseId: null,
+      interruptId: null,
+      modelMetadata: generation.modelMetadata,
+      type: "ASK_QUESTION",
+      payload: {
+        questionId: stableTestRuntimeId("question:counsel", material),
+        witnessId: request.appearance.witnessId,
+        examinationKind: request.appearance.examinationKind,
+        text: generation.output.speechSegments
+          .map((segment) => segment.text)
+          .join(" "),
+        turnId: stableTestRuntimeId("turn:counsel-question", material),
+        presentedEvidenceIds:
+          generation.output.proposedAction.presentedEvidenceIds,
+        factIds: citations.factIds,
+        evidenceIds: citations.evidenceIds,
+        testimonyIds: citations.testimonyIds,
+      },
+    });
+    if (primary.type !== "ASK_QUESTION") {
+      throw new Error("Fixture primary action must be a question");
+    }
+    const primaryQuestionId = primary.payload.questionId;
+    await backend.mutation(appendTrustedForOwnerReference, {
+      ownerId: OWNER_ID,
+      actionJson: JSON.stringify(primary),
+    });
+
+    const partial = HearingRuntimeViewV1Schema.parse(
+      await backend.action(readReference, {
+        ownerId: OWNER_ID,
+        trialId: request.trialId,
+      }),
+    );
+    expect(partial.activeQuestion).toMatchObject({
+      questionId: primaryQuestionId,
+      status: "open",
+    });
+
+    const recovered = HearingCommandPreparationSchema.parse(
+      await backend.action(commitCounselGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+    if (!isHearingWitnessModelRequiredPreparation(recovered)) {
+      throw new Error("Recovered question should require witness generation");
+    }
+    expect(recovered.request.question.questionId).toBe(
+      primaryQuestionId,
+    );
+
+    const stored = await backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", request.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+    }));
+    expect(
+      stored.events.filter(
+        (event) =>
+          event.eventType === "ASK_QUESTION" && event.source === "ai",
+      ),
+    ).toHaveLength(1);
+    expect(
+      stored.events.filter(
+        (event) =>
+          event.eventType === "REQUEST_RESPONSE" && event.source === "system",
+      ),
+    ).toHaveLength(2);
+    expect(
+      stored.calls.filter(
+        (call) =>
+          call.callId === generation.callId && call.status === "accepted",
+      ),
+    ).toHaveLength(1);
   });
 
   it("caps one AI examination at three questions and completes its model loop in eleven steps", async () => {
