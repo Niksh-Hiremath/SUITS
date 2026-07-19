@@ -432,12 +432,17 @@ class SpeechRuntime:
         return await asyncio.shield(load_task)
 
     async def _load_models_once(self) -> CapabilitiesEvent:
-        results = await asyncio.gather(
-            self._load_provider_if_needed(self.stt_provider),
-            self._load_provider_if_needed(self.tts_provider),
-            return_exceptions=True,
-        )
-        failures = tuple(result for result in results if isinstance(result, BaseException))
+        # CUDA provider initialization is deliberately serialized. Concurrent
+        # torch model construction is nondeterministic on the target Windows
+        # driver even when the final models fit comfortably in VRAM.
+        failures: list[BaseException] = []
+        for provider in (self.tts_provider, self.stt_provider):
+            try:
+                await self._load_provider_if_needed(provider)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as error:
+                failures.append(error)
         if failures:
             _LOGGER.warning(
                 "speech provider load failed failureCount=%s errorTypes=%s",

@@ -72,6 +72,7 @@ async def test_failed_shared_load_waits_for_sibling_and_coalesces_retry(
     assert first.done() is False
     assert retry_while_loading.done() is False
     assert tts.load_calls == 1
+    assert stt.load_calls == 0
     assert tts.max_active_loads == 1
 
     tts.release.set()

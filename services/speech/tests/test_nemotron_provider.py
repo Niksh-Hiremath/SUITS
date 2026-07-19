@@ -355,12 +355,14 @@ class _Processor:
         self.num_mel_frames_per_audio_chunk = 2
         self.streaming_latency_ms = 160
         self.lookahead: int | None = None
+        self.audio_shapes: list[tuple[int, ...]] = []
 
     def set_num_lookahead_tokens(self, value: int) -> None:
         self.lookahead = value
 
     def __call__(self, audio: object, **kwargs: object) -> _Batch:
-        del audio, kwargs
+        self.audio_shapes.append(cast(tuple[int, ...], getattr(audio, "shape")))
+        del kwargs
         return _Batch()
 
 
@@ -396,6 +398,7 @@ class _Model:
         streamer = cast(_Streamer, kwargs["streamer"])
         for _ in cast(Iterator[object], kwargs["input_features"]):
             streamer.text_queue.put("native ")
+            streamer.text_queue.put("")
         streamer.end()
         return object()
 
@@ -421,6 +424,15 @@ class _StreamerFactory:
         return result
 
 
+class _Numpy:
+    float32: object = "float32"
+
+    def asarray(self, value: object, *, dtype: object) -> object:
+        assert dtype == self.float32
+        samples = cast(tuple[float, ...], value)
+        return SimpleNamespace(shape=(len(samples),))
+
+
 async def test_transformers_backend_is_cache_only_and_uses_one_streaming_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -444,18 +456,23 @@ async def test_transformers_backend_is_cache_only_and_uses_one_streaming_worker(
         float16="float16",
         float32="float32",
     )
+    numpy = _Numpy()
     monkeypatch.setattr(importlib.metadata, "version", lambda name: "5.13.0")
     monkeypatch.setattr(
         importlib,
         "import_module",
-        lambda name: transformers if name == "transformers" else torch,
+        lambda name: (
+            transformers if name == "transformers" else numpy if name == "numpy" else torch
+        ),
     )
     loader = TransformersNemotronBackendLoader()
     provider = _provider(snapshot, cache, loader)
 
     await provider.load()
     session = await provider.create_session(sample_rate_hz=16_000)
-    await session.push_audio(AudioChunk(sequence=0, pcm_s16le=b"\x00\x00" * 320, duration_ms=20))
+    partials = await session.push_audio(
+        AudioChunk(sequence=0, pcm_s16le=b"\x00\x00" * 320, duration_ms=20)
+    )
     final = await session.finish()
 
     for factory in (processor_factory, model_factory):
@@ -464,12 +481,36 @@ async def test_transformers_backend_is_cache_only_and_uses_one_streaming_worker(
         assert options["cache_dir"] == str(cache.resolve())
         assert options["revision"] == PINNED_REVISION
         assert options["local_files_only"] is True
-        assert options["trust_remote_code"] is False
+    assert options["trust_remote_code"] is False
     assert processor.lookahead == 1
+    assert processor.audio_shapes == [(320,), (320,)]
     assert model.target_device == "cuda"
     assert model.generate_calls == 1
     assert model.last_generate_options["num_lookahead_tokens"] == 1
-    assert final.text == "native"
+    assert len({item.text for item in partials}) == len(partials)
+    assert final.text == "native native"
+
+    short_session = await provider.create_session(sample_rate_hz=16_000)
+    await short_session.push_audio(
+        AudioChunk(sequence=0, pcm_s16le=b"\x00\x00" * 80, duration_ms=5)
+    )
+    short_final = await short_session.finish()
+    assert short_final.text == "native"
+    assert processor.audio_shapes == [(320,), (320,), (320,)]
+    assert model.generate_calls == 2
+
+    processor.num_mel_frames_per_audio_chunk = 1
+    overlap_session = await provider.create_session(sample_rate_hz=16_000)
+    await overlap_session.push_audio(
+        AudioChunk(sequence=0, pcm_s16le=b"\x00\x00" * 320, duration_ms=20)
+    )
+    await overlap_session.push_audio(
+        AudioChunk(sequence=1, pcm_s16le=b"\x00\x00" * 176, duration_ms=11)
+    )
+    overlap_final = await overlap_session.finish()
+    assert overlap_final.text == "native native native"
+    assert processor.audio_shapes[-3:] == [(320,), (320,), (320,)]
+    assert model.generate_calls == 3
 
     torch.cuda.is_available = lambda: False
     cpu_request = NemotronLoadRequest(

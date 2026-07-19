@@ -469,7 +469,7 @@ class _Processor(Protocol):
 
     def set_num_lookahead_tokens(self, value: int) -> None: ...
 
-    def __call__(self, audio: Sequence[float], **kwargs: object) -> _Batch: ...
+    def __call__(self, audio: object, **kwargs: object) -> _Batch: ...
 
 
 class _Model(Protocol):
@@ -503,6 +503,12 @@ class _Torch(Protocol):
     float32: object
 
 
+class _Numpy(Protocol):
+    float32: object
+
+    def asarray(self, value: object, *, dtype: object) -> object: ...
+
+
 class _Streamer(Protocol):
     text_queue: queue.Queue[object]
     stop_signal: object
@@ -515,6 +521,7 @@ class _TransformersBackend:
     processor: _Processor
     model: _Model
     streamer_factory: _StreamerFactory
+    audio_array_factory: Callable[[Sequence[float]], object]
     info: NemotronBackendInfo
     worker_join_timeout_seconds: float = 10.0
 
@@ -523,6 +530,7 @@ class _TransformersBackend:
             processor=self.processor,
             model=self.model,
             streamer_factory=self.streamer_factory,
+            audio_array_factory=self.audio_array_factory,
             join_timeout_seconds=self.worker_join_timeout_seconds,
         )
 
@@ -535,13 +543,17 @@ class TransformersNemotronBackendLoader:
             version = importlib.metadata.version("transformers")
             transformers = importlib.import_module("transformers")
             torch_module = importlib.import_module("torch")
+            numpy_module = importlib.import_module("numpy")
+            importlib.import_module("librosa")
         except (ImportError, importlib.metadata.PackageNotFoundError):
             raise NemotronProviderError(
-                "Nemotron requires optional torch and transformers>=5.13.0 packages"
+                "Nemotron requires optional torch, transformers>=5.13,<5.14, "
+                "numpy, and librosa packages"
             ) from None
         if not (5, 13, 0) <= _version_tuple(version) < (5, 14, 0):
             raise NemotronProviderError("Nemotron requires transformers>=5.13,<5.14")
         torch = cast(_Torch, torch_module)
+        numpy = cast(_Numpy, numpy_module)
         if request.device == "cuda" and not torch.cuda.is_available():
             raise NemotronProviderError("PyTorch CUDA is unavailable for Nemotron")
         processor_factory = cast(_Factory, getattr(transformers, "AutoProcessor"))
@@ -577,6 +589,7 @@ class TransformersNemotronBackendLoader:
             processor=processor,
             model=model,
             streamer_factory=streamer_factory,
+            audio_array_factory=lambda values: numpy.asarray(values, dtype=numpy.float32),
             info=NemotronBackendInfo(
                 device_name=device_name,
                 sample_rate_hz=processor.feature_extractor.sampling_rate,
@@ -603,6 +616,7 @@ class _AudioSource:
         self._samples = array("h")
         self._accepting = True
         self._ended = False
+        self._terminal_window_emitted = False
         self._cancelled = threading.Event()
 
     def push(self, pcm: bytes) -> None:
@@ -629,6 +643,8 @@ class _AudioSource:
         self._queue.put_nowait(self._END)
 
     def window(self, start: int, length: int) -> tuple[float, ...] | None:
+        if self._terminal_window_emitted:
+            return None
         required = start + length
         while len(self._samples) < required and not self._ended:
             item = self._queue.get()
@@ -646,7 +662,8 @@ class _AudioSource:
             return None
         samples = self._samples[start : min(required, len(self._samples))]
         if len(samples) < length:
-            return None
+            self._terminal_window_emitted = True
+            samples.extend([0] * (length - len(samples)))
         return tuple(sample / 32768.0 for sample in samples)
 
 
@@ -657,10 +674,12 @@ class _TransformersSession:
         processor: _Processor,
         model: _Model,
         streamer_factory: _StreamerFactory,
+        audio_array_factory: Callable[[Sequence[float]], object],
         join_timeout_seconds: float,
     ) -> None:
         self._processor = processor
         self._model = model
+        self._audio_array_factory = audio_array_factory
         self._source = _AudioSource()
         self._join_timeout_seconds = join_timeout_seconds
         self._streamer = cast(
@@ -672,6 +691,7 @@ class _TransformersSession:
         )
         self._revision = 0
         self._text = ""
+        self._last_emitted_text = ""
         self._failure: BaseException | None = None
         self._worker = threading.Thread(
             target=self._run_generate,
@@ -728,7 +748,7 @@ class _TransformersSession:
                 self._streamer.end()
                 return
             first_inputs = self._processor(
-                first,
+                self._audio_array_factory(first),
                 sampling_rate=self._processor.feature_extractor.sampling_rate,
                 is_streaming=True,
                 is_first_audio_chunk=True,
@@ -752,7 +772,7 @@ class _TransformersSession:
                     if audio is None:
                         return
                     inputs = self._processor(
-                        audio,
+                        self._audio_array_factory(audio),
                         sampling_rate=self._processor.feature_extractor.sampling_rate,
                         is_streaming=True,
                         is_first_audio_chunk=False,
@@ -778,10 +798,13 @@ class _TransformersSession:
                 break
             if item is self._streamer.stop_signal:
                 continue
-            self._text += str(item)
+            if type(item) is not str:
+                raise NemotronProviderError("Nemotron streamer emitted an invalid text item")
+            self._text += item
             normalized = self._text.strip()
-            if normalized and emit:
+            if normalized and emit and normalized != self._last_emitted_text:
                 self._revision += 1
+                self._last_emitted_text = normalized
                 revisions.append(
                     NemotronRevision(
                         revision=self._revision,
