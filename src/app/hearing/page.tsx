@@ -617,7 +617,10 @@ function HearingPageContent() {
           <span>SUITS</span>
         </Link>
         <div className="phase-chip">{phaseLabel(view)}</div>
-        <Link className="text-link" href="/cases/">Case library</Link>
+        <div className="hearing-header-links">
+          <Link className="text-link" href="/preflight/">System preflight</Link>
+          <Link className="text-link" href="/cases/">Case library</Link>
+        </div>
       </header>
 
       {loading ? (

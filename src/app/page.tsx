@@ -10,10 +10,10 @@ export default function Home() {
           <span className="brand-mark">S</span>
           <span>SUITS</span>
         </a>
-        <div className="status-pill">
+        <Link className="status-pill" href="/preflight/">
           <span className="status-dot" aria-hidden="true" />
-          Court systems online
-        </div>
+          Run system preflight
+        </Link>
       </nav>
 
       <section className="hero" id="top">
@@ -33,6 +33,9 @@ export default function Home() {
           </Link>
           <Link className="text-link" href="/cases/new/">
             Upload a case →
+          </Link>
+          <Link className="text-link" href="/preflight/">
+            Check systems →
           </Link>
         </div>
       </section>
