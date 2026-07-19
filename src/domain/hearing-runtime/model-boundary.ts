@@ -8,10 +8,14 @@ import {
   type CourtroomModelCallCitationSet,
 } from "../courtroom-ai/model-call-trace";
 import {
+  COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
+  CounselRoleResponseModelOutputSchema,
   OpponentPlannerModelOutputSchema,
+  type CounselRoleResponseModelOutput,
   type OpponentPlannerModelOutput,
 } from "../courtroom-ai/call-contracts";
+import { CounselResponseRequestSchema } from "../courtroom-ai/counsel-response";
 import {
   OPPONENT_PLANNER_REQUEST_SCHEMA_VERSION,
   OpponentPlannerRequestSchema,
@@ -25,6 +29,7 @@ import {
   type WitnessAnswerRequest,
   type WitnessAnswerModelOutput,
 } from "../courtroom-ai/witness-answer";
+import { OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION } from "../knowledge";
 import { ModelMetadataSchema } from "../trial-engine/schemas";
 import { HearingRuntimeViewV1Schema } from "./schema";
 
@@ -34,8 +39,12 @@ export const HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION =
   "hearing-witness-generation-precommit.v1" as const;
 export const HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION =
   "hearing-opponent-plan-precommit.v1" as const;
+export const HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
+  "hearing-counsel-response-precommit.v1" as const;
 const HEARING_OPPONENT_PLANNER_PROMPT_VERSION =
   "opponent-planner.prompt.v1" as const;
+const HEARING_COUNSEL_RESPONSE_PROMPT_VERSION =
+  "role-responder.counsel.prompt.v1" as const;
 
 const CompletedHearingCommandPreparationSchema = z
   .object({
@@ -178,6 +187,39 @@ export function hashOpponentPlannerModelOutput(outputInput: unknown): string {
   return sha256Utf8(JSON.stringify(output));
 }
 
+/** Canonical public-record citations represented by a counsel response. */
+export function counselResponseOutputCitations(
+  outputInput: unknown,
+): CourtroomModelCallCitationSet {
+  const output = CounselRoleResponseModelOutputSchema.parse(outputInput);
+  return CourtroomModelCallCitationSetSchema.parse({
+    factIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.factIds,
+      ),
+    ),
+    evidenceIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.evidenceIds,
+      ),
+    ),
+    testimonyIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.testimonyIds,
+      ),
+    ),
+    eventIds: [],
+    sourceSegmentIds: [],
+    priorStatementIds: [],
+  });
+}
+
+/** Runtime-neutral counsel-response digest shared by server and Convex. */
+export function hashCounselResponseModelOutput(outputInput: unknown): string {
+  const output = CounselRoleResponseModelOutputSchema.parse(outputInput);
+  return sha256Utf8(JSON.stringify(output));
+}
+
 function proposedCitationCount(output: WitnessAnswerModelOutput): number {
   return output.segments.reduce(
     (total, segment) =>
@@ -214,6 +256,38 @@ function opponentPlannerUnauditableCitationCount(
       move.citations.instructionIds.length +
       move.citations.ruleIds.length +
       move.citations.settlementOfferIds.length,
+    0,
+  );
+}
+
+function counselResponseProposedCitationCount(
+  output: CounselRoleResponseModelOutput,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      Object.values(segment.citations).reduce(
+        (segmentTotal, identifiers) =>
+          segmentTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
+function counselResponseUnsupportedCitationCount(
+  output: CounselRoleResponseModelOutput,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      segment.citations.transcriptTurnIds.length +
+      segment.citations.sourceSegmentIds.length +
+      segment.citations.priorStatementIds.length +
+      segment.citations.issueIds.length +
+      segment.citations.instructionIds.length +
+      segment.citations.ruleIds.length +
+      segment.citations.settlementOfferIds.length,
     0,
   );
 }
@@ -662,4 +736,229 @@ export const HearingOpponentPlanPrecommitSchema = z
 
 export type HearingOpponentPlanPrecommit = z.infer<
   typeof HearingOpponentPlanPrecommitSchema
+>;
+
+/**
+ * Strict server-to-Convex handoff for one accepted open-court counsel
+ * response. The canonical commit revalidates the decision, private planner
+ * binding, actor, and event head; no action or event identity is caller-owned.
+ */
+export const HearingCounselResponsePrecommitSchema = z
+  .object({
+    schemaVersion: z.literal(
+      HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    ),
+    trialId: CaseGraphEntityIdSchema,
+    callId: CaseGraphEntityIdSchema,
+    decisionId: CaseGraphEntityIdSchema,
+    expectedStateVersion: z.number().int().nonnegative(),
+    expectedLastEventId: CaseGraphEntityIdSchema,
+    planBinding: CounselResponseRequestSchema.shape.planBinding,
+    output: CounselRoleResponseModelOutputSchema,
+    modelMetadata: ModelMetadataSchema,
+    trace: CourtroomModelCallTraceSchema,
+  })
+  .strict()
+  .superRefine((envelope, context) => {
+    const { modelMetadata, output, trace } = envelope;
+    const candidateHash = hashCounselResponseModelOutput(output);
+    const candidateCitations = counselResponseOutputCitations(output);
+    const candidateProposedCitationCount =
+      counselResponseProposedCitationCount(output);
+    const acceptedAttempt = trace.attempts.find(
+      (attempt) => attempt.attempt === trace.acceptedAttempt,
+    );
+    const aggregateUsage = aggregateAttemptUsage(trace.attempts);
+
+    for (const [field, envelopeValue, traceValue] of [
+      ["trialId", envelope.trialId, trace.trialId],
+      ["callId", envelope.callId, trace.callId],
+      [
+        "expectedStateVersion",
+        envelope.expectedStateVersion,
+        trace.expectedStateVersion,
+      ],
+      [
+        "expectedLastEventId",
+        envelope.expectedLastEventId,
+        trace.expectedLastEventId,
+      ],
+    ] as const) {
+      if (envelopeValue !== traceValue) {
+        addMismatch(
+          context,
+          ["trace", field],
+          `Trace ${field} must match the counsel-response pre-commit envelope`,
+        );
+      }
+    }
+
+    if (
+      trace.status !== "accepted" ||
+      trace.callClass !== "role_responder" ||
+      trace.task !== "counsel_response" ||
+      trace.actorRole !== "counsel" ||
+      trace.actorId === null ||
+      trace.responseId !== null
+    ) {
+      addMismatch(
+        context,
+        ["trace", "task"],
+        "Pre-commit requires an accepted open-court counsel role-responder trace",
+      );
+    }
+    if (
+      trace.inputEventIds.length !== 1 ||
+      trace.inputEventIds[0] !== envelope.expectedLastEventId
+    ) {
+      addMismatch(
+        context,
+        ["trace", "inputEventIds"],
+        "Counsel response must retain one exact canonical event-head binding",
+      );
+    }
+    if (envelope.planBinding.plannerCallId === envelope.callId) {
+      addMismatch(
+        context,
+        ["planBinding", "plannerCallId"],
+        "Counsel response and private planner calls require distinct identities",
+      );
+    }
+    if (
+      trace.knowledgeScope.knowledgeSchemaVersion !==
+        OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION ||
+      trace.knowledgeScope.stateVersion !== envelope.expectedStateVersion
+    ) {
+      addMismatch(
+        context,
+        ["trace", "knowledgeScope"],
+        "Counsel response must audit the public counsel view at the bound head",
+      );
+    }
+    if (
+      trace.model !== "gpt-5.6-luna" ||
+      modelMetadata.model !== "gpt-5.6-luna" ||
+      modelMetadata.model !== trace.model
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "model"],
+        "Counsel response and its trace must use gpt-5.6-luna",
+      );
+    }
+    if (
+      output.schemaVersion !==
+        COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION ||
+      trace.outputSchemaVersion !== output.schemaVersion ||
+      modelMetadata.schemaVersion !== output.schemaVersion
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "schemaVersion"],
+        "Counsel output, trace, and metadata schema versions must match",
+      );
+    }
+    if (
+      trace.promptVersion !== HEARING_COUNSEL_RESPONSE_PROMPT_VERSION ||
+      modelMetadata.promptVersion !==
+        HEARING_COUNSEL_RESPONSE_PROMPT_VERSION ||
+      modelMetadata.promptVersion !== trace.promptVersion
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "promptVersion"],
+        "Counsel trace and metadata must use the exact counsel prompt version",
+      );
+    }
+    if (
+      modelMetadata.retryCount !== trace.retryCount ||
+      modelMetadata.validationFailureCount !== trace.validationFailureCount
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "retryCount"],
+        "Counsel trace and metadata retry accounting must match",
+      );
+    }
+    if (
+      trace.latencyMs === null ||
+      modelMetadata.latencyMs !== trace.latencyMs ||
+      modelMetadata.estimatedCostUsd !== trace.estimatedCostUsd
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "latencyMs"],
+        "Counsel trace and metadata timing and cost must match",
+      );
+    }
+    const usageMatches =
+      trace.usage === null
+        ? modelMetadata.inputTokens === null &&
+          modelMetadata.outputTokens === null
+        : aggregateUsage !== null &&
+          sameUsage(trace.usage, aggregateUsage) &&
+          modelMetadata.inputTokens === trace.usage.inputTokens &&
+          modelMetadata.outputTokens === trace.usage.outputTokens;
+    if (!usageMatches) {
+      addMismatch(
+        context,
+        ["modelMetadata", "inputTokens"],
+        "Accepted counsel usage must match its attempts and metadata",
+      );
+    }
+    if (
+      acceptedAttempt === undefined ||
+      acceptedAttempt.status !== "accepted" ||
+      acceptedAttempt.providerRequestId === null ||
+      modelMetadata.requestId !== acceptedAttempt.providerRequestId
+    ) {
+      addMismatch(
+        context,
+        ["modelMetadata", "requestId"],
+        "Counsel metadata must identify the accepted provider request",
+      );
+    }
+    if (acceptedAttempt?.providerResponseId === null) {
+      addMismatch(
+        context,
+        ["trace", "attempts"],
+        "The accepted counsel attempt must retain its provider response ID",
+      );
+    }
+    if (
+      trace.outputHash !== candidateHash ||
+      acceptedAttempt?.outputHash !== candidateHash
+    ) {
+      addMismatch(
+        context,
+        ["trace", "outputHash"],
+        "Counsel trace hashes must match the validated candidate",
+      );
+    }
+    if (
+      counselResponseUnsupportedCitationCount(output) !== 0 ||
+      !sameCitations(trace.acceptedCitations, candidateCitations) ||
+      acceptedAttempt?.proposedCitationCount !==
+        candidateProposedCitationCount
+    ) {
+      addMismatch(
+        context,
+        ["trace", "acceptedCitations"],
+        "Counsel citations must exactly match supported public audit fields",
+      );
+    }
+    if (
+      trace.committedActionId !== null ||
+      trace.committedEventId !== null
+    ) {
+      addMismatch(
+        context,
+        ["trace", "committedActionId"],
+        "A counsel pre-commit trace cannot identify committed records",
+      );
+    }
+  });
+
+export type HearingCounselResponsePrecommit = z.infer<
+  typeof HearingCounselResponsePrecommitSchema
 >;

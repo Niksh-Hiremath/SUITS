@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_REQUEST_SCHEMA_VERSION,
@@ -10,6 +11,10 @@ import {
   COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
 } from "../courtroom-ai/model-call-trace";
 import {
+  createCounselQuestionOutputFixture,
+  createCounselResponseRequestFixture,
+} from "../../server/courtroom-ai/counsel-response.test-fixtures";
+import {
   createOpponentPlannerOutputFixture,
   createOpponentPlannerRequestFixture,
 } from "../../server/courtroom-ai/opponent-planner.test-fixtures";
@@ -18,18 +23,23 @@ import {
   type HearingRuntimeViewV1,
 } from "./schema";
 import {
+  HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
+  HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
+  counselResponseOutputCitations,
+  hashCounselResponseModelOutput,
   hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   opponentPlannerOutputCitations,
   witnessAnswerOutputCitations,
+  type HearingCounselResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingWitnessGenerationPrecommit,
 } from "./model-boundary";
@@ -41,6 +51,7 @@ const PROVIDER_REQUEST_ID = "request:openai:001";
 const PROVIDER_RESPONSE_ID = "response:openai:001";
 const PROMPT_VERSION = "role-responder.witness-answer.prompt.v1";
 const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v1";
+const COUNSEL_PROMPT_VERSION = "role-responder.counsel.prompt.v1";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
@@ -453,6 +464,141 @@ function validOpponentPlanPrecommit(): HearingOpponentPlanPrecommit {
           outputHash,
           proposedCitationCount:
             opponentPlanProposedCitationCount(output),
+          usage,
+          validationIssueCodes: [],
+          safeErrorCode: null,
+        },
+      ],
+    },
+  });
+}
+
+function counselProposedCitationCount(
+  output: ReturnType<typeof createCounselQuestionOutputFixture>,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      Object.values(segment.citations).reduce(
+        (segmentTotal, identifiers) =>
+          segmentTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
+function validCounselResponsePrecommit(): HearingCounselResponsePrecommit {
+  const request = createCounselResponseRequestFixture();
+  const output = createCounselQuestionOutputFixture();
+  const outputHash = hashCounselResponseModelOutput(output);
+  const citations = counselResponseOutputCitations(output);
+  const citationCount = Object.values(citations).reduce(
+    (total, identifiers) => total + identifiers.length,
+    0,
+  );
+  const usage = {
+    inputTokens: 540,
+    outputTokens: 96,
+    totalTokens: 636,
+    cachedInputTokens: 180,
+    cacheWriteTokens: 0,
+    reasoningTokens: 12,
+  };
+  const providerRequestId = "request:openai:counsel-response:001";
+  const providerResponseId = "response:openai:counsel-response:001";
+
+  return HearingCounselResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    planBinding: request.planBinding,
+    output,
+    modelMetadata: {
+      model: "gpt-5.6-luna",
+      requestId: providerRequestId,
+      promptVersion: COUNSEL_PROMPT_VERSION,
+      schemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+      latencyMs: 680,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: 0.0018,
+      retryCount: 0,
+      validationFailureCount: 0,
+    },
+    trace: {
+      schemaVersion: COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+      callId: request.callId,
+      trialId: request.trialId,
+      responseId: null,
+      actorId: request.actorId,
+      actorRole: "counsel",
+      callClass: "role_responder",
+      task: "counsel_response",
+      inputEventIds: [request.expectedLastEventId],
+      expectedStateVersion: request.expectedStateVersion,
+      expectedLastEventId: request.expectedLastEventId,
+      provider: "openai-responses",
+      model: "gpt-5.6-luna",
+      providerProtocolVersion: "courtroom-model-provider.v1",
+      promptVersion: COUNSEL_PROMPT_VERSION,
+      outputSchemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+      knowledgeScope: {
+        knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
+        knowledgeViewHash: HASH_A,
+        stateVersion: request.expectedStateVersion,
+        factCount: 1,
+        evidenceCount: 1,
+        testimonyCount: 1,
+        priorStatementCount: 0,
+        sourceSegmentCount: 0,
+        publicRecordEventCount: 0,
+        currentExchangeCount: 0,
+      },
+      promptAudit: {
+        stablePrefixHash: HASH_A,
+        trustedContextHash: HASH_B,
+        untrustedInputHash: HASH_C,
+        inputCharacterCount: 1_400,
+      },
+      status: "accepted",
+      startedAt: "2026-07-19T06:30:00.000Z",
+      completedAt: "2026-07-19T06:30:00.680Z",
+      latencyMs: 680,
+      firstStructuredDeltaMs: 210,
+      firstAcceptedSegmentMs: null,
+      retryCount: 0,
+      validationFailureCount: 0,
+      estimatedCostUsd: 0.0018,
+      usage,
+      acceptedAttempt: 1,
+      acceptedCitations: citations,
+      acceptedCitationCount: citationCount,
+      outputHash,
+      outputCharacterCount: JSON.stringify(output).length,
+      committedActionId: null,
+      committedEventId: null,
+      safeFailureCode: null,
+      attempts: [
+        {
+          schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+          attempt: 1,
+          mode: "initial",
+          status: "accepted",
+          providerRequestId,
+          providerResponseId,
+          startedAt: "2026-07-19T06:30:00.000Z",
+          completedAt: "2026-07-19T06:30:00.680Z",
+          latencyMs: 680,
+          firstStructuredDeltaMs: 210,
+          streamEventCount: 11,
+          structuredDeltaCount: 4,
+          streamedCharacterCount: 460,
+          outputHash,
+          proposedCitationCount: counselProposedCitationCount(output),
           usage,
           validationIssueCodes: [],
           safeErrorCode: null,
@@ -916,6 +1062,295 @@ describe("hearing command model boundary", () => {
 
       expect(
         HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a planner-bound, uncommitted counsel response", () => {
+    const envelope = validCounselResponsePrecommit();
+
+    expect(HearingCounselResponsePrecommitSchema.parse(envelope)).toEqual(
+      envelope,
+    );
+    expect(envelope.trace.outputHash).toBe(
+      hashCounselResponseModelOutput(envelope.output),
+    );
+    expect(envelope.trace.acceptedCitations).toEqual(
+      counselResponseOutputCitations(envelope.output),
+    );
+    expect(envelope.trace.expectedStateVersion).toBe(
+      envelope.expectedStateVersion,
+    );
+    expect(envelope.trace.expectedLastEventId).toBe(
+      envelope.expectedLastEventId,
+    );
+  });
+
+  it("accepts absent optional counsel usage only when metadata also omits it", () => {
+    const envelope = validCounselResponsePrecommit();
+    envelope.trace.usage = null;
+    envelope.trace.attempts[0].usage = null;
+    envelope.modelMetadata.inputTokens = null;
+    envelope.modelMetadata.outputTokens = null;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    "ownerId",
+    "actorId",
+    "actionId",
+    "eventId",
+    "stateJson",
+    "graphJson",
+    "policyJson",
+    "knowledgeView",
+    "privateSettlement",
+  ])("rejects forbidden counsel precommit %s data", (field) => {
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse({
+        ...validCounselResponsePrecommit(),
+        [field]: "must-be-derived-or-revalidated-server-side",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a strict decision and private planner binding", () => {
+    const missingDecision = {
+      ...validCounselResponsePrecommit(),
+    } as Record<string, unknown>;
+    delete missingDecision.decisionId;
+    const forgedPrivatePlan = validCounselResponsePrecommit();
+    const duplicateCallIdentity = validCounselResponsePrecommit();
+    duplicateCallIdentity.planBinding.plannerCallId =
+      duplicateCallIdentity.callId;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(missingDecision)
+        .success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse({
+        ...forgedPrivatePlan,
+        planBinding: {
+          ...forgedPrivatePlan.planBinding,
+          privateStrategy: "never cross this boundary",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(duplicateCallIdentity)
+        .success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["trialId", "trial:other"],
+    ["callId", "call:counsel-response:other"],
+    ["expectedStateVersion", 99],
+    ["expectedLastEventId", "event:other"],
+  ] as const)("rejects a mismatched counsel trace %s", (field, value) => {
+    const envelope = validCounselResponsePrecommit();
+    Object.assign(envelope.trace, { [field]: value });
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("rejects a counsel trace without the exact event-head input", () => {
+    const missingHead = validCounselResponsePrecommit();
+    missingHead.trace.inputEventIds = [];
+    const extraHead = validCounselResponsePrecommit();
+    extraHead.trace.inputEventIds.push("event:unrelated");
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(missingHead).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(extraHead).success,
+    ).toBe(false);
+  });
+
+  it("rejects the wrong counsel task, role, model, or response identity", () => {
+    const wrongTask = validCounselResponsePrecommit();
+    wrongTask.trace.task = "witness_answer";
+    const wrongRole = validCounselResponsePrecommit();
+    wrongRole.trace.actorRole = "witness";
+    const wrongModel = validCounselResponsePrecommit();
+    wrongModel.trace.model = "gpt-5.6-terra";
+    wrongModel.modelMetadata.model = "gpt-5.6-terra";
+    const responseBound = validCounselResponsePrecommit();
+    responseBound.trace.responseId = "response:forged";
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongTask).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongRole).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongModel).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(responseBound).success,
+    ).toBe(false);
+  });
+
+  it("requires the public counsel KnowledgeView audit at the bound head", () => {
+    const privateView = validCounselResponsePrecommit();
+    privateView.trace.knowledgeScope.knowledgeSchemaVersion =
+      "knowledge-view.opponent-planner.v1";
+    const staleView = validCounselResponsePrecommit();
+    if (staleView.trace.knowledgeScope.stateVersion === null) {
+      throw new Error("Fixture requires a counsel KnowledgeView state version");
+    }
+    staleView.trace.knowledgeScope.stateVersion += 1;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(privateView).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(staleView).success,
+    ).toBe(false);
+  });
+
+  it.each<{
+    field: string;
+    mutate: (envelope: HearingCounselResponsePrecommit) => void;
+  }>([
+    {
+      field: "promptVersion",
+      mutate: (envelope) => {
+        envelope.trace.promptVersion = "role-responder.counsel.prompt.v2";
+        envelope.modelMetadata.promptVersion =
+          "role-responder.counsel.prompt.v2";
+      },
+    },
+    {
+      field: "schemaVersion",
+      mutate: (envelope) => {
+        envelope.trace.outputSchemaVersion = "wrong.schema.v1";
+        envelope.modelMetadata.schemaVersion = "wrong.schema.v1";
+      },
+    },
+    {
+      field: "latencyMs",
+      mutate: (envelope) => {
+        envelope.modelMetadata.latencyMs =
+          (envelope.modelMetadata.latencyMs ?? 0) + 1;
+      },
+    },
+    {
+      field: "estimatedCostUsd",
+      mutate: (envelope) => {
+        envelope.modelMetadata.estimatedCostUsd = 0.5;
+      },
+    },
+    {
+      field: "requestId",
+      mutate: (envelope) => {
+        envelope.modelMetadata.requestId = "request:wrong";
+      },
+    },
+    {
+      field: "retryCount",
+      mutate: (envelope) => {
+        envelope.modelMetadata.retryCount += 1;
+      },
+    },
+  ])("rejects counsel metadata $field mismatches", ({ mutate }) => {
+    const envelope = validCounselResponsePrecommit();
+    mutate(envelope);
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("requires accepted provider request and response identities", () => {
+    const missingRequest = validCounselResponsePrecommit();
+    missingRequest.trace.attempts[0].providerRequestId = null;
+    missingRequest.modelMetadata.requestId = null;
+    const missingResponse = validCounselResponsePrecommit();
+    missingResponse.trace.attempts[0].providerResponseId = null;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(missingRequest).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(missingResponse).success,
+    ).toBe(false);
+  });
+
+  it("rejects counsel output hash, citation, and raw-count mismatches", () => {
+    const wrongHash = validCounselResponsePrecommit();
+    wrongHash.trace.outputHash = "f".repeat(64);
+    wrongHash.trace.attempts[0].outputHash = "f".repeat(64);
+    const wrongCitation = validCounselResponsePrecommit();
+    wrongCitation.trace.acceptedCitations.factIds = ["fact:other"];
+    const wrongCount = validCounselResponsePrecommit();
+    wrongCount.trace.attempts[0].proposedCitationCount += 1;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongHash).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongCitation).success,
+    ).toBe(false);
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(wrongCount).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    "transcriptTurnIds",
+    "sourceSegmentIds",
+    "priorStatementIds",
+    "issueIds",
+    "instructionIds",
+    "ruleIds",
+    "settlementOfferIds",
+  ] as const)("rejects unsupported/private counsel %s", (field) => {
+    const envelope = validCounselResponsePrecommit();
+    envelope.output.speechSegments[0].citations[field] = [
+      `${field}:forbidden`,
+    ];
+    const outputHash = hashCounselResponseModelOutput(envelope.output);
+    envelope.trace.outputHash = outputHash;
+    envelope.trace.attempts[0].outputHash = outputHash;
+    envelope.trace.attempts[0].proposedCitationCount =
+      counselProposedCitationCount(envelope.output);
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("rejects counsel usage not accounted for by its attempts", () => {
+    const envelope = validCounselResponsePrecommit();
+    if (envelope.trace.usage === null) {
+      throw new Error("Fixture requires counsel-response usage");
+    }
+    envelope.trace.usage.inputTokens += 1;
+    envelope.trace.usage.totalTokens += 1;
+    envelope.modelMetadata.inputTokens = envelope.trace.usage.inputTokens;
+
+    expect(
+      HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it.each(["committedActionId", "committedEventId"] as const)(
+    "rejects a counsel precommit with %s populated",
+    (field) => {
+      const envelope = validCounselResponsePrecommit();
+      envelope.trace[field] = `${field}:already-committed`;
+
+      expect(
+        HearingCounselResponsePrecommitSchema.safeParse(envelope).success,
       ).toBe(false);
     },
   );
