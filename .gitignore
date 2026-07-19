@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # next.js
 /.next/
@@ -23,6 +26,10 @@
 # misc
 .DS_Store
 *.pem
+**/__pycache__/
+*.py[cod]
+.venv/
+services/speech/.cache/
 
 # debug
 npm-debug.log*
