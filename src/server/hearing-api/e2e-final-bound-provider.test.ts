@@ -65,6 +65,10 @@ describe("final-bound Playwright provider gate", () => {
       environment: { ...LOOPBACK_ENVIRONMENT, nodeEnv: "production" },
     },
     {
+      name: "unspecified runtime",
+      environment: { ...LOOPBACK_ENVIRONMENT, nodeEnv: undefined },
+    },
+    {
       name: "non-loopback",
       environment: { ...LOOPBACK_ENVIRONMENT, hostname: "dev.example.test" },
     },

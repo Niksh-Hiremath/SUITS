@@ -159,7 +159,12 @@ function scriptedProvider(): CourtroomModelProvider {
 }
 
 function isLoopback(hostname: string): boolean {
-  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  return (
+    hostname === "127.0.0.1" ||
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }
 
 /**
@@ -172,7 +177,7 @@ export function resolveE2EFinalBoundProvider(
   const scenario = environment.scenario?.trim();
   if (scenario === undefined || scenario === "") return undefined;
   if (
-    environment.nodeEnv === "production" ||
+    (environment.nodeEnv !== "development" && environment.nodeEnv !== "test") ||
     !isLoopback(environment.hostname) ||
     scenario !== E2E_FINAL_BOUND_SCENARIO
   ) {
