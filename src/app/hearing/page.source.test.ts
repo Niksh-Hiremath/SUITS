@@ -5,6 +5,15 @@ import { describe, expect, it } from "vitest";
 
 const SOURCE_PATHS = {
   page: fileURLToPath(new URL("./page.tsx", import.meta.url)),
+  developerInput: fileURLToPath(
+    new URL("./developer-typed-input.tsx", import.meta.url),
+  ),
+  hearingController: fileURLToPath(
+    new URL("../../lib/speech/hearing-controller.ts", import.meta.url),
+  ),
+  sessionPolicy: fileURLToPath(
+    new URL("./session-policy.ts", import.meta.url),
+  ),
   startRoute: fileURLToPath(
     new URL("../api/hearings/route.ts", import.meta.url),
   ),
@@ -104,6 +113,44 @@ describe("V3 hearing page boundary", () => {
       "export const commitDebriefGeneration = internalAction",
     );
     expect(sources.runtime).not.toContain("createDeterministicWitnessAnswer");
+
+    expect(sources.page).toContain("new HearingController");
+    expect(sources.page).toContain(
+      "initialTrialId === createdTrialIdRef.current",
+    );
+    expect(sources.page).toContain(
+      "createdTrialIdRef.current = parsed.data.trial.trialId",
+    );
+    expect(sources.page).toContain("window.location.reload()");
+    expect(sources.page).toContain("Reload durable record");
+    expect(sources.page).toContain("shouldReloadHearingSession");
+    expect(sources.page).toContain("hearingLifecycleBlocksCourtroomControls");
+    expect(sources.sessionPolicy).toContain('lifecycle === "preparing"');
+    expect(sources.page).toContain('className="voice-status" role="alert"');
+    expect(sources.page).toContain(".baselineView(parsed.data)");
+    expect(sources.page).toContain(".adoptView(");
+    expect(sources.page).toContain('source: "new_hearing"');
+    expect(sources.page).toContain('source: "command"');
+    expect(sources.page).toContain('source: "recovery"');
+    expect(sources.page).toContain(".startRecording(mode)");
+    expect(sources.page).toContain(".stopRecording()");
+    expect(sources.page).toContain(".speakerTest()");
+    expect(sources.page).not.toContain("<textarea");
+    expect(sources.page).not.toContain("sendPcmFrame");
+    expect(sources.page).not.toContain("frame.pcm");
+
+    for (const gate of [
+      'process.env.NODE_ENV !== "production"',
+      'process.env.NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT === "1"',
+    ]) {
+      expect(sources.page).toContain(gate);
+      expect(sources.developerInput).toContain(gate);
+    }
+    expect(sources.developerInput).toContain("<textarea");
+    expect(sources.developerInput).toContain("submitDeveloperFinal(mode, normalized)");
+    expect(sources.hearingController).not.toMatch(
+      /\bfetch\s*\(|\bXMLHttpRequest\b|\bsendBeacon\b|\bMediaRecorder\b/u,
+    );
 
     for (const forbidden of [
       "convex/react",

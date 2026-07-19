@@ -540,7 +540,8 @@ footer {
   background: rgba(185, 138, 61, 0.16);
 }
 
-.advocacy-box label {
+.advocacy-box label,
+.advocacy-box .advocacy-label {
   display: block;
   margin-bottom: 10px;
   color: white;
@@ -967,10 +968,15 @@ footer {
 .voice-status {
   margin-top: 0.75rem;
   padding: 0.7rem 0.85rem;
-  border-left: 3px solid var(--gold);
-  background: rgba(255, 255, 255, 0.1);
-  color: #fffdf7;
+  border-left: 3px solid var(--wine);
+  background: #fff0f2;
+  color: #6f1429;
   font-size: 0.9rem;
+}
+
+.voice-status span {
+  display: block;
+  margin-top: 0.35rem;
 }
 
 .voice-controls { justify-content: flex-start; }

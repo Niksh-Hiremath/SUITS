@@ -21,8 +21,56 @@ import {
   type StartHearingRequest,
 } from "@/domain/hearing-runtime";
 import { hearingUrl, trialIdFromSearch } from "@/domain/hearing-journey";
+import {
+  HearingController,
+  type HearingControllerSnapshot,
+  type HearingFinalSubmission,
+} from "@/lib/speech/hearing-controller";
+import type { HearingSpeechViewSource } from "@/lib/speech/hearing-policy";
+
+import { DeveloperTypedInput } from "./developer-typed-input";
+import {
+  hearingLifecycleBlocksCourtroomControls,
+  shouldReloadHearingSession,
+} from "./session-policy";
 
 const DEFAULT_CASE_SLUG = "redwood-signal-retaliation";
+const DEFAULT_LOCAL_SPEECH_URL = "ws://127.0.0.1:8765/v1/speech";
+const LOCAL_SPEECH_URL =
+  process.env.NEXT_PUBLIC_SUITS_SPEECH_URL?.trim() || DEFAULT_LOCAL_SPEECH_URL;
+const DEV_TYPED_INPUT_ENABLED =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT === "1";
+
+type PendingSpeechAdoption = Readonly<{
+  previous: HearingRuntimeViewV1 | null;
+  next: HearingRuntimeViewV1;
+  source: HearingSpeechViewSource;
+}>;
+
+function speechStatusLabel(snapshot: HearingControllerSnapshot | null): string {
+  if (snapshot === null) return "Local audio controller unavailable";
+  switch (snapshot.lifecycle) {
+    case "idle":
+      return "Local audio needs preparation";
+    case "preparing":
+      return "Preparing microphone and local models";
+    case "ready":
+      return "Local courtroom audio ready";
+    case "recording":
+      return "Listening locally";
+    case "processing":
+      return "Finalizing the local transcript";
+    case "speaking":
+      return "Playing courtroom speech";
+    case "recoverable_error":
+      return "Local audio needs attention";
+    case "fatal_error":
+      return "Local audio stopped safely";
+    case "closed":
+      return "Local audio closed";
+  }
+}
 
 function readable(value: string): string {
   return value.replaceAll("_", " ").replaceAll("-", " ");
@@ -126,15 +174,32 @@ function HearingPageContent() {
   const [loading, setLoading] = useState(Boolean(initialTrialId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [question, setQuestion] = useState("");
-  const [closing, setClosing] = useState("");
   const [pendingStart, setPendingStart] = useState(false);
   const [pendingIntent, setPendingIntent] =
     useState<HearingPlayerIntent | null>(null);
+  const viewRef = useRef<HearingRuntimeViewV1 | null>(null);
+  const busyRef = useRef(false);
+  const pendingIntentRef = useRef<HearingPlayerIntent | null>(null);
+  const createdTrialIdRef = useRef<string | undefined>(undefined);
+  const observedTrialSearchRef = useRef(initialTrialId);
   const pendingStartRequest = useRef<StartHearingRequest | undefined>(
     undefined,
   );
   const pendingCommand = useRef<HearingPlayerCommand | undefined>(undefined);
+  const speechControllerRef = useRef<HearingController | null>(null);
+  const speechQueueRef = useRef<PendingSpeechAdoption[]>([]);
+  const speechDrainPromiseRef = useRef<Promise<void> | null>(null);
+  const requestSpeechDrainRef = useRef<() => void>(() => undefined);
+  const commitFinalRef = useRef<
+    (submission: HearingFinalSubmission) => Promise<void>
+  >(async () => {
+    throw new Error("The hearing command bridge is not ready.");
+  });
+  const [speechController, setSpeechController] =
+    useState<HearingController | null>(null);
+  const [speechSnapshot, setSpeechSnapshot] =
+    useState<HearingControllerSnapshot | null>(null);
+  const [speechSetupError, setSpeechSetupError] = useState<string>();
   const trialId = createdTrialId ?? initialTrialId;
 
   const caseSelector = useMemo(() => {
@@ -149,7 +214,75 @@ function HearingPageContent() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!initialTrialId) return;
+    let disposed = false;
+    let controller: HearingController;
+    try {
+      controller = new HearingController({
+        url: LOCAL_SPEECH_URL,
+        getView: () => viewRef.current,
+        getActivity: () => ({
+          busy: busyRef.current,
+          pending: pendingIntentRef.current !== null,
+        }),
+        commitFinal: (submission) => commitFinalRef.current(submission),
+      });
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : "The local audio controller could not be created.";
+      queueMicrotask(() => {
+        if (!disposed) setSpeechSetupError(message);
+      });
+      return () => {
+        disposed = true;
+      };
+    }
+
+    speechControllerRef.current = controller;
+    const unsubscribe = controller.subscribe((snapshot) => {
+      setSpeechSnapshot(snapshot);
+      if (snapshot.lifecycle === "ready") requestSpeechDrainRef.current();
+    });
+    queueMicrotask(() => {
+      if (disposed) return;
+      setSpeechController(controller);
+      setSpeechSnapshot(controller.snapshot);
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+      if (speechControllerRef.current === controller) {
+        speechControllerRef.current = null;
+      }
+      void controller.close().catch(() => {
+        // close() has already fenced capture/playback and retained its safe status.
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousTrialId = observedTrialSearchRef.current;
+    observedTrialSearchRef.current = initialTrialId;
+    const activeTrialId = viewRef.current?.trial.trialId;
+    if (
+      shouldReloadHearingSession({
+        previousSearchTrialId: previousTrialId,
+        currentSearchTrialId: initialTrialId,
+        createdTrialId: createdTrialIdRef.current,
+        activeTrialId,
+      })
+    ) {
+      // A controller is scoped to one durable transcript baseline. A cross-trial
+      // history navigation reloads that local-only state instead of mixing queues.
+      window.location.reload();
+    }
+  }, [createdTrialId, initialTrialId]);
+
+  useEffect(() => {
+    if (!initialTrialId || initialTrialId === createdTrialIdRef.current) return;
+    const activeTrialId = viewRef.current?.trial.trialId;
+    if (activeTrialId !== undefined && activeTrialId !== initialTrialId) return;
     const controller = new AbortController();
     void (async () => {
       setLoading(true);
@@ -162,7 +295,10 @@ function HearingPageContent() {
         if (!response.ok) throw new Error(await responseError(response));
         const parsed = HearingRuntimeViewV1Schema.safeParse(await response.json());
         if (!parsed.success) throw new Error("The saved hearing response was invalid.");
+        speechQueueRef.current.length = 0;
+        viewRef.current = parsed.data;
         setView(parsed.data);
+        speechControllerRef.current?.baselineView(parsed.data);
       } catch (caught) {
         if (!controller.signal.aborted) {
           setError(
@@ -176,23 +312,107 @@ function HearingPageContent() {
       }
     })();
     return () => controller.abort();
-  }, [initialTrialId]);
+  }, [createdTrialId, initialTrialId]);
 
-  async function execute(work: () => Promise<void>): Promise<boolean> {
+  function publishView(next: HearingRuntimeViewV1): void {
+    viewRef.current = next;
+    setView(next);
+  }
+
+  function queueSpeech(adoption: PendingSpeechAdoption): void {
+    speechQueueRef.current.push(adoption);
+    requestSpeechDrainRef.current();
+  }
+
+  function requestSpeechDrain(): void {
+    if (
+      speechDrainPromiseRef.current !== null ||
+      busyRef.current ||
+      pendingIntentRef.current !== null ||
+      speechQueueRef.current.length === 0
+    ) {
+      return;
+    }
+    const controller = speechController;
+    if (controller === null || controller.snapshot.lifecycle !== "ready") return;
+
+    const drain = async (): Promise<void> => {
+      while (
+        !busyRef.current &&
+        pendingIntentRef.current === null &&
+        speechQueueRef.current.length > 0
+      ) {
+        const activeController = speechController;
+        if (
+          activeController === null ||
+          activeController.snapshot.lifecycle !== "ready"
+        ) {
+          return;
+        }
+        const adoption = speechQueueRef.current.shift();
+        if (adoption === undefined) return;
+        try {
+          await activeController.adoptView(
+            adoption.previous,
+            adoption.next,
+            adoption.source,
+          );
+          setSpeechSetupError(undefined);
+        } catch (cause) {
+          setSpeechSetupError(
+            cause instanceof Error
+              ? cause.message
+              : "The committed courtroom speech could not be played locally.",
+          );
+          return;
+        }
+      }
+    };
+
+    const pendingDrain = drain();
+    speechDrainPromiseRef.current = pendingDrain;
+    void pendingDrain.finally(() => {
+      if (speechDrainPromiseRef.current === pendingDrain) {
+        speechDrainPromiseRef.current = null;
+      }
+      requestSpeechDrainRef.current();
+    });
+  }
+  useEffect(() => {
+    requestSpeechDrainRef.current = requestSpeechDrain;
+  });
+
+  function setPendingIntentState(intent: HearingPlayerIntent | null): void {
+    pendingIntentRef.current = intent;
+    setPendingIntent(intent);
+  }
+
+  async function executeOrThrow(work: () => Promise<void>): Promise<void> {
+    busyRef.current = true;
     setBusy(true);
     setError(undefined);
     try {
       await work();
-      return true;
     } catch (caught) {
-      setError(
+      const failure =
         caught instanceof Error
-          ? caught.message
-          : "The courtroom action could not be committed.",
-      );
-      return false;
+          ? caught
+          : new Error("The courtroom action could not be committed.");
+      setError(failure.message);
+      throw failure;
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      requestSpeechDrainRef.current();
+    }
+  }
+
+  async function execute(work: () => Promise<void>): Promise<boolean> {
+    try {
+      await executeOrThrow(work);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -221,7 +441,9 @@ function HearingPageContent() {
       if (!parsed.success) throw new Error("The new hearing response was invalid.");
       pendingStartRequest.current = undefined;
       setPendingStart(false);
-      setView(parsed.data);
+      createdTrialIdRef.current = parsed.data.trial.trialId;
+      publishView(parsed.data);
+      queueSpeech({ previous: null, next: parsed.data, source: "new_hearing" });
       setCreatedTrialId(parsed.data.trial.trialId);
       window.history.replaceState(
         null,
@@ -231,9 +453,10 @@ function HearingPageContent() {
     });
   }
 
-  async function commitIntent(intent: HearingPlayerIntent): Promise<boolean> {
-    return execute(async () => {
-      if (!view) throw new Error("The hearing is not ready.");
+  async function commitIntentOrThrow(intent: HearingPlayerIntent): Promise<void> {
+    await executeOrThrow(async () => {
+      const previous = viewRef.current;
+      if (previous === null) throw new Error("The hearing is not ready.");
       const retained = pendingCommand.current;
       if (
         retained &&
@@ -249,15 +472,15 @@ function HearingPageContent() {
           schemaVersion: HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
           requestId: crypto.randomUUID(),
           requestedAt: new Date().toISOString(),
-          expectedStateVersion: view.trial.version,
-          expectedLastEventId: view.trial.lastEventId,
+          expectedStateVersion: previous.trial.version,
+          expectedLastEventId: previous.trial.lastEventId,
           intent,
         } satisfies HearingPlayerCommand);
       pendingCommand.current = command;
-      setPendingIntent(command.intent);
+      setPendingIntentState(command.intent);
       try {
         const response = await fetch(
-          `/api/hearings/${encodeURIComponent(view.trial.trialId)}/commands`,
+          `/api/hearings/${encodeURIComponent(previous.trial.trialId)}/commands`,
           {
             method: "POST",
             credentials: "same-origin",
@@ -271,12 +494,13 @@ function HearingPageContent() {
           throw new Error("The updated hearing response was invalid.");
         }
         pendingCommand.current = undefined;
-        setPendingIntent(null);
-        setView(parsed.data);
+        setPendingIntentState(null);
+        publishView(parsed.data);
+        queueSpeech({ previous, next: parsed.data, source: "command" });
       } catch (caught) {
         try {
           const recovery = await fetch(
-            `/api/hearings/${encodeURIComponent(view.trial.trialId)}`,
+            `/api/hearings/${encodeURIComponent(previous.trial.trialId)}`,
             { credentials: "same-origin", cache: "no-store" },
           );
           if (!recovery.ok) throw new Error(await responseError(recovery));
@@ -286,7 +510,8 @@ function HearingPageContent() {
           if (!refreshed.success) {
             throw new Error("The refreshed hearing response was invalid.");
           }
-          setView(refreshed.data);
+          publishView(refreshed.data);
+          queueSpeech({ previous, next: refreshed.data, source: "recovery" });
         } catch (recoveryError) {
           throw new Error(
             "The action is still pending and the durable record could not be refreshed. Retry when the service is available.",
@@ -294,6 +519,68 @@ function HearingPageContent() {
           );
         }
         throw caught;
+      }
+    });
+  }
+
+  async function commitIntent(intent: HearingPlayerIntent): Promise<boolean> {
+    try {
+      await commitIntentOrThrow(intent);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    commitFinalRef.current = async (submission) => {
+      await commitIntentOrThrow(submission.intent);
+    };
+  });
+
+  async function performSpeechAction(work: () => Promise<void>): Promise<void> {
+    setSpeechSetupError(undefined);
+    try {
+      await work();
+    } catch (cause) {
+      setSpeechSetupError(
+        cause instanceof Error
+          ? cause.message
+          : "The local courtroom audio action failed safely.",
+      );
+    }
+  }
+
+  function prepareSpeech(): void {
+    const controller = speechController;
+    if (controller === null) {
+      setSpeechSetupError("The local audio controller is unavailable.");
+      return;
+    }
+    void performSpeechAction(async () => {
+      await controller.prepare();
+    });
+  }
+
+  function testSpeaker(): void {
+    const controller = speechController;
+    if (controller === null) return;
+    void performSpeechAction(async () => {
+      await controller.speakerTest();
+    });
+  }
+
+  function toggleRecording(mode: "question" | "closing"): void {
+    const controller = speechController;
+    if (controller === null) return;
+    void performSpeechAction(async () => {
+      if (
+        controller.snapshot.lifecycle === "recording" &&
+        controller.snapshot.activeMode === mode
+      ) {
+        await controller.stopRecording();
+      } else {
+        await controller.startRecording(mode);
       }
     });
   }
@@ -311,6 +598,16 @@ function HearingPageContent() {
   const witnessAnswerCount =
     view?.transcript.filter((turn) => turn.actor.role === "witness").length ?? 0;
   const canFinishTrial = Boolean(view?.capabilities.canFinishTrial);
+  const speechLifecycle = speechSnapshot?.lifecycle;
+  const speechIsRecording = speechLifecycle === "recording";
+  const speechCanStartRecording =
+    speechLifecycle === "ready" || speechLifecycle === "speaking";
+  const speechBlocksCourtroomControls =
+    hearingLifecycleBlocksCourtroomControls(speechLifecycle);
+  const questionIsRecording =
+    speechIsRecording && speechSnapshot?.activeMode === "question";
+  const closingIsRecording =
+    speechIsRecording && speechSnapshot?.activeMode === "closing";
 
   return (
     <main className="hearing-shell">
@@ -396,6 +693,66 @@ function HearingPageContent() {
               <span>{view.transcript.length} turns · E-{view.trial.sequence}</span>
             </div>
 
+            <div className="voice-primary" aria-live="polite">
+              <span>Browser-to-local speech companion</span>
+              <strong>{speechStatusLabel(speechSnapshot)}</strong>
+              <small>
+                Microphone frames stay on the direct local WebSocket path. Only a
+                validated final transcript can become a courtroom command.
+              </small>
+              {speechSnapshot?.capabilities && (
+                <small>
+                  {speechSnapshot.capabilities.serviceMode} mode ·{" "}
+                  {speechSnapshot.capabilities.providers
+                    .filter((provider) => provider.ready)
+                    .map((provider) => provider.kind)
+                    .join(" + ") || "providers unavailable"}
+                </small>
+              )}
+              <div className="input-actions voice-controls">
+                {(speechLifecycle === "idle" ||
+                  speechLifecycle === "recoverable_error") && (
+                  <button
+                    className="voice-primary-button"
+                    disabled={busy || Boolean(pendingIntent)}
+                    onClick={prepareSpeech}
+                    type="button"
+                  >
+                    {speechLifecycle === "recoverable_error"
+                      ? "Prepare local audio again"
+                      : "Prepare local audio"}
+                  </button>
+                )}
+                {speechLifecycle === "preparing" && (
+                  <button className="voice-primary-button" disabled type="button">
+                    Requesting local audio access…
+                  </button>
+                )}
+                {speechLifecycle === "ready" && (
+                  <button
+                    className="quiet-button voice-button"
+                    disabled={busy || Boolean(pendingIntent)}
+                    onClick={testSpeaker}
+                    type="button"
+                  >
+                    Test speaker
+                  </button>
+                )}
+              </div>
+              {(speechSnapshot?.message || speechSetupError) && (
+                <div className="voice-status" role="alert">
+                  <strong>{speechSetupError ?? speechSnapshot?.message}</strong>
+                  {(speechSnapshot === null ||
+                    speechLifecycle === "fatal_error") && (
+                    <span>
+                      Check the loopback speech service and configured URL, then
+                      reload this hearing.
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="transcript-list" aria-live="polite">
               {view.transcript.length === 0 && (
                 <div className="thinking-line">
@@ -430,49 +787,69 @@ function HearingPageContent() {
 
             {activeWitness && activeLeg && playerOwnsFloor && (
               <div className="advocacy-box">
-                <label htmlFor="question">
+                <div className="advocacy-label">
                   {readable(activeLeg.kind)} examination · {activeWitness.name}
-                </label>
+                </div>
                 <p className="required-opening">
                   Ask only about this witness’s own perceptions, prior statements, or exhibits
                   they have seen. The server will reject knowledge leakage.
                 </p>
-                <textarea
-                  disabled={Boolean(pendingIntent)}
-                  id="question"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  placeholder="Ask a focused, record-grounded question."
-                  rows={3}
-                />
-                <div className="input-actions">
+                <div className="voice-primary">
+                  <span>
+                    {readable(activeLeg.kind)} examination · {activeWitness.name}
+                  </span>
                   <button
-                    className="primary-button"
+                    className="voice-primary-button"
                     disabled={
                       busy ||
                       Boolean(pendingIntent) ||
-                      !view.capabilities.canAskQuestion ||
-                      question.trim().length < 3 ||
-                      Boolean(view.activeQuestion)
+                      Boolean(view.activeQuestion) ||
+                      (speechIsRecording
+                        ? !questionIsRecording
+                        : !speechCanStartRecording)
                     }
-                    onClick={() => void (async () => {
-                      const committed = await commitIntent({
-                        type: "ask_question",
-                        witnessId: activeWitness.witnessId,
-                        examinationKind: activeLeg.kind,
-                        text: question.trim(),
-                        presentedEvidenceIds: [],
-                      });
-                      if (committed) setQuestion("");
-                    })()}
+                    onClick={() => toggleRecording("question")}
+                    type="button"
                   >
-                    Ask witness
+                    {questionIsRecording
+                      ? "Stop and submit question"
+                      : speechLifecycle === "speaking"
+                        ? "Interrupt and ask question"
+                        : "Start spoken question"}
                   </button>
+                  <small>
+                    Speak one focused question. Final recognition is revalidated
+                    against this exact witness and record head before submission.
+                  </small>
+                  {questionIsRecording && speechSnapshot.partialText && (
+                    <div className="transcript-preview" role="status">
+                      {speechSnapshot.partialText}
+                    </div>
+                  )}
+                </div>
+                {DEV_TYPED_INPUT_ENABLED && (
+                  <DeveloperTypedInput
+                    controller={speechController}
+                    disabled={
+                      busy ||
+                      Boolean(pendingIntent) ||
+                      speechBlocksCourtroomControls ||
+                      speechLifecycle !== "ready"
+                    }
+                    label="Developer-only typed question"
+                    minimumLength={3}
+                    mode="question"
+                    onFailure={setSpeechSetupError}
+                    placeholder="Ask a focused, record-grounded question."
+                  />
+                )}
+                <div className="input-actions">
                   <button
                     className="quiet-button"
                     disabled={
                       busy ||
                       Boolean(pendingIntent) ||
+                      speechBlocksCourtroomControls ||
                       Boolean(view.activeQuestion) ||
                       !view.capabilities.canFinishExamination
                     }
@@ -492,44 +869,73 @@ function HearingPageContent() {
 
             {canFinishTrial && (
               <div className="advocacy-box closing-box">
-                <label htmlFor="closing">Closing argument</label>
-                <textarea
-                  disabled={Boolean(pendingIntent)}
-                  id="closing"
-                  value={closing}
-                  onChange={(event) => setClosing(event.target.value)}
-                  placeholder="Connect the testimony to the burden of proof."
-                  rows={5}
-                />
-                <div className="input-actions">
+                <div className="voice-primary">
+                  <span>Closing argument</span>
                   <button
-                    className="primary-button"
+                    className="voice-primary-button"
                     disabled={
-                      busy || Boolean(pendingIntent) || closing.trim().length < 12
+                      busy ||
+                      Boolean(pendingIntent) ||
+                      (speechIsRecording
+                        ? !closingIsRecording
+                        : !speechCanStartRecording)
                     }
-                    onClick={() =>
-                      void commitIntent({
-                        type: "finish_trial",
-                        closingText: closing.trim(),
-                      })
-                    }
+                    onClick={() => toggleRecording("closing")}
+                    type="button"
                   >
-                    Rest and close
+                    {closingIsRecording
+                      ? "Stop, rest, and close"
+                      : speechLifecycle === "speaking"
+                        ? "Interrupt for closing argument"
+                        : "Start spoken closing argument"}
                   </button>
+                  <small>
+                    Connect admitted testimony and exhibits to the burden of proof.
+                  </small>
+                  {closingIsRecording && speechSnapshot.partialText && (
+                    <div className="transcript-preview" role="status">
+                      {speechSnapshot.partialText}
+                    </div>
+                  )}
                 </div>
+                {DEV_TYPED_INPUT_ENABLED && (
+                  <DeveloperTypedInput
+                    controller={speechController}
+                    disabled={
+                      busy ||
+                      Boolean(pendingIntent) ||
+                      speechBlocksCourtroomControls ||
+                      speechLifecycle !== "ready"
+                    }
+                    label="Developer-only typed closing"
+                    minimumLength={12}
+                    mode="closing"
+                    onFailure={setSpeechSetupError}
+                    placeholder="Connect the testimony to the burden of proof."
+                  />
+                )}
               </div>
             )}
             {error && (
               <div className="error-banner" role="alert">
                 <span>{error}</span>
                 {pendingIntent && (
-                  <button
-                    className="quiet-button"
-                    disabled={busy}
-                    onClick={() => void commitIntent(pendingIntent)}
-                  >
-                    Retry pending action
-                  </button>
+                  <div className="input-actions">
+                    <button
+                      className="quiet-button"
+                      disabled={busy}
+                      onClick={() => void commitIntent(pendingIntent)}
+                    >
+                      Retry pending action
+                    </button>
+                    <button
+                      className="quiet-button"
+                      disabled={busy}
+                      onClick={() => window.location.reload()}
+                    >
+                      Reload durable record
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -553,7 +959,11 @@ function HearingPageContent() {
                     {canCall && (
                       <button
                         className="quiet-button"
-                        disabled={busy || Boolean(pendingIntent)}
+                        disabled={
+                          busy ||
+                          Boolean(pendingIntent) ||
+                          speechBlocksCourtroomControls
+                        }
                         onClick={() =>
                           void commitIntent({
                             type: "call_witness",
