@@ -21,6 +21,40 @@ dev = [
   "ruff>=0.12,<1",
   "websockets>=14,<17",
 ]
+local-cpu = [
+  "kokoro==0.9.4",
+  "torch==2.11.0",
+  "transformers>=5.13,<5.14",
+]
+local-cuda = [
+  "kokoro==0.9.4",
+  "torch==2.11.0",
+  "transformers>=5.13,<5.14",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "local-cpu" },
+    { extra = "local-cuda" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "local-cpu" },
+  { index = "pytorch-cu130", extra = "local-cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
