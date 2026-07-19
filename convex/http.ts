@@ -26,6 +26,20 @@ import {
   type HearingCommandPreparation,
   type HearingRuntimeViewV1,
 } from "../src/domain/hearing-runtime";
+import { FinalBoundInterruptionRequestSchema } from "../src/domain/objections/final-bound-contracts";
+import {
+  HearingFinalBoundInterruptionPreparationSchema,
+  HearingFinalBoundInterruptionClaimResultSchema,
+  HearingFinalBoundInterruptionLeaseCredentialSchema,
+  HearingFinalBoundInterruptionLeaseUpdateResultSchema,
+  HearingFinalBoundInterruptionRecoveryPreparationSchema,
+  assertFinalBoundInterruptionPreparationMatchesRequest,
+  assertFinalBoundInterruptionRecoveryPreparation,
+  type HearingFinalBoundInterruptionPreparation,
+  type HearingFinalBoundInterruptionClaimResult,
+  type HearingFinalBoundInterruptionLeaseUpdateResult,
+  type HearingFinalBoundInterruptionRecoveryPreparation,
+} from "../src/domain/objections/final-bound-persistence";
 import {
   DURABLE_PREFLIGHT_PERMIT_SCHEMA_VERSION,
   DURABLE_SERVICE_HEALTH_SCHEMA_VERSION,
@@ -213,6 +227,51 @@ const prepareHearingCommandReference = makeFunctionReference<
   { ownerId: string; trialId: string; commandJson: string },
   HearingCommandPreparation
 >("hearingRuntime:prepareCommand");
+const prepareFinalBoundInterruptionReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; requestJson: string },
+  HearingFinalBoundInterruptionPreparation
+>("hearingRuntime:prepareFinalBoundInterruption");
+const resumeFinalBoundInterruptionReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; interruptId?: string },
+  HearingFinalBoundInterruptionRecoveryPreparation
+>("hearingRuntime:resumeFinalBoundInterruption");
+const claimFinalBoundInterruptionReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; interruptId?: string },
+  HearingFinalBoundInterruptionClaimResult
+>("hearingRuntime:claimFinalBoundInterruption");
+const renewFinalBoundInterruptionClaimReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; credentialJson: string },
+  HearingFinalBoundInterruptionLeaseUpdateResult
+>("hearingRuntime:renewFinalBoundInterruptionClaim");
+const releaseFinalBoundInterruptionClaimReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; credentialJson: string },
+  HearingFinalBoundInterruptionLeaseUpdateResult
+>("hearingRuntime:releaseFinalBoundInterruptionClaim");
+const commitClaimedFinalBoundInterruptionReference = makeFunctionReference<
+  "action",
+  {
+    ownerId: string;
+    trialId: string;
+    credentialJson: string;
+    generationJson: string;
+  },
+  HearingFinalBoundInterruptionRecoveryPreparation
+>("hearingRuntime:commitClaimedFinalBoundInterruption");
+const commitClaimedFinalBoundWitnessReference = makeFunctionReference<
+  "action",
+  {
+    ownerId: string;
+    trialId: string;
+    credentialJson: string;
+    generationJson: string;
+  },
+  HearingFinalBoundInterruptionRecoveryPreparation
+>("hearingRuntime:commitClaimedFinalBoundWitness");
 const commitWitnessGenerationReference = makeFunctionReference<
   "action",
   { ownerId: string; trialId: string; generationJson: string },
@@ -272,6 +331,75 @@ const HearingServiceCommandRequestSchema = z
     command: HearingPlayerCommandSchema,
   })
   .strict();
+export const HearingServiceFinalBoundInterruptionPrepareRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    request: FinalBoundInterruptionRequestSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.request.head.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["request", "head", "trialId"],
+        message: "Interruption trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceFinalBoundInterruptionResumeRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    interruptId: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
+export const HearingServiceFinalBoundInterruptionClaimRequestSchema =
+  HearingServiceFinalBoundInterruptionResumeRequestSchema;
+export const HearingServiceFinalBoundInterruptionLeaseRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    credential: HearingFinalBoundInterruptionLeaseCredentialSchema,
+  })
+  .strict();
+export const HearingServiceFinalBoundInterruptionClaimCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    credential: HearingFinalBoundInterruptionLeaseCredentialSchema,
+    generation: HearingObjectionRulingPrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (
+      body.generation.trialId !== body.trialId ||
+      body.generation.decisionId !== body.credential.decisionId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation"],
+        message: "Claimed ruling must match the trial and leased decision",
+      });
+    }
+  });
+export const HearingServiceFinalBoundWitnessClaimCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    credential: HearingFinalBoundInterruptionLeaseCredentialSchema,
+    generation: HearingWitnessGenerationPrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Claimed witness generation must match the leased trial",
+      });
+    }
+  });
 const HearingServiceWitnessCommitRequestSchema = z
   .object({
     ownerId: CaseServiceOwnerIdSchema,
@@ -599,6 +727,188 @@ const prepareHearingCommand = httpAction(async (ctx, request) => {
   }
 });
 
+const prepareFinalBoundInterruption = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceFinalBoundInterruptionPrepareRequestSchema,
+    );
+    const result = await ctx.runAction(
+      prepareFinalBoundInterruptionReference,
+      {
+        ownerId: body.ownerId,
+        trialId: body.trialId,
+        requestJson: JSON.stringify(body.request),
+      },
+    );
+    return caseServiceJson(
+      assertFinalBoundInterruptionPreparationMatchesRequest(
+        HearingFinalBoundInterruptionPreparationSchema.parse(result),
+        body.request,
+      ),
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const resumeFinalBoundInterruption = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceFinalBoundInterruptionResumeRequestSchema,
+    );
+    const result = await ctx.runAction(resumeFinalBoundInterruptionReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      ...(body.interruptId === undefined
+        ? {}
+        : { interruptId: body.interruptId }),
+    });
+    return caseServiceJson(
+      assertFinalBoundInterruptionRecoveryPreparation(
+        HearingFinalBoundInterruptionRecoveryPreparationSchema.parse(result),
+      ),
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const claimFinalBoundInterruption = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceFinalBoundInterruptionClaimRequestSchema,
+    );
+    const parsed = HearingFinalBoundInterruptionClaimResultSchema.parse(
+      await ctx.runAction(claimFinalBoundInterruptionReference, {
+        ownerId: body.ownerId,
+        trialId: body.trialId,
+        ...(body.interruptId === undefined
+          ? {}
+          : { interruptId: body.interruptId }),
+      }),
+    );
+    if (parsed.status !== "wait") {
+      assertFinalBoundInterruptionRecoveryPreparation(parsed.recovery);
+    }
+    return caseServiceJson(parsed);
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+function finalBoundLeaseAction(
+  reference:
+    | typeof renewFinalBoundInterruptionClaimReference
+    | typeof releaseFinalBoundInterruptionClaimReference,
+) {
+  return httpAction(async (ctx, request) => {
+    try {
+      await authorizeCaseServiceRequest(
+        request,
+        process.env.SUITS_CONVEX_SERVICE_SECRET,
+      );
+      const body = await parseCaseServiceJson(
+        request,
+        HearingServiceFinalBoundInterruptionLeaseRequestSchema,
+      );
+      const parsed = HearingFinalBoundInterruptionLeaseUpdateResultSchema.parse(
+        await ctx.runAction(reference, {
+          ownerId: body.ownerId,
+          trialId: body.trialId,
+          credentialJson: JSON.stringify(body.credential),
+        }),
+      );
+      if (parsed.status === "outcome") {
+        assertFinalBoundInterruptionRecoveryPreparation(parsed.recovery);
+      }
+      return caseServiceJson(parsed);
+    } catch (error) {
+      return caseServiceErrorResponse(error);
+    }
+  });
+}
+
+const renewFinalBoundInterruptionClaim = finalBoundLeaseAction(
+  renewFinalBoundInterruptionClaimReference,
+);
+const releaseFinalBoundInterruptionClaim = finalBoundLeaseAction(
+  releaseFinalBoundInterruptionClaimReference,
+);
+
+const commitClaimedFinalBoundInterruption = httpAction(
+  async (ctx, request) => {
+    try {
+      await authorizeCaseServiceRequest(
+        request,
+        process.env.SUITS_CONVEX_SERVICE_SECRET,
+      );
+      const body = await parseCaseServiceJson(
+        request,
+        HearingServiceFinalBoundInterruptionClaimCommitRequestSchema,
+      );
+      return caseServiceJson(
+        assertFinalBoundInterruptionRecoveryPreparation(
+          HearingFinalBoundInterruptionRecoveryPreparationSchema.parse(
+            await ctx.runAction(
+              commitClaimedFinalBoundInterruptionReference,
+              {
+                ownerId: body.ownerId,
+                trialId: body.trialId,
+                credentialJson: JSON.stringify(body.credential),
+                generationJson: JSON.stringify(body.generation),
+              },
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      return caseServiceErrorResponse(error);
+    }
+  },
+);
+
+const commitClaimedFinalBoundWitness = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceFinalBoundWitnessClaimCommitRequestSchema,
+    );
+    return caseServiceJson(
+      assertFinalBoundInterruptionRecoveryPreparation(
+        HearingFinalBoundInterruptionRecoveryPreparationSchema.parse(
+          await ctx.runAction(commitClaimedFinalBoundWitnessReference, {
+            ownerId: body.ownerId,
+            trialId: body.trialId,
+            credentialJson: JSON.stringify(body.credential),
+            generationJson: JSON.stringify(body.generation),
+          }),
+        ),
+      ),
+    );
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const commitWitnessGeneration = httpAction(async (ctx, request) => {
   try {
     await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
@@ -810,6 +1120,13 @@ http.route({ path: "/service/case-draft/publish", method: "POST", handler: publi
 http.route({ path: "/service/cases/owned/list", method: "POST", handler: listOwnedCases });
 http.route({ path: "/service/hearings/start", method: "POST", handler: startHearing });
 http.route({ path: "/service/hearings/command/prepare", method: "POST", handler: prepareHearingCommand });
+http.route({ path: "/service/hearings/interruption/prepare", method: "POST", handler: prepareFinalBoundInterruption });
+http.route({ path: "/service/hearings/interruption/resume", method: "POST", handler: resumeFinalBoundInterruption });
+http.route({ path: "/service/hearings/interruption/claim", method: "POST", handler: claimFinalBoundInterruption });
+http.route({ path: "/service/hearings/interruption/claim/renew", method: "POST", handler: renewFinalBoundInterruptionClaim });
+http.route({ path: "/service/hearings/interruption/claim/release", method: "POST", handler: releaseFinalBoundInterruptionClaim });
+http.route({ path: "/service/hearings/interruption/claim/commit", method: "POST", handler: commitClaimedFinalBoundInterruption });
+http.route({ path: "/service/hearings/interruption/claim/witness/commit", method: "POST", handler: commitClaimedFinalBoundWitness });
 http.route({ path: "/service/hearings/command/commit", method: "POST", handler: commitWitnessGeneration });
 http.route({ path: "/service/hearings/opponent-plan/commit", method: "POST", handler: commitOpponentPlanGeneration });
 http.route({ path: "/service/hearings/counsel-response/commit", method: "POST", handler: commitCounselGeneration });

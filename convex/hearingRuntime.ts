@@ -1,5 +1,6 @@
 import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
+import { z } from "zod";
 
 import {
   CaseGraphV1Schema,
@@ -48,6 +49,7 @@ import {
   buildHearingRuntimeView,
   createPersistedOpponentDirective,
   deriveTrialActorBindings,
+  findOutstandingRephraseTarget,
   parsePersistedOpponentDirective,
   serializePersistedOpponentDirective,
   type HearingCounselResponsePrecommit,
@@ -67,6 +69,36 @@ import {
   buildOpponentCounselPublicKnowledgeView,
   buildOpponentPlannerKnowledgeView,
 } from "../src/domain/knowledge";
+import {
+  HEARING_FINAL_BOUND_INTERRUPTION_PREPARATION_SCHEMA_VERSION,
+  HEARING_FINAL_BOUND_INTERRUPTION_CLAIM_SCHEMA_VERSION,
+  HEARING_FINAL_BOUND_INTERRUPTION_RECOVERY_SCHEMA_VERSION,
+  HearingFinalBoundInterruptionMetadataSchema,
+  HearingFinalBoundInterruptionClaimResultSchema,
+  HearingFinalBoundInterruptionLeaseCredentialSchema,
+  HearingFinalBoundInterruptionLeaseUpdateResultSchema,
+  HearingFinalBoundInterruptionOutcomeSchema,
+  HearingFinalBoundInterruptionPreparationSchema,
+  HearingFinalBoundInterruptionRecoveryMetadataSchema,
+  HearingFinalBoundInterruptionRecoveryPreparationSchema,
+  assertFinalBoundInterruptionPreparationMatchesRequest,
+  assertFinalBoundInterruptionRecoveryPreparation,
+  assertFinalBoundInterruptionScopedPreparation,
+  deriveFinalBoundInterruptionPersistenceIds,
+  type HearingFinalBoundInterruptionMetadata,
+  type HearingFinalBoundInterruptionClaimResult,
+  type HearingFinalBoundInterruptionLeaseCredential,
+  type HearingFinalBoundInterruptionLeaseUpdateResult,
+  type HearingFinalBoundInterruptionOutcome,
+  type HearingFinalBoundInterruptionPreparation,
+  type HearingFinalBoundInterruptionRecoveryMetadata,
+  type HearingFinalBoundInterruptionRecoveryPreparation,
+  type HearingFinalBoundInterruptionScopeMetadata,
+} from "../src/domain/objections/final-bound-persistence";
+import {
+  FinalBoundInterruptionRequestSchema,
+  type FinalBoundInterruptionRequest,
+} from "../src/domain/objections/final-bound-contracts";
 import { getSeededCaseBySlug as seededCaseBySlug } from "../src/domain/seeded-cases";
 import {
   TRIAL_ACTION_SCHEMA_VERSION_V3,
@@ -178,6 +210,8 @@ const appendGeneratedForOwnerReference = makeFunctionReference<
     actionJson: string;
     generationJson: string;
     writeSnapshot?: boolean;
+    claimCredentialJson?: string;
+    claimNow?: number;
   }>,
   ActionReceipt
 >("trialEvents:appendGeneratedForOwner");
@@ -231,6 +265,8 @@ const appendObjectionRulingForOwnerReference = makeFunctionReference<
     ownerId: string;
     actionJsons: string[];
     generationJson: string;
+    claimCredentialJson?: string;
+    claimNow?: number;
   }>,
   ActionReceipt
 >("trialEvents:appendObjectionRulingForOwner");
@@ -244,6 +280,140 @@ const appendNegotiationDecisionForOwnerReference = makeFunctionReference<
   }>,
   ActionReceipt
 >("trialEvents:appendNegotiationDecisionForOwner");
+
+type FinalBoundInterruptionCommitResult =
+  | Readonly<{
+      status: "candidate_withdrawn";
+      sourceHead: FinalBoundInterruptionRequest["head"];
+      triggerRevision: number;
+      finalRevision: number;
+    }>
+  | Readonly<{
+      status: "interruption";
+      interrupt: HearingFinalBoundInterruptionMetadata;
+      outcome: HearingFinalBoundInterruptionOutcome | null;
+    }>;
+
+const prepareFinalBoundInterruptionForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{ ownerId: string; trialId: string; requestJson: string }>,
+  FinalBoundInterruptionCommitResult
+>("trialEvents:prepareFinalBoundInterruptionForOwner");
+type FinalBoundInterruptionRecoveryResult = Readonly<{
+  interrupt: HearingFinalBoundInterruptionRecoveryMetadata;
+  outcome: HearingFinalBoundInterruptionOutcome | null;
+}>;
+const recoverFinalBoundInterruptionForOwnerReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string; trialId: string; interruptId?: string }>,
+  FinalBoundInterruptionRecoveryResult
+>("trialEvents:recoverFinalBoundInterruptionForOwner");
+const resumeFinalBoundInterruptionActionReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; interruptId?: string }>,
+  HearingFinalBoundInterruptionRecoveryPreparation
+>("hearingRuntime:resumeFinalBoundInterruption");
+type ClaimMutationResult =
+  | Readonly<{ status: "outcome" }>
+  | Readonly<{
+      status: "wait";
+      leaseGeneration: number;
+      leaseExpiresAt: number;
+    }>
+  | Readonly<{
+      status: "claimed";
+      leaseGeneration: number;
+      leaseExpiresAt: number;
+    }>;
+type LeaseMutationResult =
+  | Readonly<{ status: "outcome" }>
+  | Readonly<{ status: "released" }>
+  | Readonly<{ status: "renewed"; leaseExpiresAt: number }>
+  | Readonly<{ status: "authorized" }>;
+const claimFinalBoundInterruptionReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId: string;
+    decisionId: string;
+    leaseTokenHash: string;
+    now: number;
+  }>,
+  ClaimMutationResult
+>("finalBoundInterruptionClaims:claim");
+const renewFinalBoundInterruptionReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId: string;
+    decisionId: string;
+    leaseGeneration: number;
+    leaseTokenHash: string;
+    now: number;
+  }>,
+  LeaseMutationResult
+>("finalBoundInterruptionClaims:renew");
+const releaseFinalBoundInterruptionReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId: string;
+    decisionId: string;
+    leaseGeneration: number;
+    leaseTokenHash: string;
+    now: number;
+  }>,
+  LeaseMutationResult
+>("finalBoundInterruptionClaims:release");
+const authorizeFinalBoundInterruptionCommitReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId: string;
+    decisionId: string;
+    leaseGeneration: number;
+    leaseTokenHash: string;
+    now: number;
+  }>,
+  LeaseMutationResult
+>("finalBoundInterruptionClaims:authorizeCommit");
+const authorizeFinalBoundWitnessCommitReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId: string;
+    decisionId: string;
+    leaseGeneration: number;
+    leaseTokenHash: string;
+    now: number;
+  }>,
+  LeaseMutationResult
+>("finalBoundInterruptionClaims:authorizeWitnessCommit");
+const commitObjectionRulingGenerationActionReference = makeFunctionReference<
+  "action",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    generationJson: string;
+    claimCredentialJson?: string;
+  }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitObjectionRulingGeneration");
+const commitWitnessGenerationActionReference = makeFunctionReference<
+  "action",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    generationJson: string;
+    claimCredentialJson?: string;
+  }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitWitnessGeneration");
 
 const reloadForOwnerReference = makeFunctionReference<
   "query",
@@ -1429,27 +1599,57 @@ async function prepareWitnessQuestion(
     command.requestId,
     "ask-question",
   );
+  const rephraseTarget = findOutstandingRephraseTarget({
+    state: head.state,
+    examiningActorId: counsel.actorId,
+    examiningSide: head.state.userSide,
+  });
+  if (
+    rephraseTarget !== null &&
+    (command.intent.presentedEvidenceIds.length > 0 ||
+      command.intent.witnessId !== rephraseTarget.witnessId ||
+      command.intent.examinationKind !== rephraseTarget.examinationKind)
+  ) {
+    throw new Error("REPHRASE_TARGET_MISMATCH");
+  }
   await appendRuntimeAction(
     ctx,
     ownerId,
-    actionFromIntent({
-      actionId: questionActionId,
-      trialId,
-      expectedStateVersion: command.expectedStateVersion,
-      actor: counsel,
-      source: "user",
-      requestedAt: command.requestedAt,
-      causationId: command.expectedLastEventId,
-      type: "ASK_QUESTION",
-      payload: {
-        questionId,
-        witnessId: command.intent.witnessId,
-        examinationKind: command.intent.examinationKind,
-        text: command.intent.text,
-        turnId: `turn:question:${command.requestId}`,
-        presentedEvidenceIds: command.intent.presentedEvidenceIds,
-      },
-    }),
+    rephraseTarget === null
+      ? actionFromIntent({
+          actionId: questionActionId,
+          trialId,
+          expectedStateVersion: command.expectedStateVersion,
+          actor: counsel,
+          source: "user",
+          requestedAt: command.requestedAt,
+          causationId: command.expectedLastEventId,
+          type: "ASK_QUESTION",
+          payload: {
+            questionId,
+            witnessId: command.intent.witnessId,
+            examinationKind: command.intent.examinationKind,
+            text: command.intent.text,
+            turnId: `turn:question:${command.requestId}`,
+            presentedEvidenceIds: command.intent.presentedEvidenceIds,
+          },
+        })
+      : actionFromIntent({
+          actionId: questionActionId,
+          trialId,
+          expectedStateVersion: command.expectedStateVersion,
+          actor: counsel,
+          source: "user",
+          requestedAt: command.requestedAt,
+          causationId: command.expectedLastEventId,
+          type: "REPHRASE_QUESTION",
+          payload: {
+            originalQuestionId: rephraseTarget.originalQuestionId,
+            questionId,
+            text: command.intent.text,
+            turnId: `turn:question:${command.requestId}`,
+          },
+        }),
     true,
   );
   const responseId = `response:${command.requestId}`;
@@ -2015,6 +2215,9 @@ function canonicalObjectionRulingRequest(
   const questionTurn = question
     ? input.state.transcriptTurns[question.questionTurnId]
     : undefined;
+  const questioningActor = question
+    ? input.state.actors[question.askedByActorId]
+    : undefined;
   if (
     objection === undefined ||
     objection.status !== "pending" ||
@@ -2030,6 +2233,7 @@ function canonicalObjectionRulingRequest(
     input.state.activeQuestionId !== question.questionId ||
     questionTurn === undefined ||
     questionTurn.actor.actorId !== question.askedByActorId ||
+    questioningActor === undefined ||
     input.actor.role !== "judge" ||
     input.actor.side !== "neutral" ||
     lastEventId(input.state) !== interruption.sourceEventId
@@ -2099,10 +2303,16 @@ function canonicalObjectionRulingRequest(
       interruptedResponseId: interruption.interruptedResponseId,
       sourceEventId: interruption.sourceEventId,
     },
-    permittedOutcomes: [
-      { ruling: "sustained", remedy: "cancel_response" },
-      { ruling: "overruled", remedy: "resume_response" },
-    ],
+    permittedOutcomes:
+      questioningActor.side === input.state.userSide
+        ? [
+            { ruling: "sustained", remedy: "rephrase" },
+            { ruling: "overruled", remedy: "resume_response" },
+          ]
+        : [
+            { ruling: "sustained", remedy: "cancel_response" },
+            { ruling: "overruled", remedy: "resume_response" },
+          ],
     knowledgeView,
   });
 }
@@ -3515,6 +3725,711 @@ export const prepareCommand = internalAction({
   handler: prepareCommandHandler,
 });
 
+async function scopedFinalBoundContinuation(
+  ctx: ActionCtx,
+  ownerId: string,
+  trialId: string,
+  interrupt: HearingFinalBoundInterruptionScopeMetadata,
+  outcome: HearingFinalBoundInterruptionOutcome | null,
+): Promise<
+  Readonly<{
+    preparation: HearingCommandPreparation;
+    view: HearingRuntimeViewV1;
+  }> | null
+> {
+  const head = await loadHead(ctx, ownerId, trialId);
+  const objection = head.state.objections[interrupt.objectionId];
+  const question = head.state.questions[interrupt.questionId];
+  const response = head.state.pendingResponses[interrupt.responseId];
+  const questionTurn = question
+    ? head.state.transcriptTurns[question.questionTurnId]
+    : undefined;
+  if (
+    objection === undefined ||
+    question === undefined ||
+    response === undefined ||
+    questionTurn === undefined ||
+    objection.sourceEventId !== interrupt.objectionEventId ||
+    objection.questionId !== interrupt.questionId ||
+    objection.interruptedResponseId !== interrupt.responseId ||
+    response.questionId !== interrupt.questionId ||
+    questionTurn.sourceEventId !== interrupt.questionEventId
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+
+  if (outcome === null) {
+    if (objection.status !== "pending") {
+      return null;
+    }
+    const active = head.state.activeInterruption;
+    if (
+      active === null ||
+      active.status !== "active" ||
+      active.interruptId !== interrupt.interruptId ||
+      active.objectionId !== interrupt.objectionId ||
+      active.interruptedResponseId !== interrupt.responseId ||
+      active.sourceEventId !== interrupt.interruptionEventId ||
+      response.interruptId !== interrupt.interruptId ||
+      (response.status !== "pending" && response.status !== "streaming") ||
+      head.state.activeQuestionId !== interrupt.questionId ||
+      question.activeResponseId !== interrupt.responseId
+    ) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+    }
+    const actor = actorByRole(head.state, "judge", "neutral");
+    return {
+      preparation: assertFinalBoundInterruptionScopedPreparation(
+        HearingCommandPreparationSchema.parse({
+          schemaVersion: "hearing-command-preparation.v1",
+          status: "model_required",
+          request: canonicalObjectionRulingRequest({
+            graph: head.graph,
+            state: head.state,
+            actor,
+          }),
+        }),
+        interrupt,
+        null,
+      ),
+      view: head.view,
+    };
+  }
+
+  if (
+    objection.status !== outcome.ruling ||
+    objection.remedy !== outcome.remedy
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+  if (
+    outcome.ruling === "overruled" &&
+    (response.status === "pending" || response.status === "streaming")
+  ) {
+    const active = head.state.activeInterruption;
+    if (
+      active === null ||
+      active.status !== "resumed" ||
+      active.interruptId !== interrupt.interruptId ||
+      active.objectionId !== interrupt.objectionId ||
+      active.interruptedResponseId !== interrupt.responseId ||
+      response.interruptId !== interrupt.interruptId ||
+      head.state.activeQuestionId !== interrupt.questionId ||
+      question.activeResponseId !== interrupt.responseId
+    ) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+    }
+    return {
+      preparation: assertFinalBoundInterruptionScopedPreparation(
+        HearingCommandPreparationSchema.parse({
+          schemaVersion: "hearing-command-preparation.v1",
+          status: "model_required",
+          request: canonicalWitnessAnswerRequest({
+            trialId,
+            responseId: interrupt.responseId,
+            callId: createWitnessModelCallId(trialId, interrupt.responseId),
+            graph: head.graph,
+            state: head.state,
+          }),
+        }),
+        interrupt,
+        outcome,
+      ),
+      view: head.view,
+    };
+  }
+  if (
+    (outcome.ruling === "overruled" && response.status !== "committed") ||
+    (outcome.ruling === "sustained" && response.status !== "cancelled")
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+  return {
+    preparation: assertFinalBoundInterruptionScopedPreparation(
+      HearingCommandPreparationSchema.parse({
+        schemaVersion: "hearing-command-preparation.v1",
+        status: "completed",
+        view: head.view,
+      }),
+      interrupt,
+      outcome,
+    ),
+    view: head.view,
+  };
+}
+
+/**
+ * Secret-only final-bound speech seam. The underlying mutation derives every
+ * actor, rule, ground, and durable ID from the exact owner-bound trial head and
+ * commits the four-event objection prefix atomically before this action enters
+ * the existing Luna ruling loop.
+ */
+export const prepareFinalBoundInterruption = internalAction({
+  args: { ownerId: v.string(), trialId: v.string(), requestJson: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<HearingFinalBoundInterruptionPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const request = FinalBoundInterruptionRequestSchema.parse(
+      parseJson(args.requestJson, "final_bound_interruption_request"),
+    );
+    if (request.head.trialId !== args.trialId) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_INVALID");
+    }
+    let committed = await ctx.runMutation(
+      prepareFinalBoundInterruptionForOwnerReference,
+      {
+        ownerId,
+        trialId: args.trialId,
+        requestJson: JSON.stringify(request),
+      },
+    );
+    if (committed.status === "candidate_withdrawn") {
+      const head = await loadHead(ctx, ownerId, args.trialId);
+      if (
+        head.state.version !== committed.sourceHead.stateVersion ||
+        lastEventId(head.state) !== committed.sourceHead.lastEventId
+      ) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_STALE");
+      }
+      return assertFinalBoundInterruptionPreparationMatchesRequest(
+        HearingFinalBoundInterruptionPreparationSchema.parse({
+          schemaVersion:
+            HEARING_FINAL_BOUND_INTERRUPTION_PREPARATION_SCHEMA_VERSION,
+          phase: "candidate_withdrawn",
+          reason: "final_transcript_withdrew_candidate",
+          withdrawalId:
+            deriveFinalBoundInterruptionPersistenceIds(request).withdrawalId,
+          sourceHead: committed.sourceHead,
+          triggerRevision: committed.triggerRevision,
+          finalRevision: committed.finalRevision,
+          interrupt: null,
+          preparation: {
+            schemaVersion: "hearing-command-preparation.v1",
+            status: "completed",
+            view: head.view,
+          },
+          outcome: null,
+          outcomeReplayed: false,
+        }),
+        request,
+      );
+    }
+    let interrupt = HearingFinalBoundInterruptionMetadataSchema.parse(
+      committed.interrupt,
+    );
+    let outcome =
+      committed.outcome === null
+        ? null
+        : HearingFinalBoundInterruptionOutcomeSchema.parse(committed.outcome);
+    let continuation = await scopedFinalBoundContinuation(
+      ctx,
+      ownerId,
+      args.trialId,
+      interrupt,
+      outcome,
+    );
+    if (continuation === null) {
+      // A ruling may have committed after the atomic prefix mutation but before
+      // the scoped continuation loaded its head. Re-read through the same exact
+      // idempotent mutation so the response reports that durable outcome rather
+      // than ever exposing an unrelated canonical model request.
+      committed = await ctx.runMutation(
+        prepareFinalBoundInterruptionForOwnerReference,
+        {
+          ownerId,
+          trialId: args.trialId,
+          requestJson: JSON.stringify(request),
+        },
+      );
+      if (committed.status !== "interruption") {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+      interrupt = HearingFinalBoundInterruptionMetadataSchema.parse(
+        committed.interrupt,
+      );
+      outcome =
+        committed.outcome === null
+          ? null
+          : HearingFinalBoundInterruptionOutcomeSchema.parse(committed.outcome);
+      if (outcome === null) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+      continuation = await scopedFinalBoundContinuation(
+        ctx,
+        ownerId,
+        args.trialId,
+        interrupt,
+        outcome,
+      );
+      if (continuation === null) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+    }
+    const result = HearingFinalBoundInterruptionPreparationSchema.parse(
+      outcome === null
+        ? {
+            schemaVersion:
+              HEARING_FINAL_BOUND_INTERRUPTION_PREPARATION_SCHEMA_VERSION,
+            phase: "ruling_required",
+            interrupt,
+            preparation: continuation.preparation,
+            outcome: null,
+            outcomeReplayed: false,
+          }
+        : {
+            schemaVersion:
+              HEARING_FINAL_BOUND_INTERRUPTION_PREPARATION_SCHEMA_VERSION,
+            phase: "ruling_committed",
+            interrupt,
+            preparation: continuation.preparation,
+            outcome,
+            outcomeReplayed: true,
+          },
+    );
+    return assertFinalBoundInterruptionPreparationMatchesRequest(
+      result,
+      request,
+    );
+  },
+});
+
+/**
+ * Secret-only reload seam for the canonical current final-bound interruption.
+ * Durable events replace the private partial/final transcript identity that a
+ * refreshed browser intentionally no longer possesses.
+ */
+export const resumeFinalBoundInterruption = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    interruptId: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<HearingFinalBoundInterruptionRecoveryPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const interruptId =
+      args.interruptId === undefined
+        ? undefined
+        : z.string().trim().min(1).max(256).parse(args.interruptId);
+    let recovered = await ctx.runQuery(
+      recoverFinalBoundInterruptionForOwnerReference,
+      {
+        ownerId,
+        trialId: args.trialId,
+        ...(interruptId === undefined ? {} : { interruptId }),
+      },
+    );
+    let interrupt = HearingFinalBoundInterruptionRecoveryMetadataSchema.parse(
+      recovered.interrupt,
+    );
+    let outcome =
+      recovered.outcome === null
+        ? null
+        : HearingFinalBoundInterruptionOutcomeSchema.parse(recovered.outcome);
+    let continuation = await scopedFinalBoundContinuation(
+      ctx,
+      ownerId,
+      args.trialId,
+      interrupt,
+      outcome,
+    );
+    if (continuation === null) {
+      recovered = await ctx.runQuery(
+        recoverFinalBoundInterruptionForOwnerReference,
+        {
+          ownerId,
+          trialId: args.trialId,
+          ...(interruptId === undefined ? {} : { interruptId }),
+        },
+      );
+      interrupt = HearingFinalBoundInterruptionRecoveryMetadataSchema.parse(
+        recovered.interrupt,
+      );
+      outcome =
+        recovered.outcome === null
+          ? null
+          : HearingFinalBoundInterruptionOutcomeSchema.parse(
+              recovered.outcome,
+            );
+      if (outcome === null) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+      continuation = await scopedFinalBoundContinuation(
+        ctx,
+        ownerId,
+        args.trialId,
+        interrupt,
+        outcome,
+      );
+      if (continuation === null) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+    }
+    return assertFinalBoundInterruptionRecoveryPreparation(
+      HearingFinalBoundInterruptionRecoveryPreparationSchema.parse({
+        schemaVersion: HEARING_FINAL_BOUND_INTERRUPTION_RECOVERY_SCHEMA_VERSION,
+        phase: outcome === null ? "ruling_required" : "ruling_committed",
+        interrupt,
+        preparation: continuation.preparation,
+        view: continuation.view,
+        continuation:
+          continuation.preparation.status === "completed"
+            ? "complete"
+            : "pending",
+        outcome,
+      }),
+    );
+  },
+});
+
+async function recoverFinalBoundThroughAction(
+  ctx: ActionCtx,
+  ownerId: string,
+  trialId: string,
+  interruptId?: string,
+): Promise<HearingFinalBoundInterruptionRecoveryPreparation> {
+  return assertFinalBoundInterruptionRecoveryPreparation(
+    await ctx.runAction(resumeFinalBoundInterruptionActionReference, {
+      ownerId,
+      trialId,
+      ...(interruptId === undefined ? {} : { interruptId }),
+    }),
+  );
+}
+
+function leaseMutationArgs(
+  ownerId: string,
+  trialId: string,
+  credential: HearingFinalBoundInterruptionLeaseCredential,
+) {
+  return {
+    ownerId,
+    trialId,
+    interruptId: credential.interruptId,
+    decisionId: credential.decisionId,
+    leaseGeneration: credential.leaseGeneration,
+    leaseTokenHash: sha256Utf8(credential.leaseToken),
+    now: Date.now(),
+  } as const;
+}
+
+/** Claim the only provider-owner path for one exact pending judge decision. */
+export const claimFinalBoundInterruption = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    interruptId: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<HearingFinalBoundInterruptionClaimResult> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const recovery = await recoverFinalBoundThroughAction(
+      ctx,
+      ownerId,
+      args.trialId,
+      args.interruptId,
+    );
+    if (
+      recovery.phase === "ruling_committed" &&
+      recovery.preparation.status === "completed"
+    ) {
+      return HearingFinalBoundInterruptionClaimResultSchema.parse({
+        schemaVersion: HEARING_FINAL_BOUND_INTERRUPTION_CLAIM_SCHEMA_VERSION,
+        status: "outcome",
+        interruptId: recovery.interrupt.interruptId,
+        recovery,
+      });
+    }
+    if (recovery.preparation.status !== "model_required") {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+    }
+    const decisionId = recovery.interrupt.decisionId;
+    if (recovery.phase === "ruling_required") {
+      const ruling = ObjectionRulingRequestSchema.parse(
+        recovery.preparation.request,
+      );
+      if (ruling.decisionId !== decisionId) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+      }
+    } else {
+      const witness = WitnessAnswerRequestSchema.parse(
+        recovery.preparation.request,
+      );
+      if (witness.responseId !== recovery.interrupt.responseId) {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+      }
+    }
+    const nonce = globalThis.crypto.randomUUID();
+    const leaseToken = `lease_${sha256Utf8(
+      JSON.stringify({
+        ownerId,
+        trialId: args.trialId,
+        interruptId: recovery.interrupt.interruptId,
+        decisionId,
+        nonce,
+      }),
+    )}_${nonce}`;
+    const claimed = await ctx.runMutation(
+      claimFinalBoundInterruptionReference,
+      {
+        ownerId,
+        trialId: args.trialId,
+        interruptId: recovery.interrupt.interruptId,
+        decisionId,
+        leaseTokenHash: sha256Utf8(leaseToken),
+        now: Date.now(),
+      },
+    );
+    if (claimed.status === "outcome") {
+      const outcome = await recoverFinalBoundThroughAction(
+        ctx,
+        ownerId,
+        args.trialId,
+        recovery.interrupt.interruptId,
+      );
+      if (outcome.phase !== "ruling_committed") {
+        throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+      }
+      return HearingFinalBoundInterruptionClaimResultSchema.parse({
+        schemaVersion: HEARING_FINAL_BOUND_INTERRUPTION_CLAIM_SCHEMA_VERSION,
+        status: "outcome",
+        interruptId: outcome.interrupt.interruptId,
+        recovery: outcome,
+      });
+    }
+    if (claimed.status === "wait") {
+      return HearingFinalBoundInterruptionClaimResultSchema.parse({
+        schemaVersion: HEARING_FINAL_BOUND_INTERRUPTION_CLAIM_SCHEMA_VERSION,
+        status: "wait",
+        decisionId,
+        interruptId: recovery.interrupt.interruptId,
+        leaseGeneration: claimed.leaseGeneration,
+        retryAfterMs: 1_000,
+      });
+    }
+    return HearingFinalBoundInterruptionClaimResultSchema.parse({
+      schemaVersion: HEARING_FINAL_BOUND_INTERRUPTION_CLAIM_SCHEMA_VERSION,
+      status: "claimed",
+      decisionId,
+      interruptId: recovery.interrupt.interruptId,
+      leaseGeneration: claimed.leaseGeneration,
+      leaseToken,
+      leaseExpiresAt: claimed.leaseExpiresAt,
+      recovery,
+    });
+  },
+});
+
+async function updateFinalBoundLease(
+  ctx: ActionCtx,
+  input: Readonly<{
+    operation: "renew" | "release";
+    ownerId: string;
+    trialId: string;
+    credentialJson: string;
+  }>,
+): Promise<HearingFinalBoundInterruptionLeaseUpdateResult> {
+  const ownerId = CaseServiceOwnerIdSchema.parse(input.ownerId);
+  const credential = HearingFinalBoundInterruptionLeaseCredentialSchema.parse(
+    parseJson(input.credentialJson, "final_bound_lease_credential"),
+  );
+  const result = await ctx.runMutation(
+    input.operation === "renew"
+      ? renewFinalBoundInterruptionReference
+      : releaseFinalBoundInterruptionReference,
+    leaseMutationArgs(ownerId, input.trialId, credential),
+  );
+  if (result.status === "outcome") {
+    const recovery = await recoverFinalBoundThroughAction(
+      ctx,
+      ownerId,
+      input.trialId,
+      credential.interruptId,
+    );
+    if (recovery.phase !== "ruling_committed") {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+    }
+    return HearingFinalBoundInterruptionLeaseUpdateResultSchema.parse({
+      status: "outcome",
+      recovery,
+    });
+  }
+  if (input.operation === "renew" && result.status === "renewed") {
+    return HearingFinalBoundInterruptionLeaseUpdateResultSchema.parse(result);
+  }
+  if (input.operation === "release" && result.status === "released") {
+    return HearingFinalBoundInterruptionLeaseUpdateResultSchema.parse(result);
+  }
+  throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+}
+
+export const renewFinalBoundInterruptionClaim = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    credentialJson: v.string(),
+  },
+  handler: async (ctx, args) =>
+    await updateFinalBoundLease(ctx, { ...args, operation: "renew" }),
+});
+
+export const releaseFinalBoundInterruptionClaim = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    credentialJson: v.string(),
+  },
+  handler: async (ctx, args) =>
+    await updateFinalBoundLease(ctx, { ...args, operation: "release" }),
+});
+
+/** Recheck the active lease generation before committing its judge output. */
+export const commitClaimedFinalBoundInterruption = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    credentialJson: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<HearingFinalBoundInterruptionRecoveryPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const credential = HearingFinalBoundInterruptionLeaseCredentialSchema.parse(
+      parseJson(args.credentialJson, "final_bound_lease_credential"),
+    );
+    const generation = HearingObjectionRulingPrecommitSchema.parse(
+      parseJson(args.generationJson, "objection_precommit"),
+    );
+    if (
+      generation.trialId !== args.trialId ||
+      generation.decisionId !== credential.decisionId
+    ) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+    }
+    const authorized = await ctx.runMutation(
+      authorizeFinalBoundInterruptionCommitReference,
+      leaseMutationArgs(ownerId, args.trialId, credential),
+    );
+    if (authorized.status === "authorized") {
+      try {
+        await ctx.runAction(commitObjectionRulingGenerationActionReference, {
+          ownerId,
+          trialId: args.trialId,
+          generationJson: JSON.stringify(generation),
+          claimCredentialJson: JSON.stringify(credential),
+        });
+      } catch (error) {
+        const raced = await recoverFinalBoundThroughAction(
+          ctx,
+          ownerId,
+          args.trialId,
+          credential.interruptId,
+        );
+        if (raced.phase === "ruling_committed") return raced;
+        throw error;
+      }
+    } else if (authorized.status !== "outcome") {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+    }
+    const recovery = await recoverFinalBoundThroughAction(
+      ctx,
+      ownerId,
+      args.trialId,
+      credential.interruptId,
+    );
+    if (recovery.phase !== "ruling_committed") {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+    }
+    return recovery;
+  },
+});
+
+/** Commit only the exact resumed witness response owned by the same lease. */
+export const commitClaimedFinalBoundWitness = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    credentialJson: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<HearingFinalBoundInterruptionRecoveryPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const credential = HearingFinalBoundInterruptionLeaseCredentialSchema.parse(
+      parseJson(args.credentialJson, "final_bound_lease_credential"),
+    );
+    const generation = HearingWitnessGenerationPrecommitSchema.parse(
+      parseJson(args.generationJson, "witness_precommit"),
+    );
+    const before = await recoverFinalBoundThroughAction(
+      ctx,
+      ownerId,
+      args.trialId,
+      credential.interruptId,
+    );
+    if (
+      generation.trialId !== args.trialId ||
+      generation.responseId !== before.interrupt.responseId ||
+      credential.decisionId !== before.interrupt.decisionId
+    ) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+    }
+    const authorized = await ctx.runMutation(
+      authorizeFinalBoundWitnessCommitReference,
+      leaseMutationArgs(ownerId, args.trialId, credential),
+    );
+    if (authorized.status === "authorized") {
+      try {
+        await ctx.runAction(commitWitnessGenerationActionReference, {
+          ownerId,
+          trialId: args.trialId,
+          generationJson: JSON.stringify(generation),
+          claimCredentialJson: JSON.stringify(credential),
+        });
+      } catch (error) {
+        const raced = await recoverFinalBoundThroughAction(
+          ctx,
+          ownerId,
+          args.trialId,
+          credential.interruptId,
+        );
+        if (
+          raced.phase === "ruling_committed" &&
+          raced.preparation.status === "completed"
+        ) {
+          return raced;
+        }
+        throw error;
+      }
+    } else if (authorized.status !== "outcome") {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+    }
+    const recovery = await recoverFinalBoundThroughAction(
+      ctx,
+      ownerId,
+      args.trialId,
+      credential.interruptId,
+    );
+    if (
+      recovery.phase !== "ruling_committed" ||
+      recovery.preparation.status !== "completed"
+    ) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+    }
+    return recovery;
+  },
+});
+
 function generatedAppendError(error: unknown): never {
   const message = error instanceof Error ? error.message : "";
   if (
@@ -3539,6 +4454,7 @@ async function appendWitnessGeneration(
   ownerId: string,
   actionJson: string,
   generation: HearingWitnessGenerationPrecommit,
+  claimCredentialJson?: string,
 ): Promise<void> {
   try {
     await ctx.runMutation(appendGeneratedForOwnerReference, {
@@ -3546,6 +4462,9 @@ async function appendWitnessGeneration(
       actionJson,
       generationJson: JSON.stringify(generation),
       writeSnapshot: true,
+      ...(claimCredentialJson === undefined
+        ? {}
+        : { claimCredentialJson, claimNow: Date.now() }),
     });
   } catch (error) {
     generatedAppendError(error);
@@ -4040,6 +4959,7 @@ export const commitWitnessGeneration = internalAction({
     ownerId: v.string(),
     trialId: v.string(),
     generationJson: v.string(),
+    claimCredentialJson: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<HearingCommandPreparation> => {
     const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
@@ -4070,6 +4990,7 @@ export const commitWitnessGeneration = internalAction({
         ownerId,
         existingAction.actionJson,
         envelope,
+        args.claimCredentialJson,
       );
       return await canonicalContinuation(ctx, ownerId, args.trialId);
     }
@@ -4125,6 +5046,7 @@ export const commitWitnessGeneration = internalAction({
       ownerId,
       JSON.stringify(action),
       envelope,
+      args.claimCredentialJson,
     );
     return await canonicalContinuation(ctx, ownerId, args.trialId);
   },
@@ -4139,15 +5061,22 @@ async function appendObjectionRulingGeneration(
   ownerId: string,
   actionJsons: string[],
   generation: HearingObjectionRulingPrecommit,
+  claimCredentialJson?: string,
 ): Promise<void> {
   try {
     await ctx.runMutation(appendObjectionRulingForOwnerReference, {
       ownerId,
       actionJsons,
       generationJson: JSON.stringify(generation),
+      ...(claimCredentialJson === undefined
+        ? {}
+        : { claimCredentialJson, claimNow: Date.now() }),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    if (message.includes("FINAL_BOUND_INTERRUPTION_CLAIM_REQUIRED")) {
+      throw error;
+    }
     if (message.includes("STALE")) {
       throw new Error("OBJECTION_RULING_GENERATION_STALE");
     }
@@ -4170,6 +5099,7 @@ export const commitObjectionRulingGeneration = internalAction({
     ownerId: v.string(),
     trialId: v.string(),
     generationJson: v.string(),
+    claimCredentialJson: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<HearingCommandPreparation> => {
     const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
@@ -4203,6 +5133,7 @@ export const commitObjectionRulingGeneration = internalAction({
         ownerId,
         existing.actionJsons,
         envelope,
+        args.claimCredentialJson,
       );
       return await canonicalContinuation(ctx, ownerId, args.trialId);
     }
@@ -4292,6 +5223,7 @@ export const commitObjectionRulingGeneration = internalAction({
       ownerId,
       actions.map((action) => JSON.stringify(action)),
       envelope,
+      args.claimCredentialJson,
     );
     return await canonicalContinuation(ctx, ownerId, args.trialId);
   },

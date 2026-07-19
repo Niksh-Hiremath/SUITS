@@ -44,6 +44,24 @@ import {
   parsePersistedOpponentDirective,
   type PersistedOpponentDirective,
 } from "../src/domain/hearing-runtime/opponent-directive";
+import { findOutstandingRephraseTarget } from "../src/domain/hearing-runtime/outstanding-rephrase";
+import {
+  deriveFinalBoundInterruptionPersistenceIds,
+  HearingFinalBoundInterruptionLeaseCredentialSchema,
+  type HearingFinalBoundInterruptionMetadata,
+  type HearingFinalBoundInterruptionOutcome,
+  type HearingFinalBoundInterruptionRecoveryMetadata,
+} from "../src/domain/objections/final-bound-persistence";
+import {
+  FinalBoundInterruptionRequestSchema,
+  type FinalBoundInterruptionRequest,
+} from "../src/domain/objections/final-bound-contracts";
+import {
+  PARTIAL_OBJECTION_DETECTOR_SCHEMA_VERSION,
+  detectPartialObjectionCandidate,
+  type PartialObjectionCandidate,
+  type PartialObjectionDetectorInput,
+} from "../src/domain/objections/partial-detector";
 import type { TrialPolicyActorBindingInput } from "../src/domain/trial-policy";
 import {
   TRIAL_ACTION_SCHEMA_VERSION_V3,
@@ -69,6 +87,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { persistTerminalCourtroomModelCallForOwner } from "./courtroomModelCalls";
+import { requireFinalBoundInterruptionLeaseForAppend } from "./finalBoundInterruptionClaims";
 
 const MAX_JSON_CHARACTERS = 750_000;
 const MAX_REFERENCES_PER_EVENT = 128;
@@ -138,6 +157,120 @@ function parseJsonObject(value: string, label: string): unknown {
     throw new Error(`${label} must serialize a JSON object`);
   }
   return parsed;
+}
+
+async function requireFinalBoundClaimForAppend(
+  ctx: MutationCtx,
+  input: Readonly<{
+    ownerId: string;
+    trialId: string;
+    credentialJson?: string;
+    now?: number;
+    required: boolean;
+    expectedPhase: "ruling_pending" | "witness_pending";
+    expectedDecisionId?: string;
+  }>,
+): Promise<void> {
+  if (input.credentialJson === undefined && input.now === undefined) {
+    if (input.required) {
+      throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_REQUIRED");
+    }
+    return;
+  }
+  if (
+    input.credentialJson === undefined ||
+    input.now === undefined ||
+    !Number.isSafeInteger(input.now) ||
+    input.now < 0
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+  }
+  const credential =
+    HearingFinalBoundInterruptionLeaseCredentialSchema.safeParse(
+      parseJsonObject(input.credentialJson, "claimCredentialJson"),
+    );
+  if (
+    !credential.success ||
+    (input.expectedDecisionId !== undefined &&
+      credential.data.decisionId !== input.expectedDecisionId)
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CLAIM_INVALID");
+  }
+  await requireFinalBoundInterruptionLeaseForAppend(
+    ctx,
+    {
+      ownerId: input.ownerId,
+      trialId: input.trialId,
+      interruptId: credential.data.interruptId,
+      decisionId: credential.data.decisionId,
+      leaseGeneration: credential.data.leaseGeneration,
+      leaseTokenHash: sha256Utf8(credential.data.leaseToken),
+      now: input.now,
+    },
+    input.expectedPhase,
+  );
+}
+
+async function canonicalTargetRequiresFinalBoundClaim(
+  ctx: MutationCtx,
+  state: TrialStateV3,
+  target: Readonly<{ interruptId: string; responseId: string }>,
+): Promise<boolean> {
+  const active = state.activeInterruption;
+  if (
+    active === null ||
+    active.interruptId !== target.interruptId ||
+    active.interruptedResponseId !== target.responseId
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+  const prefix = "interrupt:final-bound:";
+  if (!active.interruptId.startsWith(prefix)) return false;
+  const digest = active.interruptId.slice(prefix.length);
+  const objectionId = `objection:final-bound:${digest}`;
+  const questionId = `question:final-bound:${digest}`;
+  const responseId = `response:final-bound:${digest}`;
+  const actionId = `action:final-bound-interruption:${digest}`;
+  const eventId = eventIdForGeneratedAction(actionId);
+  const objection = state.objections[objectionId];
+  const response = state.pendingResponses[responseId];
+  const question = state.questions[questionId];
+  const sourceRow = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) => index.eq("eventId", eventId))
+    .unique();
+  if (
+    digest.length !== 64 ||
+    active.objectionId !== objectionId ||
+    target.responseId !== responseId ||
+    active.sourceEventId !== eventId ||
+    objection === undefined ||
+    objection.questionId !== questionId ||
+    objection.interruptedResponseId !== responseId ||
+    response === undefined ||
+    response.questionId !== questionId ||
+    response.interruptId !== active.interruptId ||
+    question === undefined ||
+    question.questionTurnId !== `turn:final-bound-question:${digest}` ||
+    sourceRow === null
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+  const source = storedEventToV3(sourceRow);
+  if (
+    source.actionId !== actionId ||
+    source.eventId !== eventId ||
+    source.eventId !== active.sourceEventId ||
+    source.type !== "BEGIN_INTERRUPTION" ||
+    source.source !== "system" ||
+    source.interruptId !== active.interruptId ||
+    source.payload.interruptId !== active.interruptId ||
+    source.payload.interruptedResponseId !== responseId ||
+    source.payload.objectionId !== objectionId
+  ) {
+    throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+  }
+  return true;
 }
 
 function assertReferences(values: readonly string[], label: string): string[] {
@@ -1076,7 +1209,8 @@ async function requireObjectionRulingActions(
     generation.output.remedy === "resume_response";
   const sustained =
     generation.output.ruling === "sustained" &&
-    generation.output.remedy === "cancel_response";
+    (generation.output.remedy === "cancel_response" ||
+      generation.output.remedy === "rephrase");
   if ((!overruled && !sustained) || actions.length !== (overruled ? 3 : 2)) {
     return invalidObjectionRuling();
   }
@@ -2236,6 +2370,1141 @@ async function appendActiveAction(
   });
 }
 
+type FinalBoundInterruptionCommitResult =
+  | Readonly<{
+      status: "candidate_withdrawn";
+      sourceHead: FinalBoundInterruptionRequest["head"];
+      triggerRevision: number;
+      finalRevision: number;
+    }>
+  | Readonly<{
+      status: "interruption";
+      interrupt: HearingFinalBoundInterruptionMetadata;
+      outcome: HearingFinalBoundInterruptionOutcome | null;
+    }>;
+
+type FinalBoundExaminationLeg = NonNullable<
+  PartialObjectionDetectorInput["examinationLeg"]
+>;
+
+const FINAL_BOUND_EXAMINATION_LEGS = new Set<FinalBoundExaminationLeg>([
+  "direct",
+  "cross",
+  "redirect",
+  "recross",
+]);
+
+function isFinalBoundExaminationLeg(
+  value: string,
+): value is FinalBoundExaminationLeg {
+  return FINAL_BOUND_EXAMINATION_LEGS.has(value as FinalBoundExaminationLeg);
+}
+
+function invalidFinalBoundInterruption(): never {
+  throw new Error("FINAL_BOUND_INTERRUPTION_INVALID");
+}
+
+function staleFinalBoundInterruption(): never {
+  throw new Error("FINAL_BOUND_INTERRUPTION_STALE");
+}
+
+function conflictingFinalBoundInterruption(): never {
+  throw new Error("FINAL_BOUND_INTERRUPTION_CONFLICT");
+}
+
+function exactFinalBoundActor(
+  state: TrialStateV3,
+  input: Readonly<{
+    role: ActorRef["role"];
+    side: ActorRef["side"];
+    witnessId?: string | null;
+  }>,
+): ActorRef {
+  const matches = Object.values(state.actors).filter(
+    (actor) =>
+      actor.role === input.role &&
+      actor.side === input.side &&
+      (input.witnessId === undefined ||
+        actor.witnessId === input.witnessId),
+  );
+  if (matches.length !== 1) return invalidFinalBoundInterruption();
+  const actor = matches[0];
+  return actor ?? invalidFinalBoundInterruption();
+}
+
+function finalBoundPlayerCounsel(state: TrialStateV3): ActorRef {
+  return exactFinalBoundActor(state, {
+    role:
+      state.userSide === "user" ? "user_counsel" : "opposing_counsel",
+    side: state.userSide,
+    witnessId: null,
+  });
+}
+
+function finalBoundObjector(state: TrialStateV3): ActorRef {
+  const side = state.userSide === "user" ? "opposing" : "user";
+  return exactFinalBoundActor(state, {
+    role: side === "user" ? "user_counsel" : "opposing_counsel",
+    side,
+    witnessId: null,
+  });
+}
+
+function finalBoundSystemActor(state: TrialStateV3): ActorRef {
+  return exactFinalBoundActor(state, {
+    role: "system",
+    side: "neutral",
+    witnessId: null,
+  });
+}
+
+function finalBoundWitness(state: TrialStateV3, witnessId: string): ActorRef {
+  const matches = Object.values(state.actors).filter(
+    (actor) => actor.role === "witness" && actor.witnessId === witnessId,
+  );
+  if (matches.length !== 1) return invalidFinalBoundInterruption();
+  const actor = matches[0];
+  return actor ?? invalidFinalBoundInterruption();
+}
+
+function currentFinalBoundLastEventId(state: TrialStateV3): string {
+  const eventId = state.eventIds.at(-1);
+  return eventId ?? invalidFinalBoundInterruption();
+}
+
+function canonicalFinalBoundDetectorInput(
+  input: Readonly<{
+    state: TrialStateV3;
+    partialText: string;
+    confidence: number;
+    appearanceId: string;
+    examinationLeg: FinalBoundExaminationLeg;
+    questioningActorId: string;
+    excludeQuestionId?: string;
+  }>,
+): PartialObjectionDetectorInput {
+  const transcriptOrder = new Map(
+    input.state.transcriptTurnIds.map((turnId, index) => [turnId, index]),
+  );
+  const recentQuestionTexts = Object.values(input.state.questions)
+    .filter(
+      (question) =>
+        question.questionId !== input.excludeQuestionId &&
+        question.appearanceId === input.appearanceId &&
+        question.examinationKind === input.examinationLeg &&
+        question.askedByActorId === input.questioningActorId,
+    )
+    .map((question) => {
+      const turn = input.state.transcriptTurns[question.questionTurnId];
+      return turn === undefined
+        ? null
+        : {
+            ordinal:
+              transcriptOrder.get(question.questionTurnId) ??
+              Number.MAX_SAFE_INTEGER,
+            text: turn.text,
+          };
+    })
+    .filter(
+      (turn): turn is Readonly<{ ordinal: number; text: string }> =>
+        turn !== null,
+    )
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .slice(-32)
+    .map((turn) => turn.text);
+
+  return {
+    schemaVersion: PARTIAL_OBJECTION_DETECTOR_SCHEMA_VERSION,
+    partialText: input.partialText,
+    sttConfidence: input.confidence,
+    speechKind: "question",
+    examinationLeg: input.examinationLeg,
+    permittedGrounds: input.state.policySnapshot.permittedObjectionGrounds,
+    recentQuestionTexts,
+    // The final-bound speech contract carries no evidence identity. The
+    // resulting canonical question therefore presents no exhibit, so an
+    // explicit request to read exhibit contents has no established foundation.
+    evidenceFoundationMissing: true,
+    topicRelation: "unknown",
+    privilegeContext: "unknown",
+    thirdPartyStatementPurpose: "unknown",
+    thirdPartyStatementException: "unknown",
+    argumentativeContext: "unknown",
+    personalKnowledgeContext: "unknown",
+  };
+}
+
+function finalSupportsTrigger(
+  trigger: PartialObjectionCandidate,
+  final: PartialObjectionCandidate,
+): boolean {
+  if (trigger.ground !== final.ground || trigger.signal !== final.signal) {
+    return false;
+  }
+  if (
+    trigger.normalizedText.includes(final.normalizedText) ||
+    final.normalizedText.includes(trigger.normalizedText)
+  ) {
+    return true;
+  }
+  const triggerTokens = new Set(trigger.normalizedText.split(" "));
+  const finalTokens = new Set(final.normalizedText.split(" "));
+  const smaller = Math.min(triggerTokens.size, finalTokens.size);
+  if (smaller === 0) return false;
+  const overlap = [...triggerTokens].filter((token) =>
+    finalTokens.has(token),
+  ).length;
+  return overlap / smaller >= 0.8;
+}
+
+function evaluateFinalBoundCandidate(
+  input: Readonly<{
+    request: FinalBoundInterruptionRequest;
+    state: TrialStateV3;
+    appearanceId: string;
+    examinationLeg: FinalBoundExaminationLeg;
+    questioningActorId: string;
+    excludeQuestionId?: string;
+  }>,
+): Readonly<{
+  trigger: PartialObjectionCandidate;
+  finalSupported: boolean;
+}> {
+  const shared = {
+    state: input.state,
+    confidence: input.request.trigger.confidence,
+    appearanceId: input.appearanceId,
+    examinationLeg: input.examinationLeg,
+    questioningActorId: input.questioningActorId,
+    excludeQuestionId: input.excludeQuestionId,
+  } as const;
+  const trigger = detectPartialObjectionCandidate(
+    canonicalFinalBoundDetectorInput({
+      ...shared,
+      partialText: input.request.trigger.text,
+    }),
+  );
+  const final = detectPartialObjectionCandidate(
+    canonicalFinalBoundDetectorInput({
+      ...shared,
+      partialText: input.request.final.text,
+    }),
+  );
+  if (trigger === null) {
+    return invalidFinalBoundInterruption();
+  }
+  return {
+    trigger,
+    finalSupported:
+      final !== null && finalSupportsTrigger(trigger, final),
+  };
+}
+
+function finalBoundRequestedAt(value: string, offset: number): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || timestamp < 0) {
+    return invalidFinalBoundInterruption();
+  }
+  return new Date(timestamp + offset).toISOString();
+}
+
+function finalBoundAction(input: Readonly<{
+  actionId: string;
+  trialId: string;
+  expectedStateVersion: number;
+  actor: ActorRef;
+  source: "speech" | "deterministic" | "system";
+  requestedAt: string;
+  causationId: string;
+  responseId?: string;
+  interruptId?: string;
+  type: TrialActionV3["type"];
+  payload: unknown;
+}>): TrialActionV3 {
+  return TrialActionV3Schema.parse({
+    schemaVersion: TRIAL_ACTION_SCHEMA_VERSION_V3,
+    actionId: input.actionId,
+    trialId: input.trialId,
+    expectedStateVersion: input.expectedStateVersion,
+    actor: input.actor,
+    source: input.source,
+    requestedAt: input.requestedAt,
+    causationId: input.causationId,
+    correlationId: input.trialId,
+    responseId: input.responseId ?? null,
+    interruptId: input.interruptId ?? null,
+    modelMetadata: null,
+    type: input.type,
+    payload: input.payload,
+  });
+}
+
+async function finalBoundOutcome(
+  ctx: Readonly<{ db: QueryCtx["db"] }>,
+  state: TrialStateV3,
+  metadata: Readonly<{
+    objectionId: string;
+    interruptId: string;
+    responseId: string;
+  }>,
+): Promise<HearingFinalBoundInterruptionOutcome | null> {
+  const objection = state.objections[metadata.objectionId];
+  if (objection === undefined) return conflictingFinalBoundInterruption();
+  if (objection.status === "pending") return null;
+  if (
+    (objection.status !== "sustained" &&
+      objection.status !== "overruled") ||
+    (objection.remedy !== "rephrase" &&
+      objection.remedy !== "cancel_response" &&
+      objection.remedy !== "resume_response")
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const validPair =
+    objection.status === "overruled"
+      ? objection.remedy === "resume_response"
+      : objection.remedy === "rephrase" ||
+        objection.remedy === "cancel_response";
+  if (!validPair) return conflictingFinalBoundInterruption();
+  if (objection.rulingEventId === null) {
+    return conflictingFinalBoundInterruption();
+  }
+  const rulingRow = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) =>
+      index.eq("eventId", objection.rulingEventId ?? ""),
+    )
+    .unique();
+  if (rulingRow === null) return conflictingFinalBoundInterruption();
+  const ruling = storedEventToV3(rulingRow);
+  const resolutionRow = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_trial_sequence", (index) =>
+      index.eq("trialId", state.trialId).eq("sequence", ruling.sequence + 1),
+    )
+    .unique();
+  if (resolutionRow === null) return conflictingFinalBoundInterruption();
+  const resolution = storedEventToV3(resolutionRow);
+  if (
+    ruling.type !== "RULE_ON_OBJECTION" ||
+    ruling.payload.objectionId !== metadata.objectionId ||
+    ruling.payload.ruling !== objection.status ||
+    ruling.payload.remedy !== objection.remedy ||
+    ruling.responseId !== metadata.responseId ||
+    ruling.interruptId !== metadata.interruptId ||
+    resolution.type !== "RESOLVE_INTERRUPTION" ||
+    resolution.causationId !== ruling.eventId ||
+    resolution.payload.interruptId !== metadata.interruptId ||
+    resolution.payload.outcome !==
+      (objection.status === "overruled" ? "resume" : "cancel") ||
+    resolution.responseId !== metadata.responseId ||
+    resolution.interruptId !== metadata.interruptId
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  if (objection.status === "overruled") {
+    const resumeRow = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_sequence", (index) =>
+        index
+          .eq("trialId", state.trialId)
+          .eq("sequence", resolution.sequence + 1),
+      )
+      .unique();
+    if (resumeRow === null) return conflictingFinalBoundInterruption();
+    const resume = storedEventToV3(resumeRow);
+    if (
+      resume.type !== "RESUME_INTERRUPTED_SPEECH" ||
+      resume.causationId !== resolution.eventId ||
+      resume.payload.interruptId !== metadata.interruptId ||
+      resume.payload.interruptedResponseId !== metadata.responseId ||
+      resume.responseId !== metadata.responseId ||
+      resume.interruptId !== metadata.interruptId
+    ) {
+      return conflictingFinalBoundInterruption();
+    }
+  }
+  return { ruling: objection.status, remedy: objection.remedy };
+}
+
+async function recoveredFinalBoundPerformance(
+  ctx: Readonly<{ db: QueryCtx["db"] }>,
+  state: TrialStateV3,
+  input: Readonly<{
+    responseId: string;
+    questionId: string;
+    objectionId: string;
+    interruptionEventId: string;
+    outcome: HearingFinalBoundInterruptionOutcome | null;
+  }>,
+): Promise<
+  Readonly<{
+    answerTurnId: string | null;
+    targetCompletionHead: {
+      trialId: string;
+      stateVersion: number;
+      lastEventId: string;
+    };
+  }>
+> {
+  const interruptionRow = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) =>
+      index.eq("eventId", input.interruptionEventId),
+    )
+    .unique();
+  if (interruptionRow === null) return conflictingFinalBoundInterruption();
+  let target = storedEventToV3(interruptionRow);
+  if (input.outcome !== null) {
+    const objection = state.objections[input.objectionId];
+    if (objection === undefined || objection.rulingEventId === null) {
+      return conflictingFinalBoundInterruption();
+    }
+    const rulingEventId = objection.rulingEventId;
+    const rulingRow = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", rulingEventId),
+      )
+      .unique();
+    if (rulingRow === null) return conflictingFinalBoundInterruption();
+    const ruling = storedEventToV3(rulingRow);
+    const resolutionRow = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_sequence", (index) =>
+        index
+          .eq("trialId", state.trialId)
+          .eq("sequence", ruling.sequence + 1),
+      )
+      .unique();
+    if (resolutionRow === null) return conflictingFinalBoundInterruption();
+    target = storedEventToV3(resolutionRow);
+    if (input.outcome.ruling === "overruled") {
+      const resumeRow = await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index
+            .eq("trialId", state.trialId)
+            .eq("sequence", target.sequence + 1),
+        )
+        .unique();
+      if (resumeRow === null) return conflictingFinalBoundInterruption();
+      target = storedEventToV3(resumeRow);
+    }
+  }
+  const response = state.pendingResponses[input.responseId];
+  let answerTurnId: string | null = null;
+  if (response?.status === "committed") {
+    const answerActionId = `action:witness-answer:${sha256Utf8(
+      JSON.stringify({ trialId: state.trialId, responseId: input.responseId }),
+    )}`;
+    const answerRow = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", eventIdForGeneratedAction(answerActionId)),
+      )
+      .unique();
+    if (answerRow === null) return conflictingFinalBoundInterruption();
+    const answer = storedEventToV3(answerRow);
+    if (
+      answer.type !== "ANSWER_QUESTION" ||
+      answer.payload.responseId !== input.responseId ||
+      answer.payload.questionId !== input.questionId ||
+      answer.causationId !== target.eventId
+    ) {
+      return conflictingFinalBoundInterruption();
+    }
+    answerTurnId = answer.payload.turnId;
+    target = answer;
+  }
+  return {
+    answerTurnId,
+    targetCompletionHead: {
+      trialId: state.trialId,
+      stateVersion: target.stateVersion,
+      lastEventId: target.eventId,
+    },
+  };
+}
+
+type FinalBoundInterruptionRecoveryResult = Readonly<{
+  interrupt: HearingFinalBoundInterruptionRecoveryMetadata;
+  outcome: HearingFinalBoundInterruptionOutcome | null;
+}>;
+
+function recoveredFinalBoundDigest(interruptId: string): string {
+  const match = /^interrupt:final-bound:([0-9a-f]{64})$/u.exec(interruptId);
+  const digest = match?.[1];
+  if (digest === undefined) return invalidFinalBoundInterruption();
+  return digest;
+}
+
+async function recoverFinalBoundInterruptionForOwnerHandler(
+  ctx: QueryCtx,
+  args: Readonly<{
+    ownerId: string;
+    trialId: string;
+    interruptId?: string;
+  }>,
+): Promise<FinalBoundInterruptionRecoveryResult> {
+  const projection = requireOwnedProjection(
+    await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (query) => query.eq("trialId", args.trialId))
+      .unique(),
+    args.ownerId,
+  );
+  const state = TrialStateV3Schema.parse(
+    parseJsonObject(projection.stateJson, "projection.stateJson"),
+  );
+  const active = state.activeInterruption;
+  if (active === null) return invalidFinalBoundInterruption();
+  if (
+    args.interruptId !== undefined &&
+    args.interruptId !== active.interruptId
+  ) {
+    return staleFinalBoundInterruption();
+  }
+  const digest = recoveredFinalBoundDigest(active.interruptId);
+  const actionIds = {
+    question: `action:final-bound-question:${digest}`,
+    response: `action:final-bound-response:${digest}`,
+    objection: `action:final-bound-objection:${digest}`,
+    interruption: `action:final-bound-interruption:${digest}`,
+  } as const;
+  const eventIds = {
+    question: eventIdForGeneratedAction(actionIds.question),
+    response: eventIdForGeneratedAction(actionIds.response),
+    objection: eventIdForGeneratedAction(actionIds.objection),
+    interruption: eventIdForGeneratedAction(actionIds.interruption),
+  } as const;
+  const rows = await Promise.all(
+    Object.values(eventIds).map(async (eventId) =>
+      await ctx.db
+        .query("trialEvents")
+        .withIndex("by_event_id", (index) => index.eq("eventId", eventId))
+        .unique(),
+    ),
+  );
+  if (rows.some((row) => row === null)) {
+    return conflictingFinalBoundInterruption();
+  }
+  const [questionRow, responseRow, objectionRow, interruptionRow] = rows;
+  if (
+    questionRow === null ||
+    responseRow === null ||
+    objectionRow === null ||
+    interruptionRow === null
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const question = storedEventToV3(questionRow);
+  const response = storedEventToV3(responseRow);
+  const objection = storedEventToV3(objectionRow);
+  const interruption = storedEventToV3(interruptionRow);
+  const questioner = finalBoundPlayerCounsel(state);
+  const objector = finalBoundObjector(state);
+  const system = finalBoundSystemActor(state);
+  const judge = exactFinalBoundActor(state, {
+    role: "judge",
+    side: "neutral",
+    witnessId: null,
+  });
+  if (
+    question.type !== "ASK_QUESTION" &&
+    question.type !== "REPHRASE_QUESTION"
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const questionState = state.questions[question.payload.questionId];
+  if (questionState === undefined) return conflictingFinalBoundInterruption();
+  const witness = finalBoundWitness(state, questionState.witnessId);
+  const questionEventBindingValid =
+    question.type === "ASK_QUESTION"
+      ? question.payload.witnessId === questionState.witnessId &&
+        question.payload.examinationKind === questionState.examinationKind &&
+        question.payload.presentedEvidenceIds.length === 0 &&
+        questionState.rephrasesQuestionId === null
+      : question.payload.originalQuestionId ===
+          questionState.rephrasesQuestionId &&
+        state.questions[question.payload.originalQuestionId]?.status ===
+          "sustained" &&
+        Object.values(state.objections).some(
+          (candidate) =>
+            candidate.questionId === question.payload.originalQuestionId &&
+            candidate.status === "sustained" &&
+            candidate.remedy === "rephrase",
+        );
+  if (
+    question.trialId !== args.trialId ||
+    question.actionId !== actionIds.question ||
+    question.source !== "speech" ||
+    question.actor.actorId !== questioner.actorId ||
+    question.causationId === null ||
+    question.payload.questionId !== `question:final-bound:${digest}` ||
+    question.payload.turnId !== `turn:final-bound-question:${digest}` ||
+    questionState.questionTurnId !== question.payload.turnId ||
+    questionState.askedByActorId !== questioner.actorId ||
+    !questionEventBindingValid ||
+    response.trialId !== args.trialId ||
+    response.type !== "REQUEST_RESPONSE" ||
+    response.actionId !== actionIds.response ||
+    response.source !== "system" ||
+    response.actor.actorId !== system.actorId ||
+    response.payload.responseId !== `response:final-bound:${digest}` ||
+    response.payload.actorId !== witness.actorId ||
+    response.responseId !== `response:final-bound:${digest}` ||
+    objection.trialId !== args.trialId ||
+    objection.type !== "OBJECT" ||
+    objection.actionId !== actionIds.objection ||
+    objection.source !== "deterministic" ||
+    objection.actor.actorId !== objector.actorId ||
+    objection.payload.objectionId !== `objection:final-bound:${digest}` ||
+    objection.payload.questionId !== question.payload.questionId ||
+    objection.payload.interruptedResponseId !== response.payload.responseId ||
+    interruption.trialId !== args.trialId ||
+    interruption.type !== "BEGIN_INTERRUPTION" ||
+    interruption.actionId !== actionIds.interruption ||
+    interruption.source !== "system" ||
+    interruption.actor.actorId !== system.actorId ||
+    interruption.payload.interruptId !== active.interruptId ||
+    interruption.payload.objectionId !== objection.payload.objectionId ||
+    interruption.payload.interruptedResponseId !== response.payload.responseId ||
+    interruption.interruptId !== active.interruptId ||
+    response.sequence !== question.sequence + 1 ||
+    objection.sequence !== response.sequence + 1 ||
+    interruption.sequence !== objection.sequence + 1 ||
+    response.stateVersion !== question.stateVersion + 1 ||
+    objection.stateVersion !== response.stateVersion + 1 ||
+    interruption.stateVersion !== objection.stateVersion + 1 ||
+    response.causationId !== question.eventId ||
+    objection.causationId !== response.eventId ||
+    interruption.causationId !== objection.eventId ||
+    active.sourceEventId !== interruption.eventId ||
+    active.objectionId !== objection.payload.objectionId ||
+    active.interruptedResponseId !== response.payload.responseId
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const metadataBase = {
+    interruptId: active.interruptId,
+    objectionId: objection.payload.objectionId,
+    questionId: question.payload.questionId,
+    responseId: response.payload.responseId,
+    questionEventId: question.eventId,
+    objectionEventId: objection.eventId,
+    interruptionEventId: interruption.eventId,
+    decisionId: `decision:objection-ruling:${sha256Utf8(
+      JSON.stringify({
+        trialId: args.trialId,
+        stateVersion: interruption.stateVersion,
+        lastEventId: interruption.eventId,
+        actorId: judge.actorId,
+        objectionId: objection.payload.objectionId,
+        objectionEventId: objection.eventId,
+        interruptId: active.interruptId,
+        responseId: response.payload.responseId,
+        questionId: question.payload.questionId,
+        questionEventId: question.eventId,
+      }),
+    )}`,
+    ground: objection.payload.ground,
+    sourceHead: {
+      trialId: args.trialId,
+      stateVersion: question.stateVersion - 1,
+      lastEventId: question.causationId,
+    },
+    committedHead: {
+      trialId: args.trialId,
+      stateVersion: interruption.stateVersion,
+      lastEventId: interruption.eventId,
+    },
+  };
+  const outcome = await finalBoundOutcome(ctx, state, metadataBase);
+  const performance = await recoveredFinalBoundPerformance(ctx, state, {
+    responseId: metadataBase.responseId,
+    questionId: metadataBase.questionId,
+    objectionId: metadataBase.objectionId,
+    interruptionEventId: metadataBase.interruptionEventId,
+    outcome,
+  });
+  const metadata: HearingFinalBoundInterruptionRecoveryMetadata = {
+    ...metadataBase,
+    ...performance,
+  };
+  return {
+    interrupt: metadata,
+    outcome,
+  };
+}
+
+function finalBoundMetadata(input: Readonly<{
+  request: FinalBoundInterruptionRequest;
+  ground: HearingFinalBoundInterruptionMetadata["ground"];
+  prefixReplayed: boolean;
+}>): HearingFinalBoundInterruptionMetadata {
+  const ids = deriveFinalBoundInterruptionPersistenceIds(input.request);
+  const interruptionEventId = eventIdForGeneratedAction(
+    ids.beginInterruptionActionId,
+  );
+  return {
+    interruptId: ids.interruptId,
+    objectionId: ids.objectionId,
+    questionId: ids.questionId,
+    responseId: ids.responseId,
+    questionEventId: eventIdForGeneratedAction(ids.questionActionId),
+    objectionEventId: eventIdForGeneratedAction(ids.objectionActionId),
+    interruptionEventId,
+    ground: input.ground,
+    triggerRevision: input.request.trigger.revision,
+    finalRevision: input.request.final.revision,
+    sourceHead: input.request.head,
+    committedHead: {
+      trialId: input.request.head.trialId,
+      stateVersion: input.request.head.stateVersion + 4,
+      lastEventId: interruptionEventId,
+    },
+    prefixReplayed: input.prefixReplayed,
+  };
+}
+
+async function loadFinalBoundStoredEvent(
+  ctx: MutationCtx,
+  actionId: string,
+): Promise<TrialEventV3> {
+  const eventId = eventIdForGeneratedAction(actionId);
+  const row = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) => index.eq("eventId", eventId))
+    .unique();
+  return row === null
+    ? conflictingFinalBoundInterruption()
+    : storedEventToV3(row);
+}
+
+async function replayFinalBoundInterruption(
+  ctx: MutationCtx,
+  input: Readonly<{
+    request: FinalBoundInterruptionRequest;
+    state: TrialStateV3;
+    firstReceipt: Doc<"actionReceipts">;
+  }>,
+): Promise<FinalBoundInterruptionCommitResult> {
+  const ids = deriveFinalBoundInterruptionPersistenceIds(input.request);
+  const actionIds = [
+    ids.questionActionId,
+    ids.requestResponseActionId,
+    ids.objectionActionId,
+    ids.beginInterruptionActionId,
+  ] as const;
+  const receipts = [input.firstReceipt];
+  for (const actionId of actionIds.slice(1)) {
+    const receipt = await ctx.db
+      .query("actionReceipts")
+      .withIndex("by_action_id", (index) => index.eq("actionId", actionId))
+      .unique();
+    if (receipt === null) return conflictingFinalBoundInterruption();
+    receipts.push(receipt);
+  }
+  const events: TrialEventV3[] = [];
+  for (const actionId of actionIds) {
+    events.push(await loadFinalBoundStoredEvent(ctx, actionId));
+  }
+  const sourceVersion = input.request.head.stateVersion;
+  const firstSequence = events[0]?.sequence;
+  if (firstSequence === undefined) return conflictingFinalBoundInterruption();
+  for (const [index, actionId] of actionIds.entries()) {
+    const receipt = receipts[index];
+    const event = events[index];
+    if (
+      receipt === undefined ||
+      event === undefined ||
+      receipt.schemaVersion !== RECEIPT_SCHEMA_VERSION ||
+      receipt.status !== "committed" ||
+      receipt.trialId !== input.request.head.trialId ||
+      receipt.actionId !== actionId ||
+      receipt.expectedStateVersion !== sourceVersion + index ||
+      receipt.committedStateVersion !== sourceVersion + index + 1 ||
+      receipt.firstSequence !== firstSequence + index ||
+      receipt.lastSequence !== firstSequence + index ||
+      !sameOrderedIdentifiers(receipt.eventIds, [event.eventId]) ||
+      event.trialId !== input.request.head.trialId ||
+      event.actionId !== actionId ||
+      event.stateVersion !== sourceVersion + index + 1 ||
+      event.sequence !== firstSequence + index ||
+      !input.state.eventIds.includes(event.eventId)
+    ) {
+      return conflictingFinalBoundInterruption();
+    }
+  }
+  const [question, response, objection, interruption] = events;
+  if (
+    (question?.type !== "ASK_QUESTION" &&
+      question?.type !== "REPHRASE_QUESTION") ||
+    question.source !== "speech" ||
+    question.causationId !== input.request.head.lastEventId ||
+    question.payload.questionId !== ids.questionId ||
+    question.payload.turnId !== ids.questionTurnId ||
+    question.payload.text !== input.request.final.text ||
+    (question.type === "ASK_QUESTION" &&
+      question.payload.presentedEvidenceIds.length !== 0) ||
+    response?.type !== "REQUEST_RESPONSE" ||
+    response.source !== "system" ||
+    response.causationId !== question.eventId ||
+    response.payload.responseId !== ids.responseId ||
+    response.payload.purpose !== "answer_question" ||
+    objection?.type !== "OBJECT" ||
+    objection.source !== "deterministic" ||
+    objection.causationId !== response.eventId ||
+    objection.payload.objectionId !== ids.objectionId ||
+    objection.payload.questionId !== ids.questionId ||
+    objection.payload.interruptedResponseId !== ids.responseId ||
+    interruption?.type !== "BEGIN_INTERRUPTION" ||
+    interruption.source !== "system" ||
+    interruption.causationId !== objection.eventId ||
+    interruption.payload.interruptId !== ids.interruptId ||
+    interruption.payload.interruptedResponseId !== ids.responseId ||
+    interruption.payload.objectionId !== ids.objectionId
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const questionState = input.state.questions[ids.questionId];
+  const appearance =
+    questionState === undefined
+      ? undefined
+      : input.state.appearances[questionState.appearanceId];
+  const questioningActor = input.state.actors[question.actor.actorId];
+  const responseActor = input.state.actors[response.payload.actorId];
+  const objector = input.state.actors[objection.actor.actorId];
+  const expectedQuestioner = finalBoundPlayerCounsel(input.state);
+  const expectedObjector = finalBoundObjector(input.state);
+  const questionEventBindingValid =
+    question.type === "ASK_QUESTION"
+      ? isFinalBoundExaminationLeg(question.payload.examinationKind) &&
+        question.payload.witnessId === appearance?.witnessId &&
+        questionState?.examinationKind === question.payload.examinationKind &&
+        questionState?.rephrasesQuestionId === null
+      : questionState?.rephrasesQuestionId ===
+          question.payload.originalQuestionId &&
+        input.state.questions[question.payload.originalQuestionId]?.status ===
+          "sustained" &&
+        Object.values(input.state.objections).some(
+          (candidate) =>
+            candidate.questionId === question.payload.originalQuestionId &&
+            candidate.status === "sustained" &&
+            candidate.remedy === "rephrase",
+        );
+  if (
+    appearance === undefined ||
+    questionState === undefined ||
+    !questionEventBindingValid ||
+    questionState.questionTurnId !== ids.questionTurnId ||
+    question.actor.actorId !== expectedQuestioner.actorId ||
+    questioningActor?.actorId !== expectedQuestioner.actorId ||
+    responseActor?.role !== "witness" ||
+    responseActor.witnessId !== questionState.witnessId ||
+    objector?.actorId !== expectedObjector.actorId ||
+    objection.actor.actorId !== expectedObjector.actorId
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  const storedObjection = input.state.objections[ids.objectionId];
+  if (
+    storedObjection === undefined ||
+    storedObjection.sourceEventId !== objection.eventId ||
+    storedObjection.questionId !== ids.questionId ||
+    storedObjection.interruptedResponseId !== ids.responseId ||
+    storedObjection.objectorActorId !== expectedObjector.actorId ||
+    storedObjection.ground !== objection.payload.ground ||
+    !input.state.policySnapshot.permittedObjectionGrounds.includes(
+      storedObjection.ground,
+    )
+  ) {
+    return conflictingFinalBoundInterruption();
+  }
+  return {
+    status: "interruption",
+    interrupt: finalBoundMetadata({
+      request: input.request,
+      ground: storedObjection.ground,
+      prefixReplayed: true,
+    }),
+    outcome: await finalBoundOutcome(ctx, input.state, {
+      objectionId: ids.objectionId,
+      interruptId: ids.interruptId,
+      responseId: ids.responseId,
+    }),
+  };
+}
+
+async function prepareFinalBoundInterruptionForOwnerHandler(
+  ctx: MutationCtx,
+  args: Readonly<{
+    ownerId: string;
+    trialId: string;
+    requestJson: string;
+  }>,
+): Promise<FinalBoundInterruptionCommitResult> {
+  assertIdentifier(args.ownerId, "ownerId");
+  assertIdentifier(args.trialId, "trialId");
+  let requestInput: unknown;
+  try {
+    requestInput = parseJsonObject(args.requestJson, "requestJson");
+  } catch {
+    return invalidFinalBoundInterruption();
+  }
+  const parsed = FinalBoundInterruptionRequestSchema.safeParse(requestInput);
+  if (!parsed.success || parsed.data.head.trialId !== args.trialId) {
+    return invalidFinalBoundInterruption();
+  }
+  const request = parsed.data;
+  const projection = requireOwnedProjection(
+    await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+      .unique(),
+    args.ownerId,
+  );
+  const state = await loadActiveHead(ctx, projection);
+  const ids = deriveFinalBoundInterruptionPersistenceIds(request);
+  const firstReceipt = await ctx.db
+    .query("actionReceipts")
+    .withIndex("by_action_id", (index) =>
+      index.eq("actionId", ids.questionActionId),
+    )
+    .unique();
+  if (firstReceipt !== null) {
+    return await replayFinalBoundInterruption(ctx, {
+      request,
+      state,
+      firstReceipt,
+    });
+  }
+  if (
+    state.trialId !== request.head.trialId ||
+    state.version !== request.head.stateVersion ||
+    currentFinalBoundLastEventId(state) !== request.head.lastEventId
+  ) {
+    return staleFinalBoundInterruption();
+  }
+  if (
+    state.phase !== "case_in_chief" ||
+    state.activeQuestionId !== null ||
+    state.activeInterruption?.status === "active" ||
+    state.activeAppearanceId === null ||
+    state.activeWitnessId === null
+  ) {
+    return invalidFinalBoundInterruption();
+  }
+  const appearance = state.appearances[state.activeAppearanceId];
+  if (
+    appearance === undefined ||
+    appearance.witnessId !== state.activeWitnessId ||
+    !isFinalBoundExaminationLeg(appearance.stage)
+  ) {
+    return invalidFinalBoundInterruption();
+  }
+  const examinationLeg = appearance.stage;
+  const leg = appearance.legs[examinationLeg];
+  if (
+    leg.ownerSide !== state.userSide ||
+    (leg.status !== "available" && leg.status !== "in_progress")
+  ) {
+    return invalidFinalBoundInterruption();
+  }
+  const questioner = finalBoundPlayerCounsel(state);
+  const objector = finalBoundObjector(state);
+  const system = finalBoundSystemActor(state);
+  const witness = finalBoundWitness(state, appearance.witnessId);
+  const rephraseTarget = findOutstandingRephraseTarget({
+    state,
+    examiningActorId: questioner.actorId,
+    examiningSide: state.userSide,
+  });
+  const evaluation = evaluateFinalBoundCandidate({
+    request,
+    state,
+    appearanceId: appearance.appearanceId,
+    examinationLeg,
+    questioningActorId: questioner.actorId,
+    ...(rephraseTarget === null
+      ? {}
+      : { excludeQuestionId: rephraseTarget.originalQuestionId }),
+  });
+  if (!evaluation.finalSupported) {
+    return {
+      status: "candidate_withdrawn",
+      sourceHead: request.head,
+      triggerRevision: request.trigger.revision,
+      finalRevision: request.final.revision,
+    };
+  }
+  const candidate = evaluation.trigger;
+  const baseVersion = request.head.stateVersion;
+  const actions = [
+    rephraseTarget === null
+      ? finalBoundAction({
+          actionId: ids.questionActionId,
+          trialId: args.trialId,
+          expectedStateVersion: baseVersion,
+          actor: questioner,
+          source: "speech",
+          requestedAt: finalBoundRequestedAt(state.updatedAt, 1),
+          causationId: request.head.lastEventId,
+          type: "ASK_QUESTION",
+          payload: {
+            questionId: ids.questionId,
+            witnessId: appearance.witnessId,
+            examinationKind: examinationLeg,
+            text: request.final.text,
+            turnId: ids.questionTurnId,
+            presentedEvidenceIds: [],
+          },
+        })
+      : finalBoundAction({
+          actionId: ids.questionActionId,
+          trialId: args.trialId,
+          expectedStateVersion: baseVersion,
+          actor: questioner,
+          source: "speech",
+          requestedAt: finalBoundRequestedAt(state.updatedAt, 1),
+          causationId: request.head.lastEventId,
+          type: "REPHRASE_QUESTION",
+          payload: {
+            originalQuestionId: rephraseTarget.originalQuestionId,
+            questionId: ids.questionId,
+            text: request.final.text,
+            turnId: ids.questionTurnId,
+          },
+        }),
+    finalBoundAction({
+      actionId: ids.requestResponseActionId,
+      trialId: args.trialId,
+      expectedStateVersion: baseVersion + 1,
+      actor: system,
+      source: "system",
+      requestedAt: finalBoundRequestedAt(state.updatedAt, 2),
+      causationId: eventIdForGeneratedAction(ids.questionActionId),
+      responseId: ids.responseId,
+      type: "REQUEST_RESPONSE",
+      payload: {
+        responseId: ids.responseId,
+        actorId: witness.actorId,
+        purpose: "answer_question",
+      },
+    }),
+    finalBoundAction({
+      actionId: ids.objectionActionId,
+      trialId: args.trialId,
+      expectedStateVersion: baseVersion + 2,
+      actor: objector,
+      source: "deterministic",
+      requestedAt: finalBoundRequestedAt(state.updatedAt, 3),
+      causationId: eventIdForGeneratedAction(ids.requestResponseActionId),
+      type: "OBJECT",
+      payload: {
+        objectionId: ids.objectionId,
+        questionId: ids.questionId,
+        ground: candidate.ground,
+        interruptedResponseId: ids.responseId,
+      },
+    }),
+    finalBoundAction({
+      actionId: ids.beginInterruptionActionId,
+      trialId: args.trialId,
+      expectedStateVersion: baseVersion + 3,
+      actor: system,
+      source: "system",
+      requestedAt: finalBoundRequestedAt(state.updatedAt, 4),
+      causationId: eventIdForGeneratedAction(ids.objectionActionId),
+      interruptId: ids.interruptId,
+      type: "BEGIN_INTERRUPTION",
+      payload: {
+        interruptId: ids.interruptId,
+        interruptedResponseId: ids.responseId,
+        objectionId: ids.objectionId,
+      },
+    }),
+  ] as const;
+  for (const [index, action] of actions.entries()) {
+    const currentProjection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (query) =>
+          query.eq("trialId", args.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    let receipt;
+    try {
+      receipt = await appendActiveAction(ctx, {
+        action,
+        ownerId: args.ownerId,
+        projection: currentProjection,
+        writeSnapshot: index === actions.length - 1,
+        playerControlledOnly: index === 0,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("CONFLICT") || message.includes("DUPLICATE")) {
+        return conflictingFinalBoundInterruption();
+      }
+      if (message.includes("STALE_STATE_VERSION")) {
+        return staleFinalBoundInterruption();
+      }
+      throw error;
+    }
+    if (
+      receipt.replayed ||
+      receipt.actionId !== action.actionId ||
+      receipt.committedStateVersion !== baseVersion + index + 1 ||
+      !sameOrderedIdentifiers(receipt.eventIds, [
+        eventIdForGeneratedAction(action.actionId),
+      ])
+    ) {
+      return conflictingFinalBoundInterruption();
+    }
+  }
+  return {
+    status: "interruption",
+    interrupt: finalBoundMetadata({
+      request,
+      ground: candidate.ground,
+      prefixReplayed: false,
+    }),
+    outcome: null,
+  };
+}
+
+/**
+ * Trusted final-bound speech preparation. All four prefix events are committed
+ * in this single mutation, so no witness generation can interleave between
+ * the spoken question, response request, objection, and interruption.
+ */
+export const prepareFinalBoundInterruptionForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    requestJson: v.string(),
+  },
+  handler: prepareFinalBoundInterruptionForOwnerHandler,
+});
+
+/**
+ * Owner-bound reload seam for the one canonical current final-bound
+ * interruption. It reconstructs authority exclusively from durable events;
+ * no partial transcript, utterance identity, actor, or ground is accepted.
+ */
+export const recoverFinalBoundInterruptionForOwner = internalQuery({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    interruptId: v.optional(v.string()),
+  },
+  handler: recoverFinalBoundInterruptionForOwnerHandler,
+});
+
 /** Commits one player-controlled active-v3 action for the authenticated owner. */
 export const append = internalMutation({
   args: {
@@ -2361,6 +3630,8 @@ export const appendGeneratedForOwner = internalMutation({
     actionJson: v.string(),
     generationJson: v.string(),
     writeSnapshot: v.optional(v.boolean()),
+    claimCredentialJson: v.optional(v.string()),
+    claimNow: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertIdentifier(args.ownerId, "ownerId");
@@ -2384,6 +3655,24 @@ export const appendGeneratedForOwner = internalMutation({
         .unique(),
       args.ownerId,
     );
+    const state = TrialStateV3Schema.parse(JSON.parse(projection.stateJson));
+    const response = state.pendingResponses[action.payload.responseId];
+    if (response === undefined) return invalidWitnessGeneration();
+    const requiresClaim =
+      response.interruptId === null
+        ? false
+        : await canonicalTargetRequiresFinalBoundClaim(ctx, state, {
+            interruptId: response.interruptId,
+            responseId: response.responseId,
+          });
+    await requireFinalBoundClaimForAppend(ctx, {
+      ownerId: args.ownerId,
+      trialId: action.trialId,
+      credentialJson: args.claimCredentialJson,
+      now: args.claimNow,
+      required: requiresClaim,
+      expectedPhase: "witness_pending",
+    });
     const receipt = await appendActiveAction(ctx, {
       action,
       ownerId: args.ownerId,
@@ -2629,6 +3918,8 @@ export const appendObjectionRulingForOwner = internalMutation({
     ownerId: v.string(),
     actionJsons: v.array(v.string()),
     generationJson: v.string(),
+    claimCredentialJson: v.optional(v.string()),
+    claimNow: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertIdentifier(args.ownerId, "ownerId");
@@ -2655,6 +3946,41 @@ export const appendObjectionRulingForOwner = internalMutation({
       }),
       generation,
     );
+    const rulingAction = actions[0];
+    if (rulingAction === undefined) return invalidObjectionRuling();
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (query) =>
+          query.eq("trialId", rulingAction.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    const state = TrialStateV3Schema.parse(JSON.parse(projection.stateJson));
+    if (
+      rulingAction.interruptId === null ||
+      rulingAction.responseId === null
+    ) {
+      return invalidObjectionRuling();
+    }
+    const requiresClaim = await canonicalTargetRequiresFinalBoundClaim(
+      ctx,
+      state,
+      {
+        interruptId: rulingAction.interruptId,
+        responseId: rulingAction.responseId,
+      },
+    );
+    await requireFinalBoundClaimForAppend(ctx, {
+      ownerId: args.ownerId,
+      trialId: rulingAction.trialId,
+      credentialJson: args.claimCredentialJson,
+      now: args.claimNow,
+      required: requiresClaim,
+      expectedPhase: "ruling_pending",
+      expectedDecisionId: generation.decisionId,
+    });
     let primaryReceipt: Awaited<ReturnType<typeof appendActiveAction>> | null =
       null;
     for (const [index, action] of actions.entries()) {

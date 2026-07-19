@@ -707,6 +707,23 @@ export default defineSchema({
     .index("by_trial_action", ["trialId", "actionId"])
     .index("by_trial_version", ["trialId", "committedStateVersion"]),
 
+  finalBoundInterruptionClaims: defineTable({
+    claimId: v.string(),
+    ownerId: v.string(),
+    trialId: v.string(),
+    interruptId: v.string(),
+    decisionId: v.string(),
+    leaseGeneration: v.number(),
+    leaseTokenHash: v.string(),
+    leaseExpiresAt: v.number(),
+    status: v.union(v.literal("active"), v.literal("released")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_claim_id", ["claimId"])
+    .index("by_interrupt", ["interruptId"])
+    .index("by_owner_trial", ["ownerId", "trialId"]),
+
   trialProjections: defineTable({
     projectionId: v.string(),
     trialId: v.string(),

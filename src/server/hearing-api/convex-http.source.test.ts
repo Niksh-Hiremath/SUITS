@@ -20,6 +20,10 @@ import {
   HearingOpponentPlanPrecommitSchema,
 } from "@/domain/hearing-runtime";
 import {
+  FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
+  FinalBoundInterruptionRequestSchema,
+} from "@/domain/objections/final-bound-contracts";
+import {
   createDebriefGeneratorOutputFixture,
   createDebriefGeneratorRequestFixture,
 } from "@/domain/courtroom-ai/debrief-generator.test-fixtures";
@@ -54,6 +58,10 @@ import {
   HearingServiceCounselResponseCommitRequestSchema,
   HearingServiceDebriefCommitRequestSchema,
   HearingServiceJuryResponseCommitRequestSchema,
+  HearingServiceFinalBoundInterruptionPrepareRequestSchema,
+  HearingServiceFinalBoundInterruptionClaimRequestSchema,
+  HearingServiceFinalBoundInterruptionLeaseRequestSchema,
+  HearingServiceFinalBoundInterruptionResumeRequestSchema,
   HearingServiceNegotiationCommitRequestSchema,
   HearingServiceObjectionRulingCommitRequestSchema,
   HearingServiceOpponentPlanCommitRequestSchema,
@@ -62,8 +70,8 @@ import {
 const HTTP_SOURCE_PATH = fileURLToPath(
   new URL("../../../convex/http.ts", import.meta.url),
 );
-const COMMAND_ROUTE_SOURCE_PATH = fileURLToPath(
-  new URL("../../app/api/hearings/[trialId]/commands/route.ts", import.meta.url),
+const DURABLE_SERVICE_SOURCE_PATH = fileURLToPath(
+  new URL("./durable-service.ts", import.meta.url),
 );
 const OWNER_ID = "owner:123e4567-e89b-42d3-a456-426614174000";
 
@@ -239,6 +247,110 @@ async function validDebriefPrecommit() {
 }
 
 describe("secret hearing model-loop HTTP boundary", () => {
+  it("accepts only an actorless exact final-bound interruption request", () => {
+    const request = FinalBoundInterruptionRequestSchema.parse({
+      schemaVersion: FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
+      head: {
+        trialId: "trial_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        stateVersion: 12,
+        lastEventId: "event:head:12",
+      },
+      utterance: { generation: 2, utteranceId: "utterance:final-bound" },
+      trigger: {
+        revision: 4,
+        text: "You signed the delivery report, correct?",
+        confidence: 0.99,
+      },
+      final: {
+        revision: 5,
+        text: "You signed the delivery report, correct?",
+      },
+    });
+    const body = {
+      ownerId: OWNER_ID,
+      trialId: request.head.trialId,
+      request,
+    };
+    expect(
+      HearingServiceFinalBoundInterruptionPrepareRequestSchema.parse(body),
+    ).toEqual(body);
+    for (const forged of [
+      { ...body, actorId: "actor:browser-selected" },
+      { ...body, ground: "leading" },
+      { ...body, trialId: "trial_mismatched" },
+      { ...body, request: { ...request, ground: "leading" } },
+    ]) {
+      expect(
+        HearingServiceFinalBoundInterruptionPrepareRequestSchema.safeParse(
+          forged,
+        ).success,
+      ).toBe(false);
+    }
+
+    const resume = {
+      ownerId: OWNER_ID,
+      trialId: request.head.trialId,
+      interruptId:
+        "interrupt:final-bound:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    expect(
+      HearingServiceFinalBoundInterruptionResumeRequestSchema.parse(resume),
+    ).toEqual(resume);
+    expect(
+      HearingServiceFinalBoundInterruptionResumeRequestSchema.parse({
+        ownerId: OWNER_ID,
+        trialId: request.head.trialId,
+      }),
+    ).toEqual({ ownerId: OWNER_ID, trialId: request.head.trialId });
+    expect(
+      HearingServiceFinalBoundInterruptionResumeRequestSchema.safeParse({
+        ...resume,
+        actorId: "actor:forged",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      HearingServiceFinalBoundInterruptionClaimRequestSchema.parse({
+        ownerId: OWNER_ID,
+        trialId: request.head.trialId,
+      }),
+    ).toEqual({ ownerId: OWNER_ID, trialId: request.head.trialId });
+    const credential = {
+      decisionId:
+        "decision:objection-ruling:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      interruptId:
+        "interrupt:final-bound:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      leaseGeneration: 1,
+      leaseToken: `lease_${"b".repeat(64)}_11111111-1111-4111-8111-111111111111`,
+    };
+    const leaseBody = {
+      ownerId: OWNER_ID,
+      trialId: request.head.trialId,
+      credential,
+    };
+    expect(
+      HearingServiceFinalBoundInterruptionLeaseRequestSchema.parse(leaseBody),
+    ).toEqual(leaseBody);
+    expect(
+      HearingServiceFinalBoundInterruptionLeaseRequestSchema.safeParse({
+        ...leaseBody,
+        actorId: "actor:forged",
+      }).success,
+    ).toBe(false);
+    expect(
+      HearingServiceFinalBoundInterruptionLeaseRequestSchema.safeParse({
+        ...leaseBody,
+        ground: "leading",
+      }).success,
+    ).toBe(false);
+    expect(
+      HearingServiceFinalBoundInterruptionResumeRequestSchema.safeParse({
+        ...resume,
+        ground: "leading",
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts only strict owner- and trial-bound generation precommits", async () => {
     const opponentGeneration = await validOpponentPlanPrecommit();
     const counselGeneration = await validCounselResponsePrecommit();
@@ -381,12 +493,26 @@ describe("secret hearing model-loop HTTP boundary", () => {
       '>("hearingRuntime:commitNegotiationGeneration")',
       '>("hearingRuntime:commitJuryGeneration")',
       '>("hearingRuntime:commitDebriefGeneration")',
+      '>("hearingRuntime:prepareFinalBoundInterruption")',
+      '>("hearingRuntime:resumeFinalBoundInterruption")',
+      '>("hearingRuntime:claimFinalBoundInterruption")',
+      '>("hearingRuntime:renewFinalBoundInterruptionClaim")',
+      '>("hearingRuntime:releaseFinalBoundInterruptionClaim")',
+      '>("hearingRuntime:commitClaimedFinalBoundInterruption")',
+      '>("hearingRuntime:commitClaimedFinalBoundWitness")',
       'path: "/service/hearings/opponent-plan/commit", method: "POST"',
       'path: "/service/hearings/counsel-response/commit", method: "POST"',
       'path: "/service/hearings/objection-ruling/commit", method: "POST"',
       'path: "/service/hearings/negotiation/commit", method: "POST"',
       'path: "/service/hearings/jury-response/commit", method: "POST"',
       'path: "/service/hearings/debrief/commit", method: "POST"',
+      'path: "/service/hearings/interruption/prepare", method: "POST"',
+      'path: "/service/hearings/interruption/resume", method: "POST"',
+      'path: "/service/hearings/interruption/claim", method: "POST"',
+      'path: "/service/hearings/interruption/claim/renew", method: "POST"',
+      'path: "/service/hearings/interruption/claim/release", method: "POST"',
+      'path: "/service/hearings/interruption/claim/commit", method: "POST"',
+      'path: "/service/hearings/interruption/claim/witness/commit", method: "POST"',
     ]) {
       expect(source).toContain(expected);
     }
@@ -396,6 +522,70 @@ describe("secret hearing model-loop HTTP boundary", () => {
       "const commitWitnessGeneration = httpAction",
       "const commitOpponentPlanGeneration = httpAction",
     );
+    const finalBoundSection = sourceSection(
+      source,
+      "const prepareFinalBoundInterruption = httpAction",
+      "const resumeFinalBoundInterruption = httpAction",
+    );
+    expect(finalBoundSection).toContain("authorizeCaseServiceRequest(");
+    expect(finalBoundSection).toContain(
+      "HearingServiceFinalBoundInterruptionPrepareRequestSchema",
+    );
+    expect(finalBoundSection).toContain(
+      "HearingFinalBoundInterruptionPreparationSchema.parse(result)",
+    );
+    expect(finalBoundSection).toContain(
+      "assertFinalBoundInterruptionPreparationMatchesRequest(",
+    );
+    expect(finalBoundSection).not.toMatch(
+      /stateJson|graphJson|privateDirective|browserPayload/u,
+    );
+    const finalBoundResumeSection = sourceSection(
+      source,
+      "const resumeFinalBoundInterruption = httpAction",
+      "const claimFinalBoundInterruption = httpAction",
+    );
+    expect(finalBoundResumeSection).toContain("authorizeCaseServiceRequest(");
+    expect(finalBoundResumeSection).toContain(
+      "HearingServiceFinalBoundInterruptionResumeRequestSchema",
+    );
+    expect(finalBoundResumeSection).toContain(
+      "HearingFinalBoundInterruptionRecoveryPreparationSchema.parse(result)",
+    );
+    expect(finalBoundResumeSection).toContain(
+      "assertFinalBoundInterruptionRecoveryPreparation(",
+    );
+    expect(finalBoundResumeSection).not.toMatch(/actorId|ground|stateJson|graphJson/u);
+    const finalBoundClaimSection = sourceSection(
+      source,
+      "const claimFinalBoundInterruption = httpAction",
+      "function finalBoundLeaseAction",
+    );
+    expect(finalBoundClaimSection).toContain("authorizeCaseServiceRequest(");
+    expect(finalBoundClaimSection).toContain(
+      "HearingServiceFinalBoundInterruptionClaimRequestSchema",
+    );
+    expect(finalBoundClaimSection).toContain(
+      "HearingFinalBoundInterruptionClaimResultSchema.parse(",
+    );
+    expect(finalBoundClaimSection).not.toMatch(/actorId|ground|stateJson|graphJson/u);
+    const claimedCommitSection = sourceSection(
+      source,
+      "const commitClaimedFinalBoundInterruption = httpAction",
+      "const commitClaimedFinalBoundWitness = httpAction",
+    );
+    const claimedWitnessSection = sourceSection(
+      source,
+      "const commitClaimedFinalBoundWitness = httpAction",
+      "const commitWitnessGeneration = httpAction",
+    );
+    for (const section of [claimedCommitSection, claimedWitnessSection]) {
+      expect(section).toContain("authorizeCaseServiceRequest(");
+      expect(section).toContain(
+        "HearingFinalBoundInterruptionRecoveryPreparationSchema.parse(",
+      );
+      expect(section).not.toMatch(/actorId|ground|stateJson|graphJson/u);
+    }
     const opponentSection = sourceSection(
       source,
       "const commitOpponentPlanGeneration = httpAction",
@@ -473,14 +663,17 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(terminalSchema).toContain('trace.status === "stale"');
     expect(terminalSchema).not.toContain('trace.status === "accepted"');
 
-    const routeSource = await readFile(COMMAND_ROUTE_SOURCE_PATH, "utf8");
+    const durableServiceSource = await readFile(
+      DURABLE_SERVICE_SOURCE_PATH,
+      "utf8",
+    );
     const objectionDurableSection = sourceSection(
-      routeSource,
+      durableServiceSource,
       "commitObjectionRuling:",
       "commitNegotiationDecision:",
     );
     const negotiationDurableSection = sourceSection(
-      routeSource,
+      durableServiceSource,
       "commitNegotiationDecision:",
       "commitJuryResponse:",
     );
