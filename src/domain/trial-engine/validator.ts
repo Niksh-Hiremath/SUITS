@@ -121,6 +121,71 @@ function hasDuplicateIds(ids: readonly string[]): boolean {
   return new Set(ids).size !== ids.length;
 }
 
+function validateQuestionCitations(
+  state: TrialState,
+  action: TrialActionByType<"ASK_QUESTION">,
+): ActionValidationResult | null {
+  const factIds = action.payload.factIds ?? [];
+  const testimonyIds = action.payload.testimonyIds ?? [];
+
+  if (hasDuplicateIds(factIds)) {
+    return invalid(
+      "DUPLICATE_ENTITY_ID",
+      "Question fact citations must be unique",
+      "payload.factIds",
+    );
+  }
+  if (hasDuplicateIds(testimonyIds)) {
+    return invalid(
+      "DUPLICATE_ENTITY_ID",
+      "Question testimony citations must be unique",
+      "payload.testimonyIds",
+    );
+  }
+
+  for (const factId of factIds) {
+    const fact = state.facts[factId];
+    if (!fact) {
+      return invalid(
+        "UNKNOWN_FACT",
+        `Question cites unknown fact ${factId}`,
+        "payload.factIds",
+      );
+    }
+    if (
+      fact.status === "hidden" ||
+      fact.status === "excluded" ||
+      fact.status === "stricken"
+    ) {
+      return invalid(
+        "INVALID_FACT_STATUS",
+        `Question cannot cite ${fact.status} fact ${factId}`,
+        "payload.factIds",
+      );
+    }
+  }
+
+  for (const testimonyId of testimonyIds) {
+    const testimony = state.testimony[testimonyId];
+    const transcriptTurn = testimony
+      ? state.transcriptTurns[testimony.turnId]
+      : undefined;
+    if (
+      !testimony ||
+      testimony.status !== "active" ||
+      transcriptTurn?.status !== "active"
+    ) {
+      return invalid(
+        "UNKNOWN_TESTIMONY",
+        `Question requires active testimony ${testimonyId}`,
+        "payload.testimonyIds",
+      );
+    }
+  }
+
+  return null;
+}
+
 function hasPendingStrikeMotion(state: TrialState): boolean {
   return Object.values(state.strikeMotions).some(
     (motion) => motion.status === "pending",
@@ -723,6 +788,8 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (state.transcriptTurns[action.payload.turnId]) {
         return invalid("DUPLICATE_ENTITY_ID", `Transcript turn ${action.payload.turnId} already exists`);
       }
+      const citationIssue = validateQuestionCitations(state, action);
+      if (citationIssue) return citationIssue;
       if (hasDuplicateIds(action.payload.presentedEvidenceIds)) {
         return invalid(
           "DUPLICATE_ENTITY_ID",

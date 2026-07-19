@@ -530,6 +530,8 @@ const AskQuestionPayloadV1Schema = z
 const AskQuestionPayloadV2Schema = AskQuestionPayloadV1Schema;
 const AskQuestionPayloadV3Schema = AskQuestionPayloadV2Schema.extend({
   presentedEvidenceIds: z.array(IdentifierSchema),
+  factIds: z.array(IdentifierSchema).optional(),
+  testimonyIds: z.array(IdentifierSchema).optional(),
 }).strict();
 const AnswerQuestionPayloadSchema = z
   .object({
