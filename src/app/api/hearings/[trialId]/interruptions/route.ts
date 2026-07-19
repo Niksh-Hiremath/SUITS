@@ -7,6 +7,7 @@ import {
   verifyCaseOwnerSession,
 } from "@/server/case-api";
 import { CourtroomCommandOrchestrationError } from "@/server/hearing-api/courtroom-command";
+import { resolveE2EFinalBoundProvider } from "@/server/hearing-api/e2e-final-bound-provider";
 import { resolveFinalBoundInterruption } from "@/server/hearing-api/final-bound-interruption";
 import {
   HearingHttpError,
@@ -83,11 +84,17 @@ export async function POST(
   }
 
   try {
+    const provider = resolveE2EFinalBoundProvider({
+      nodeEnv: process.env.NODE_ENV,
+      hostname: request.nextUrl.hostname,
+      scenario: process.env.SUITS_E2E_FINAL_BOUND_SCENARIO,
+    });
     const resolution = await resolveFinalBoundInterruption({
       ownerId: ownerSession.ownerId,
       trialId: parsedTrialId.data,
       request: body,
       signal: request.signal,
+      ...(provider === undefined ? {} : { provider }),
     });
     return NextResponse.json(resolution, {
       headers: { "Cache-Control": "no-store" },
