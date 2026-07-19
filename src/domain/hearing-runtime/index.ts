@@ -6,6 +6,7 @@ export * from "./objection-boundary";
 export * from "./opponent-directive";
 export * from "./opponent-strike-opportunities";
 export * from "./outstanding-rephrase";
+export * from "./performance";
 export * from "./projection";
 export * from "./schema";
 export * from "./settlement-boundary";
