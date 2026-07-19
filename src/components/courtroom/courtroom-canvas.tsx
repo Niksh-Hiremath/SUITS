@@ -7,15 +7,18 @@ import {
   Vector3,
   type Group,
   type Mesh,
+  type MeshStandardMaterial,
   type Vector3Tuple,
 } from "three";
 
 import type {
   CourtroomAnimation,
+  CourtroomDisplayPhase,
   CourtroomPresentationFrame,
   CourtroomPresentationRuntimeSnapshot,
   CourtroomPresentationRuntimeState,
   CourtroomMouthShape,
+  CourtroomRulingPhase,
   SceneActorKey,
 } from "@/domain/courtroom-presentation";
 import { selectCourtroomPresentationRuntime } from "@/domain/courtroom-presentation";
@@ -496,9 +499,23 @@ function CharacterFigure({
       return;
     }
     const nowMs = performance.now();
+    const sampledRuntime = mouthIsActive
+      ? selectCourtroomPresentationRuntime(presentationRuntime, nowMs)
+      : runtimeSnapshot;
+    const sampledRuntimeOwnsActor = sampledRuntime.sceneActor === slot;
+    const sampledAnimation =
+      sampledRuntimeOwnsActor && sampledRuntime.animation
+        ? sampledRuntime.animation
+        : (character?.animation ?? "idle");
+    const sampledPosture =
+      sampledRuntimeOwnsActor && sampledRuntime.posture
+        ? sampledRuntime.posture
+        : (character?.posture ?? "seated");
+    const sampledMouthIsActive =
+      sampledRuntimeOwnsActor && runtimeMouthIsActive(sampledRuntime);
     const pose = semanticPose(
-      animation,
-      posture,
+      sampledAnimation,
+      sampledPosture,
       reducedMotion ? 0 : nowMs,
     );
     const delta = Math.min(rawDelta, 1 / 15);
@@ -578,17 +595,14 @@ function CharacterFigure({
       immediate,
     );
 
-    const sampledRuntime = mouthIsActive
-      ? selectCourtroomPresentationRuntime(presentationRuntime, nowMs)
-      : null;
     const sampledShape =
-      sampledRuntime?.sceneActor === slot
+      sampledMouthIsActive
         ? reducedMotion
           ? "narrow"
           : sampledRuntime.mouthShape
         : "rest";
     const hasFutureMouthCue =
-      sampledRuntime?.playback?.phase === "timed" &&
+      sampledRuntime.playback?.phase === "timed" &&
       sampledRuntime.mouthCues.some(({ endAtMs }) => endAtMs > nowMs);
     const [mouthWidth, mouthHeight] = mouthScale(sampledShape);
     mouth.current.scale.x = dampValue(
@@ -616,7 +630,7 @@ function CharacterFigure({
     if (
       unsettled ||
       (!reducedMotion &&
-        (hasFutureMouthCue || isLoopingPose(animation)))
+        (hasFutureMouthCue || isLoopingPose(sampledAnimation)))
     ) {
       invalidate();
     }
@@ -703,11 +717,130 @@ function Jury({
   );
 }
 
-function CourtroomArchitecture({ frame }: Readonly<{ frame: CourtroomPresentationFrame }>) {
-  const displayColor =
-    frame.display.mode === "evidence"
-      ? "#c8d8d0"
-      : "#25323b";
+const displayPalette = {
+  idle: { color: "#25323b", emissive: "#101419" },
+  evidence: { color: "#c8d8d0", emissive: "#74693c" },
+  settlement: { color: "#5b8f87", emissive: "#244b46" },
+} as const;
+
+function displayTransitionProgress(
+  snapshot: CourtroomPresentationRuntimeSnapshot,
+  observedAtMs: number,
+): number {
+  const transition = snapshot.displayTransition;
+  if (transition === null) return 1;
+  return MathUtils.clamp(
+    (observedAtMs - transition.startedAtMs) /
+      (transition.endsAtMs - transition.startedAtMs),
+    0,
+    1,
+  );
+}
+
+function displaySurfaceMotion(
+  phase: CourtroomDisplayPhase,
+  progress: number,
+): Readonly<{ opacity: number; scale: number; glow: number }> {
+  switch (phase) {
+    case "steady":
+      return { opacity: 1, scale: 1, glow: 0 };
+    case "entering":
+      return {
+        opacity: 0.28 + progress * 0.72,
+        scale: 0.92 + progress * 0.08,
+        glow: Math.sin(progress * Math.PI),
+      };
+    case "updating":
+      return {
+        opacity: 1,
+        scale: 1 + Math.sin(progress * Math.PI) * 0.03,
+        glow: Math.sin(progress * Math.PI),
+      };
+    case "switching":
+      return {
+        opacity: 0.38 + Math.abs(Math.cos(progress * Math.PI)) * 0.62,
+        scale: 0.96 + Math.abs(Math.cos(progress * Math.PI)) * 0.04,
+        glow: Math.sin(progress * Math.PI),
+      };
+    case "exiting":
+      return {
+        opacity: 1 - progress * 0.72,
+        scale: 1 - progress * 0.08,
+        glow: 1 - progress,
+      };
+  }
+}
+
+function CourtroomDisplaySurface({
+  presentationRuntime,
+  reducedMotion,
+}: Readonly<{
+  presentationRuntime: CourtroomPresentationRuntimeState;
+  reducedMotion: boolean;
+}>) {
+  const surface = useRef<Mesh>(null);
+  const material = useRef<MeshStandardMaterial>(null);
+  const invalidate = useThree((state) => state.invalidate);
+
+  useEffect(() => {
+    invalidate();
+  }, [invalidate, presentationRuntime.revision, reducedMotion]);
+
+  useFrame(() => {
+    if (!surface.current || !material.current) return;
+    const nowMs = performance.now();
+    const snapshot = selectCourtroomPresentationRuntime(
+      presentationRuntime,
+      nowMs,
+    );
+    const palette = displayPalette[snapshot.display.mode];
+    const progress = reducedMotion
+      ? 1
+      : displayTransitionProgress(snapshot, nowMs);
+    const motion = displaySurfaceMotion(
+      reducedMotion ? "steady" : snapshot.displayPhase,
+      progress,
+    );
+
+    surface.current.scale.set(motion.scale, motion.scale, 1);
+    material.current.color.set(palette.color);
+    material.current.emissive.set(palette.emissive);
+    material.current.emissiveIntensity =
+      snapshot.display.mode === "idle" ? 0.05 : 0.18 + motion.glow * 0.28;
+    material.current.opacity = motion.opacity;
+
+    if (
+      !reducedMotion &&
+      snapshot.transitionActive &&
+      snapshot.displayPhase !== "steady"
+    ) {
+      invalidate();
+    }
+  });
+
+  return (
+    <mesh position={[-2.65, 2.25, -3.61]} ref={surface}>
+      <boxGeometry args={[2.5, 1.75, 0.08]} />
+      <meshStandardMaterial
+        color={displayPalette.idle.color}
+        emissive={displayPalette.idle.emissive}
+        emissiveIntensity={0.05}
+        opacity={1}
+        ref={material}
+        roughness={0.42}
+        transparent
+      />
+    </mesh>
+  );
+}
+
+function CourtroomArchitecture({
+  presentationRuntime,
+  reducedMotion,
+}: Readonly<{
+  presentationRuntime: CourtroomPresentationRuntimeState;
+  reducedMotion: boolean;
+}>) {
   return (
     <group>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
@@ -723,11 +856,9 @@ function CourtroomArchitecture({ frame }: Readonly<{ frame: CourtroomPresentatio
       <Box color="#422b22" position={[-4.75, 0.6, -1.4]} size={[2.9, 1.08, 3.55]} />
       <Box color="#594033" position={[-2.65, 0.72, -3.25]} size={[2.35, 1.25, 1.35]} />
       <Box color="#2b211e" position={[-2.65, 2.25, -3.72]} size={[2.9, 2.15, 0.18]} />
-      <Box
-        color={displayColor}
-        position={[-2.65, 2.25, -3.61]}
-        roughness={0.42}
-        size={[2.5, 1.75, 0.08]}
+      <CourtroomDisplaySurface
+        presentationRuntime={presentationRuntime}
+        reducedMotion={reducedMotion}
       />
       {[-6.7, -4.5, -2.3, 2.3, 4.5, 6.7].map((x) => (
         <Box
@@ -737,6 +868,160 @@ function CourtroomArchitecture({ frame }: Readonly<{ frame: CourtroomPresentatio
           size={[0.08, 3.9, 0.08]}
         />
       ))}
+    </group>
+  );
+}
+
+type JudgeGavelPose = Readonly<{
+  position: Vector3Tuple;
+  rotation: Vector3Tuple;
+}>;
+
+function judgeGavelPose(
+  phase: CourtroomRulingPhase,
+  progress: number,
+): JudgeGavelPose {
+  switch (phase) {
+    case "idle":
+      return {
+        position: [0.72, 2.96, -4.3],
+        rotation: [1.22, 0.08, -1.02],
+      };
+    case "ready":
+      return {
+        position: [0.62, 3.32, -4.25],
+        rotation: [0.42, 0.08, -0.22],
+      };
+    case "gavel": {
+      const arc = Math.sin(progress * Math.PI);
+      return {
+        position: [
+          0.62,
+          3.32 - progress * 0.34 + arc * 0.16,
+          -4.25 + progress * 0.06,
+        ],
+        rotation: [
+          0.42 + progress * 0.78,
+          0.08,
+          -0.22 - progress * 0.88,
+        ],
+      };
+    }
+    case "holding":
+      return {
+        position: [0.65, 3.08, -4.2],
+        rotation: [0.92, 0.08, -0.76],
+      };
+  }
+}
+
+function rulingTransitionProgress(
+  snapshot: CourtroomPresentationRuntimeSnapshot,
+  observedAtMs: number,
+): number {
+  const transition = snapshot.rulingTransition;
+  if (transition?.phase !== "gavel") return 1;
+  return MathUtils.clamp(
+    (observedAtMs - transition.startedAtMs) /
+      (transition.endsAtMs - transition.startedAtMs),
+    0,
+    1,
+  );
+}
+
+function JudgeGavel({
+  presentationRuntime,
+  reducedMotion,
+}: Readonly<{
+  presentationRuntime: CourtroomPresentationRuntimeState;
+  reducedMotion: boolean;
+}>) {
+  const gavel = useRef<Group>(null);
+  const invalidate = useThree((state) => state.invalidate);
+
+  useEffect(() => {
+    invalidate();
+  }, [invalidate, presentationRuntime.revision, reducedMotion]);
+
+  useFrame((_, rawDelta) => {
+    if (!gavel.current) return;
+    const nowMs = performance.now();
+    const snapshot = selectCourtroomPresentationRuntime(
+      presentationRuntime,
+      nowMs,
+    );
+    const phase = snapshot.rulingPhase;
+    const progress =
+      reducedMotion || phase !== "gavel"
+        ? 1
+        : rulingTransitionProgress(snapshot, nowMs);
+    const target = judgeGavelPose(phase, progress);
+    const delta = Math.min(rawDelta, 1 / 15);
+
+    gavel.current.position.x = dampValue(
+      gavel.current.position.x,
+      target.position[0],
+      delta,
+      reducedMotion,
+    );
+    gavel.current.position.y = dampValue(
+      gavel.current.position.y,
+      target.position[1],
+      delta,
+      reducedMotion,
+    );
+    gavel.current.position.z = dampValue(
+      gavel.current.position.z,
+      target.position[2],
+      delta,
+      reducedMotion,
+    );
+    gavel.current.rotation.x = dampValue(
+      gavel.current.rotation.x,
+      target.rotation[0],
+      delta,
+      reducedMotion,
+    );
+    gavel.current.rotation.y = dampValue(
+      gavel.current.rotation.y,
+      target.rotation[1],
+      delta,
+      reducedMotion,
+    );
+    gavel.current.rotation.z = dampValue(
+      gavel.current.rotation.z,
+      target.rotation[2],
+      delta,
+      reducedMotion,
+    );
+
+    const unsettled =
+      Math.abs(gavel.current.position.y - target.position[1]) > 0.001 ||
+      Math.abs(gavel.current.rotation.x - target.rotation[0]) > 0.001 ||
+      Math.abs(gavel.current.rotation.z - target.rotation[2]) > 0.001;
+    if (
+      !reducedMotion &&
+      (unsettled ||
+        (snapshot.transitionActive && snapshot.rulingPhase === "gavel"))
+    ) {
+      invalidate();
+    }
+  });
+
+  return (
+    <group
+      position={[0.72, 2.96, -4.3]}
+      ref={gavel}
+      rotation={[1.22, 0.08, -1.02]}
+    >
+      <mesh castShadow position={[0, 0.2, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.11, 0.11, 0.42, 14]} />
+        <meshStandardMaterial color="#6d422b" roughness={0.58} />
+      </mesh>
+      <mesh castShadow position={[0, -0.14, 0]} rotation={[0, 0, -0.16]}>
+        <cylinderGeometry args={[0.035, 0.052, 0.62, 12]} />
+        <meshStandardMaterial color="#8a5837" roughness={0.62} />
+      </mesh>
     </group>
   );
 }
@@ -751,7 +1036,11 @@ function CanvasPerformanceMetadata({
   const canvas = useThree((state) => state.gl.domElement);
   const invalidate = useThree((state) => state.invalidate);
   const lastActor = useRef<string | null>(null);
+  const lastDisplayMode = useRef<string | null>(null);
+  const lastDisplayPhase = useRef<string | null>(null);
+  const lastRulingPhase = useRef<string | null>(null);
   const lastShape = useRef<string | null>(null);
+  const lastTransitionActive = useRef<string | null>(null);
 
   useEffect(() => {
     invalidate();
@@ -766,6 +1055,7 @@ function CanvasPerformanceMetadata({
     const active = runtimeMouthIsActive(snapshot);
     const shape = active && reducedMotion ? "narrow" : snapshot.mouthShape;
     const actor = active ? (snapshot.sceneActor ?? "none") : "none";
+    const transitionActive = snapshot.transitionActive ? "true" : "false";
     if (lastActor.current !== actor) {
       canvas.setAttribute("data-mouth-actor", actor);
       lastActor.current = actor;
@@ -774,10 +1064,31 @@ function CanvasPerformanceMetadata({
       canvas.setAttribute("data-mouth-shape", shape);
       lastShape.current = shape;
     }
+    if (lastDisplayMode.current !== snapshot.display.mode) {
+      canvas.setAttribute("data-display-mode", snapshot.display.mode);
+      lastDisplayMode.current = snapshot.display.mode;
+    }
+    if (lastDisplayPhase.current !== snapshot.displayPhase) {
+      canvas.setAttribute("data-display-phase", snapshot.displayPhase);
+      lastDisplayPhase.current = snapshot.displayPhase;
+    }
+    if (lastRulingPhase.current !== snapshot.rulingPhase) {
+      canvas.setAttribute("data-ruling-phase", snapshot.rulingPhase);
+      lastRulingPhase.current = snapshot.rulingPhase;
+    }
+    if (lastTransitionActive.current !== transitionActive) {
+      canvas.setAttribute("data-transition-active", transitionActive);
+      lastTransitionActive.current = transitionActive;
+    }
     const hasFutureMouthCue =
       snapshot.playback?.phase === "timed" &&
       snapshot.mouthCues.some(({ endAtMs }) => endAtMs > nowMs);
-    if (!reducedMotion && hasFutureMouthCue) invalidate();
+    if (
+      !reducedMotion &&
+      (hasFutureMouthCue || snapshot.transitionActive)
+    ) {
+      invalidate();
+    }
   });
 
   return null;
@@ -809,7 +1120,10 @@ function CourtroomScene({
         shadow-mapSize-width={frame.quality === "high" ? 2048 : 1024}
       />
       <pointLight color="#d9b36d" intensity={32} position={[-4, 4, 2]} />
-      <CourtroomArchitecture frame={frame} />
+      <CourtroomArchitecture
+        presentationRuntime={presentationRuntime}
+        reducedMotion={reducedMotion}
+      />
       <CharacterFigure
         color="#4e2632"
         frame={frame}
@@ -817,6 +1131,10 @@ function CourtroomScene({
         presentationRuntime={presentationRuntime}
         runtimeSnapshot={runtimeSnapshot}
         slot="judge"
+      />
+      <JudgeGavel
+        presentationRuntime={presentationRuntime}
+        reducedMotion={reducedMotion}
       />
       <CharacterFigure
         color="#203b58"

@@ -255,9 +255,16 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain(
       "presentationBaseCameraShot,\n    presentationBaseFocus",
     );
-    expect(sources.page).toContain("rebaseCourtroomPresentationRuntime(current, {");
+    expect(sources.page).toContain("rebaseCourtroomPresentationRuntime(");
+    expect(sources.page).toContain("baseDisplay: presentationDisplay");
+    expect(sources.page).toContain("trialId: presentationHead.trialId");
     expect(sources.page).toContain(
-      "cameraPending.sinceMs + COURTROOM_CAMERA_HYSTERESIS_MS",
+      "stateVersion: presentationHead.stateVersion",
+    );
+    expect(sources.page).toContain("lastEventId: presentationHead.lastEventId");
+    expect(sources.page).toContain("nextCourtroomPresentationWakeAt(");
+    expect(sources.page).toContain(
+      "advanceCourtroomPresentationRuntime(current, observedAtMs)",
     );
     expect(sources.page).toContain("<CourtroomStage");
     expect(sources.page).toContain("presentationRuntime={presentationRuntime}");

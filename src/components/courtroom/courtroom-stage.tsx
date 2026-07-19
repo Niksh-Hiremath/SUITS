@@ -15,7 +15,10 @@ import type {
   CourtroomPresentationRuntimeState,
   CourtroomQuality,
 } from "@/domain/courtroom-presentation";
-import { selectCourtroomPresentationRuntime } from "@/domain/courtroom-presentation";
+import {
+  courtroomRuntimeAnnouncementText,
+  selectCourtroomPresentationRuntime,
+} from "@/domain/courtroom-presentation";
 
 import styles from "./courtroom-stage.module.css";
 
@@ -131,12 +134,18 @@ export function CourtroomStage({
   const runtimeActorLabel = frame.characters.find(
     ({ slot }) => slot === runtimeSnapshot.sceneActor,
   )?.label;
+  const announcementText = courtroomRuntimeAnnouncementText(
+    runtimeSnapshot.announcement,
+  );
+  const display = runtimeSnapshot.display;
+  const reducedMotion = frame.reducedMotion || presentationRuntime.reducedMotion;
   const screenReaderStatus =
     runtimeSnapshot.source !== "base" &&
     runtimeActorLabel &&
     runtimeSnapshot.animation
       ? `${runtimeActorLabel}: ${runtimeSnapshot.animation.replaceAll("_", " ")}`
       : frame.statusSummary;
+  const liveStatus = announcementText ?? screenReaderStatus;
 
   return (
     <section
@@ -146,12 +155,23 @@ export function CourtroomStage({
       data-camera-shot={cameraShot}
       data-camera-target={presentationRuntime.camera.target ?? "none"}
       data-camera-transition={cameraTransition}
+      data-announcement-change={
+        runtimeSnapshot.announcement?.change ?? "none"
+      }
+      data-announcement-kind={runtimeSnapshot.announcement?.kind ?? "none"}
+      data-display-mode={display.mode}
+      data-display-phase={runtimeSnapshot.displayPhase}
       data-performance-purpose={performancePurpose}
       data-performance-source={runtimeSnapshot.source}
       data-quality={frame.quality}
+      data-reduced-motion={reducedMotion ? "true" : "false"}
       data-renderer-ready={ready ? "true" : "false"}
       data-renderer-state={rendererState}
+      data-ruling-phase={runtimeSnapshot.rulingPhase}
       data-testid="courtroom-stage"
+      data-transition-active={
+        runtimeSnapshot.transitionActive ? "true" : "false"
+      }
     >
       <div className={styles.canvas}>
         {webglSupported && (
@@ -198,18 +218,22 @@ export function CourtroomStage({
       </div>
       <div
         className={styles.display}
-        data-display-mode={frame.display.mode}
-        data-private={frame.display.mode === "settlement" ? "true" : "false"}
+        data-display-mode={display.mode}
+        data-display-phase={runtimeSnapshot.displayPhase}
+        data-private={display.mode === "settlement" ? "true" : "false"}
+        data-transition-active={
+          runtimeSnapshot.displayPhase === "steady" ? "false" : "true"
+        }
       >
         <span>
-          {frame.display.mode === "settlement"
+          {display.mode === "settlement"
             ? "Private counsel channel"
-            : frame.display.mode === "idle"
+            : display.mode === "idle"
               ? "Court display"
-              : frame.display.mode}
+              : display.mode}
         </span>
-        <strong>{frame.display.label ?? "No exhibit presented"}</strong>
-        {frame.display.status && <small>{frame.display.status}</small>}
+        <strong>{display.label ?? "No exhibit presented"}</strong>
+        {display.status && <small>{display.status}</small>}
       </div>
       <div className={styles.actors} aria-hidden="true">
         {frame.characters.map((character) => {
@@ -233,6 +257,11 @@ export function CourtroomStage({
               data-mouth-active={mouthActor === character.slot ? "true" : "false"}
               data-posture={posture}
               data-scene-actor={character.slot}
+              data-gavel-state={
+                character.slot === "judge"
+                  ? runtimeSnapshot.rulingPhase
+                  : undefined
+              }
               key={character.slot}
             >
               <span>{character.label}</span>
@@ -245,8 +274,12 @@ export function CourtroomStage({
           );
         })}
       </div>
-      <p aria-live="polite" className={styles.screenReaderStatus}>
-        {screenReaderStatus}
+      <p
+        aria-atomic="true"
+        aria-live="polite"
+        className={styles.screenReaderStatus}
+      >
+        {liveStatus}
       </p>
     </section>
   );

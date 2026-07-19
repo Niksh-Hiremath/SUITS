@@ -14,9 +14,9 @@ import {
 import { CourtroomStage } from "@/components/courtroom/courtroom-stage";
 import {
   advanceCourtroomPresentationRuntime,
-  COURTROOM_CAMERA_HYSTERESIS_MS,
   createCourtroomPresentationRuntime,
   deriveCourtroomPresentation,
+  nextCourtroomPresentationWakeAt,
   rebaseCourtroomPresentationRuntime,
   reduceCourtroomPresentationRuntime,
   resetCourtroomPresentationRuntime,
@@ -1099,48 +1099,67 @@ function HearingPageContent() {
       view,
     ],
   );
-  const durableTrialId = view?.trial.trialId ?? null;
   const presentationBaseFocus = courtroomPresentation?.camera.target ?? null;
   const presentationBaseCameraShot =
     courtroomPresentation?.camera.shot ?? "courtroom_wide";
-  const cameraPending = presentationRuntime.camera.pending;
+  const presentationDisplay = courtroomPresentation?.display ?? null;
+  const presentationHead = courtroomPresentation?.head ?? null;
+  const presentationWakeAtMs = nextCourtroomPresentationWakeAt(
+    presentationRuntime,
+  );
 
   useEffect(() => {
     const observedAtMs = window.performance.now();
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setPresentationRuntime((current) =>
-        rebaseCourtroomPresentationRuntime(current, {
+      setPresentationRuntime((current) => {
+        const baseRebase = {
           baseFocus: presentationBaseFocus,
           baseCameraShot: presentationBaseCameraShot,
           reducedMotion,
           observedAtMs,
-        }),
-      );
+        };
+        return rebaseCourtroomPresentationRuntime(
+          current,
+          presentationDisplay === null || presentationHead === null
+            ? baseRebase
+            : {
+                ...baseRebase,
+                baseDisplay: presentationDisplay,
+                displayHead: {
+                  trialId: presentationHead.trialId,
+                  stateVersion: presentationHead.stateVersion,
+                  lastEventId: presentationHead.lastEventId,
+                },
+              },
+        );
+      });
     });
     return () => {
       cancelled = true;
     };
   }, [
-    durableTrialId,
     presentationBaseCameraShot,
     presentationBaseFocus,
+    presentationDisplay,
+    presentationHead,
     reducedMotion,
   ]);
 
   useEffect(() => {
-    if (cameraPending === null) return;
-    const dueAtMs =
-      cameraPending.sinceMs + COURTROOM_CAMERA_HYSTERESIS_MS;
+    if (presentationWakeAtMs === null) return;
     const timeout = window.setTimeout(() => {
-      const observedAtMs = Math.max(window.performance.now(), dueAtMs);
+      const observedAtMs = Math.max(
+        window.performance.now(),
+        presentationWakeAtMs,
+      );
       setPresentationRuntime((current) =>
         advanceCourtroomPresentationRuntime(current, observedAtMs),
       );
-    }, Math.max(0, dueAtMs - window.performance.now()));
+    }, Math.max(0, presentationWakeAtMs - window.performance.now()));
     return () => window.clearTimeout(timeout);
-  }, [cameraPending]);
+  }, [presentationWakeAtMs]);
 
   return (
     <main className="hearing-shell">

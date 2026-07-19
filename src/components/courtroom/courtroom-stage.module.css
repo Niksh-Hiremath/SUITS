@@ -100,6 +100,7 @@
   background: rgba(18, 15, 13, 0.78);
   border-left: 3px solid #b88a3d;
   backdrop-filter: blur(8px);
+  transform-origin: center right;
 }
 
 .display strong,
@@ -113,9 +114,44 @@
   text-transform: capitalize;
 }
 
+.display[data-display-mode="evidence"] {
+  background: rgba(30, 42, 42, 0.9);
+  border-left-color: #d3b56d;
+  box-shadow: 0 0 28px rgba(211, 181, 109, 0.12);
+}
+
 .display[data-private="true"] {
   border-left-color: #86a9a1;
   background: rgba(20, 34, 34, 0.9);
+  box-shadow: 0 0 28px rgba(111, 169, 157, 0.14);
+}
+
+.display[data-display-phase="entering"] {
+  animation: displayEnter 240ms ease-out both;
+}
+
+.display[data-display-phase="updating"] {
+  animation: displayUpdate 240ms ease-in-out both;
+}
+
+.display[data-display-phase="switching"] {
+  animation: displaySwitch 240ms ease-in-out both;
+}
+
+.display[data-display-phase="exiting"] {
+  animation: displayExit 240ms ease-in both;
+}
+
+.stage[data-ruling-phase="gavel"]
+  .actor[data-actor-slot="judge"] {
+  border-color: rgba(255, 223, 151, 0.95);
+  box-shadow:
+    inset 0 3px 0 #f0c66f,
+    0 0 24px rgba(240, 198, 111, 0.22);
+}
+
+.stage[data-reduced-motion="true"] .display {
+  animation: none;
 }
 
 .actors {
@@ -177,6 +213,52 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@keyframes displayEnter {
+  from {
+    opacity: 0.3;
+    transform: translateX(12px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes displayUpdate {
+  0%,
+  100% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.28);
+    transform: scale(1.025);
+  }
+}
+
+@keyframes displaySwitch {
+  0%,
+  100% {
+    opacity: 1;
+    transform: rotateY(0deg);
+  }
+  50% {
+    opacity: 0.38;
+    transform: rotateY(-8deg);
+  }
+}
+
+@keyframes displayExit {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0.2;
+    transform: translateX(12px) scale(0.94);
+  }
 }
 
 @media (max-width: 760px) {
