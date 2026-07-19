@@ -109,6 +109,9 @@ class PhraseQueue:
     async def next(self) -> TtsLease:
         async with self._condition:
             while True:
+                if self._active_job_id is not None:
+                    await self._condition.wait()
+                    continue
                 while self._pending:
                     job_id = self._pending.popleft()
                     entry = self._entries[job_id]
@@ -254,6 +257,7 @@ class TtsAckWindow:
         self._maximum = max_outstanding_bytes
         self._condition = asyncio.Condition()
         self._reservations: dict[tuple[str, int], AckReservation] = {}
+        self._pending_keys: set[tuple[str, int]] = set()
         self._outstanding_bytes = 0
 
     @property
@@ -270,16 +274,23 @@ class TtsAckWindow:
             raise TtsBackpressureError("one TTS frame exceeds the ACK window")
         key = (reservation.job_id, reservation.frame_sequence)
         async with self._condition:
-            if key in self._reservations:
+            if key in self._reservations or key in self._pending_keys:
                 raise ValueError("duplicate TTS frame reservation")
-            while self._outstanding_bytes + reservation.byte_length > self._maximum:
+            self._pending_keys.add(key)
+            try:
+                while self._outstanding_bytes + reservation.byte_length > self._maximum:
+                    if cancel_event.is_set():
+                        raise asyncio.CancelledError
+                    try:
+                        await asyncio.wait_for(self._condition.wait(), timeout=0.05)
+                    except TimeoutError:
+                        continue
                 if cancel_event.is_set():
                     raise asyncio.CancelledError
-                await self._condition.wait()
-            if cancel_event.is_set():
-                raise asyncio.CancelledError
-            self._reservations[key] = reservation
-            self._outstanding_bytes += reservation.byte_length
+                self._reservations[key] = reservation
+                self._outstanding_bytes += reservation.byte_length
+            finally:
+                self._pending_keys.discard(key)
 
     async def acknowledge(
         self,
