@@ -134,6 +134,14 @@ class CancelSynthesisControl(ProtocolModel):
         return self
 
 
+class AckTtsAudioControl(ProtocolModel):
+    type: Literal["ack_tts_audio"] = "ack_tts_audio"
+    job_id: Identifier
+    response_id: Identifier
+    frame_sequence: int = Field(ge=0)
+    byte_length: int = Field(ge=2, multiple_of=2)
+
+
 class SetVoiceControl(ProtocolModel):
     type: Literal["set_voice"] = "set_voice"
     actor: Identifier
@@ -155,6 +163,7 @@ ClientControlMessage: TypeAlias = Annotated[
     | CancelUtteranceControl
     | SynthesizeControl
     | CancelSynthesisControl
+    | AckTtsAudioControl
     | SetVoiceControl
     | PingControl,
     Field(discriminator="type"),
@@ -259,6 +268,7 @@ class TtsAudioEvent(ProtocolModel):
     sample_rate_hz: int = Field(ge=8_000, le=48_000)
     channels: Literal[1] = 1
     encoding: Literal["pcm_s16le"] = "pcm_s16le"
+    ack_required: Literal[True] = True
 
 
 class TimingMark(ProtocolModel):
@@ -321,6 +331,14 @@ class MetricsEvent(ProtocolModel):
     metrics: tuple[Metric, ...] = Field(min_length=1, max_length=64)
 
 
+class FlowControlEvent(ProtocolModel):
+    type: Literal["flow_control"] = "flow_control"
+    stt_available_frames: int = Field(ge=0)
+    stt_available_bytes: int = Field(ge=0)
+    tts_window_bytes: int = Field(ge=2)
+    tts_outstanding_bytes: int = Field(ge=0)
+
+
 class ErrorEvent(ProtocolModel):
     type: Literal["error"] = "error"
     code: Identifier
@@ -351,6 +369,7 @@ ServerEvent: TypeAlias = Annotated[
     | TtsFinishedEvent
     | CancelledEvent
     | MetricsEvent
+    | FlowControlEvent
     | ErrorEvent
     | PongEvent,
     Field(discriminator="type"),

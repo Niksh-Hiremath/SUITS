@@ -95,6 +95,14 @@ def test_client_control_round_trips_with_camel_case_wire_fields() -> None:
         },
         {
             "protocol": PROTOCOL_VERSION,
+            "type": "ack_tts_audio",
+            "jobId": "job:1",
+            "responseId": "response:1",
+            "frameSequence": 0,
+            "byteLength": 640,
+        },
+        {
+            "protocol": PROTOCOL_VERSION,
             "type": "set_voice",
             "actor": "judge",
             "voiceId": "voice:judge",
