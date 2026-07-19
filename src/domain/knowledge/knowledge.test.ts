@@ -27,6 +27,8 @@ import {
 
 const STARTED_AT = "2026-07-18T12:00:00Z";
 const UPDATED_AT = "2026-07-18T12:01:00Z";
+const PENDING_DIRECTIVE_CANARY =
+  "pending_directive_must_never_enter_a_knowledge_view";
 
 function actor(
   actorId: string,
@@ -702,6 +704,47 @@ describe("counsel and judge privilege isolation", () => {
     expect(serialized).not.toContain("offer_opposing_private");
     expect(serialized).not.toContain("No admission of liability");
     expect(serialized).not.toContain("reservationValue");
+  });
+
+  it("keeps the pending opposing directive inside canonical state only", () => {
+    const state = createKnowledgeState();
+    if (state.trial.opposingStrategy === null) {
+      throw new Error("Knowledge fixture requires opposing strategy state");
+    }
+    state.trial.opposingStrategy.pendingDirectiveJson = JSON.stringify({
+      schemaVersion: "hearing-opponent-directive.v1",
+      canary: PENDING_DIRECTIVE_CANARY,
+    });
+
+    expect(JSON.stringify(state.trial.opposingStrategy)).toContain(
+      PENDING_DIRECTIVE_CANARY,
+    );
+
+    const roleViews = Object.keys(state.trial.actors).map((actorId) =>
+      buildKnowledgeView(state, actorId),
+    );
+    const plannerView = buildOpponentPlannerKnowledgeView(
+      state,
+      "actor_opposing_counsel",
+    );
+    const publicCounselView = buildOpponentCounselPublicKnowledgeView(
+      state,
+      "actor_opposing_counsel",
+    );
+    const serializedViews = [
+      ...roleViews.map((view) => JSON.stringify(view)),
+      JSON.stringify(plannerView),
+      JSON.stringify(publicCounselView),
+      JSON.stringify(buildJuryRecord(state)),
+    ];
+
+    for (const serialized of serializedViews) {
+      expect(serialized).not.toContain(PENDING_DIRECTIVE_CANARY);
+      expect(serialized).not.toContain("pendingDirectiveJson");
+    }
+    expect(JSON.stringify(publicCounselView)).not.toContain(
+      PENDING_DIRECTIVE_CANARY,
+    );
   });
 
   it("refuses to build the opposing planner view for another role", () => {

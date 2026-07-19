@@ -18,6 +18,11 @@ import {
 
 const TRIAL_ID = "trial_opposing_strategy";
 const BASE_TIME_MS = Date.parse("2026-07-19T00:00:00.000Z");
+const PENDING_DIRECTIVE_CANARY = JSON.stringify({
+  schemaVersion: "hearing-opponent-directive.v1",
+  kind: "question_witness",
+  canary: "pending_directive_must_remain_private",
+});
 
 const ACTORS = {
   system: {
@@ -90,6 +95,7 @@ type StrategyPayload = {
   evidencePriorityIds: string[];
   settlementPosture: "avoid" | "explore" | "counter" | "recommend_acceptance";
   privateNotes: string[];
+  pendingDirectiveJson?: string | null;
 };
 
 const INITIAL_STRATEGY: StrategyPayload = {
@@ -249,6 +255,65 @@ describe("opposing-counsel strategy events", () => {
       settlementPosture: INITIAL_STRATEGY.settlementPosture,
       privateNotes: INITIAL_STRATEGY.privateNotes,
     });
+    expect(
+      Object.keys(strategyState(harness.state) ?? {}),
+    ).not.toContain("pendingDirectiveJson");
+    expect(Object.keys(harness.events[1].payload)).not.toContain(
+      "pendingDirectiveJson",
+    );
+  });
+
+  it("persists and replays a bounded private pending directive", () => {
+    const harness = createHarness();
+    harness.start();
+    const committed = harness.commitStrategy({
+      ...INITIAL_STRATEGY,
+      pendingDirectiveJson: PENDING_DIRECTIVE_CANARY,
+    });
+    if (committed.event.type !== "UPDATE_OPPOSING_STRATEGY") {
+      throw new Error("Expected an opposing-strategy event");
+    }
+
+    expect(committed.event.payload).toMatchObject({
+      pendingDirectiveJson: PENDING_DIRECTIVE_CANARY,
+    });
+    expect(strategyState(harness.state)?.pendingDirectiveJson).toBe(
+      PENDING_DIRECTIVE_CANARY,
+    );
+    expect(
+      strategyState(reduceTrial(harness.events))?.pendingDirectiveJson,
+    ).toBe(PENDING_DIRECTIVE_CANARY);
+
+    const cleared = harness.commitStrategy(
+      nextStrategy(2, { pendingDirectiveJson: null }),
+    );
+    if (cleared.event.type !== "UPDATE_OPPOSING_STRATEGY") {
+      throw new Error("Expected an opposing-strategy clearing event");
+    }
+    expect(cleared.event.payload.pendingDirectiveJson).toBeNull();
+    expect(strategyState(harness.state)?.pendingDirectiveJson).toBeNull();
+  });
+
+  it("rejects empty and oversized pending directives", () => {
+    const harness = createHarness();
+    harness.start();
+
+    expectIssue(
+      harness.state,
+      harness.draftStrategy({
+        ...INITIAL_STRATEGY,
+        pendingDirectiveJson: "",
+      }),
+      "INVALID_ACTION",
+    );
+    expectIssue(
+      harness.state,
+      harness.draftStrategy({
+        ...INITIAL_STRATEGY,
+        pendingDirectiveJson: "x".repeat(32_001),
+      }),
+      "INVALID_ACTION",
+    );
   });
 
   it("requires revision one initially, then the same strategy ID and sequential revisions", () => {

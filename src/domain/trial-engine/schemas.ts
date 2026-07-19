@@ -433,6 +433,13 @@ export const OpposingStrategyStateV3Schema = z
       "recommend_acceptance",
     ]),
     privateNotes: z.array(z.string().trim().min(1).max(2_000)),
+    pendingDirectiveJson: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32_000)
+      .nullable()
+      .optional(),
     sourceEventId: IdentifierSchema,
     lastEventId: IdentifierSchema,
   })
