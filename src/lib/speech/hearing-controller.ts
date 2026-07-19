@@ -317,7 +317,7 @@ const SAFE_MESSAGES = Object.freeze({
   INVALID_IDENTIFIER: "A local speech operation identifier was invalid.",
   INVALID_TEXT: "The spoken courtroom text was empty or too long.",
   BUSY: "Another local courtroom audio operation is already active.",
-  BARGED_IN: "Courtroom speech was interrupted by microphone input.",
+  BARGED_IN: "Courtroom speech was interrupted by the player.",
   CLOSE_FAILED: "Local courtroom audio could not be fully released.",
   INTERRUPTION_FAILED:
     "The mid-question objection could not be resolved safely. Please repeat the question.",
@@ -735,6 +735,31 @@ export class HearingController {
           : { actor: "actor.judge", text: SPEAKER_TEST_PHRASE },
       ),
     ]);
+  }
+
+  /**
+   * Stop local courtroom playback before an immediate non-microphone player
+   * action such as an objection. The durable action remains owned by the
+   * caller; this method only fences browser/service audio.
+   */
+  interruptForCourtroomAction(): void {
+    this.assertOpen();
+    if (this.snapshotValue.lifecycle === "ready") return;
+    if (this.snapshotValue.lifecycle !== "speaking") {
+      throw new HearingControllerError("BUSY", SAFE_MESSAGES.BUSY);
+    }
+    const failure = this.interruptActivePlayback("courtroom_action");
+    if (failure !== null) {
+      this.setRecoverable(failure);
+      return;
+    }
+    this.setSnapshot({
+      lifecycle: "ready",
+      code: null,
+      message: null,
+      partialText: "",
+      activeMode: null,
+    });
   }
 
   baselineView(view: HearingRuntimeViewV1): void {
@@ -2450,6 +2475,13 @@ export class HearingController {
   }
 
   private interruptPlaybackForRecording(): void {
+    const failure = this.interruptActivePlayback("barge_in");
+    if (failure !== null) throw failure;
+  }
+
+  private interruptActivePlayback(
+    reason: "barge_in" | "courtroom_action",
+  ): HearingControllerError | null {
     const job = this.activePlaybackJob;
     ++this.playbackFence;
     this.activePlaybackJob = null;
@@ -2467,14 +2499,14 @@ export class HearingController {
       );
     }
     try {
-      this.client.cancelSynthesis({ scope: "all", reason: "barge_in" });
+      this.client.cancelSynthesis({ scope: "all", reason });
     } catch {
       failure ??= new HearingControllerError(
         "SPEECH_SERVICE_ERROR",
         SAFE_MESSAGES.SPEECH_SERVICE_ERROR,
       );
     }
-    if (failure !== null) throw failure;
+    return failure;
   }
 
   private abortPlayback(

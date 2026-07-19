@@ -186,6 +186,12 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain(".startRecording(mode)");
     expect(sources.page).toContain(".stopRecording()");
     expect(sources.page).toContain(".speakerTest()");
+    expect(sources.page).toContain("deriveOpponentResponseWindow(view)");
+    expect(sources.page).toContain("buildObjectIntent(");
+    expect(sources.page).toContain("buildContinueResponseIntent(");
+    expect(sources.page).toContain(".interruptForCourtroomAction()");
+    expect(sources.page).toContain("Object: {readable(ground)}");
+    expect(sources.page).toContain("Let the witness answer");
     expect(sources.page).not.toContain("<textarea");
     expect(sources.page).not.toContain("sendPcmFrame");
     expect(sources.page).not.toContain("frame.pcm");

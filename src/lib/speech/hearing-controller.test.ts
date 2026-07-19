@@ -2072,6 +2072,47 @@ describe("HearingController", () => {
     expect(test.controller.snapshot.lifecycle).toBe("recording");
   });
 
+  it("interrupts active playback for a courtroom action without opening the microphone", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    const captureStarts = test.capture.startCount;
+    const captureStops = test.capture.stopCount;
+    const speaker = test.controller.speakerTest();
+    await flushAsync();
+
+    test.controller.interruptForCourtroomAction();
+
+    await expect(speaker).rejects.toMatchObject({ code: "BARGED_IN" });
+    expect(test.playback.bargeCount).toBeGreaterThan(0);
+    expect(test.client.synthesisCancellations).toContainEqual({
+      scope: "all",
+      reason: "courtroom_action",
+    });
+    expect(test.capture.startCount).toBe(captureStarts);
+    expect(test.capture.stopCount).toBe(captureStops);
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("retains a recoverable audio error while fencing a courtroom action", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    const speaker = test.controller.speakerTest();
+    await flushAsync();
+    test.playback.bargeFailure = true;
+
+    expect(() => test.controller.interruptForCourtroomAction()).not.toThrow();
+
+    await expect(speaker).rejects.toMatchObject({ code: "BARGED_IN" });
+    expect(test.client.synthesisCancellations).toContainEqual({
+      scope: "all",
+      reason: "courtroom_action",
+    });
+    expect(test.controller.snapshot).toMatchObject({
+      lifecycle: "recoverable_error",
+      code: "PLAYBACK_FAILED",
+    });
+  });
+
   it("still cancels service synthesis and cleans capture when local barge fails", async () => {
     const test = harness();
     await test.controller.prepare();

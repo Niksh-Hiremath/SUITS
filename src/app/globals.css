@@ -496,6 +496,41 @@ footer {
   background: var(--wine);
 }
 
+.response-window {
+  background: #171713;
+  border: 1px solid rgba(185, 138, 61, 0.72);
+  box-shadow: inset 4px 0 0 var(--gold);
+}
+
+.response-window .required-opening {
+  margin: 12px 0 16px;
+}
+
+.response-window-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.objection-button {
+  padding: 11px 14px;
+  color: white;
+  background: var(--wine);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.continue-response-button {
+  margin-left: auto;
+}
+
+.objection-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .interaction-target {
   display: flex;
   gap: 8px;

@@ -27,6 +27,7 @@ import {
 } from "@/domain/objections/final-bound-contracts";
 import {
   HearingController,
+  HearingControllerError,
   type HearingControllerSnapshot,
   type HearingFinalSubmission,
 } from "@/lib/speech/hearing-controller";
@@ -40,6 +41,13 @@ import {
   enqueuePendingSpeechAdoption,
   type PendingSpeechAdoption,
 } from "./speech-queue";
+import {
+  buildContinueResponseIntent,
+  buildObjectIntent,
+  deriveOpponentResponseWindow,
+  type OpponentResponseGround,
+  type OpponentResponseWindow,
+} from "./response-window";
 
 const DEFAULT_CASE_SLUG = "redwood-signal-retaliation";
 const DEFAULT_LOCAL_SPEECH_URL = "ws://127.0.0.1:8765/v1/speech";
@@ -598,6 +606,13 @@ function HearingPageContent() {
           }
           setSpeechSetupError(undefined);
         } catch (cause) {
+          if (
+            cause instanceof HearingControllerError &&
+            cause.code === "BARGED_IN"
+          ) {
+            setSpeechSetupError(undefined);
+            return;
+          }
           setSpeechSetupError(
             cause instanceof Error
               ? cause.message
@@ -845,6 +860,51 @@ function HearingPageContent() {
     });
   }
 
+  async function objectToOpponentQuestion(
+    expectedWindow: OpponentResponseWindow,
+    ground: OpponentResponseGround,
+  ): Promise<void> {
+    const current = viewRef.current;
+    if (current === null) return;
+    const intent = buildObjectIntent(current, expectedWindow, ground);
+    if (intent === null) {
+      setError(
+        "That objection window changed before the action could be submitted.",
+      );
+      return;
+    }
+
+    const controller = speechControllerRef.current;
+    if (controller?.snapshot.lifecycle === "speaking") {
+      try {
+        controller.interruptForCourtroomAction();
+      } catch (cause) {
+        setSpeechSetupError(
+          cause instanceof Error
+            ? cause.message
+            : "Courtroom playback could not be interrupted safely.",
+        );
+        return;
+      }
+    }
+    await commitIntent(intent);
+  }
+
+  async function continueOpponentResponse(
+    expectedWindow: OpponentResponseWindow,
+  ): Promise<void> {
+    const current = viewRef.current;
+    if (current === null) return;
+    const intent = buildContinueResponseIntent(current, expectedWindow);
+    if (intent === null) {
+      setError(
+        "That response window changed before the witness could continue.",
+      );
+      return;
+    }
+    await commitIntent(intent);
+  }
+
   const activeWitness = view?.activeAppearance
     ? view.witnesses.find(
         (witness) => witness.witnessId === view.activeAppearance?.witnessId,
@@ -855,6 +915,8 @@ function HearingPageContent() {
     Boolean(activeLeg) &&
     activeLeg?.ownerSide === view?.trial.userSide &&
     view?.capabilities.canAskQuestion;
+  const opponentResponseWindow =
+    view === null ? null : deriveOpponentResponseWindow(view);
   const witnessAnswerCount =
     view?.transcript.filter((turn) => turn.actor.role === "witness").length ?? 0;
   const canFinishTrial = Boolean(view?.capabilities.canFinishTrial);
@@ -865,6 +927,12 @@ function HearingPageContent() {
     speechLifecycle === "ready" || speechLifecycle === "speaking";
   const speechBlocksCourtroomControls =
     hearingLifecycleBlocksCourtroomControls(speechLifecycle);
+  const responseWindowControlsBlocked =
+    courtroomBusy ||
+    Boolean(pendingIntent) ||
+    speechLifecycle === "preparing" ||
+    speechLifecycle === "recording" ||
+    speechLifecycle === "processing";
   const questionIsRecording =
     speechIsRecording && speechSnapshot?.activeMode === "question";
   const closingIsRecording =
@@ -1048,6 +1116,58 @@ function HearingPageContent() {
                 </div>
               )}
             </div>
+
+            {opponentResponseWindow && (
+              <section
+                aria-labelledby="opponent-response-heading"
+                className="advocacy-box response-window"
+              >
+                <div className="advocacy-label" id="opponent-response-heading">
+                  Opposing counsel response window
+                </div>
+                <p className="required-opening">
+                  Object now to interrupt local courtroom playback, or let the
+                  exact pending witness response continue.
+                </p>
+                <div
+                  aria-label="Available objection grounds"
+                  className="response-window-actions"
+                  role="group"
+                >
+                  {opponentResponseWindow.canObject &&
+                    opponentResponseWindow.permittedObjectionGrounds.map(
+                      (ground) => (
+                        <button
+                          className="objection-button"
+                          disabled={responseWindowControlsBlocked}
+                          key={ground}
+                          onClick={() =>
+                            void objectToOpponentQuestion(
+                              opponentResponseWindow,
+                              ground,
+                            )
+                          }
+                          type="button"
+                        >
+                          Object: {readable(ground)}
+                        </button>
+                      ),
+                    )}
+                  {opponentResponseWindow.canContinueResponse && (
+                    <button
+                      className="quiet-button continue-response-button"
+                      disabled={responseWindowControlsBlocked}
+                      onClick={() =>
+                        void continueOpponentResponse(opponentResponseWindow)
+                      }
+                      type="button"
+                    >
+                      Let the witness answer
+                    </button>
+                  )}
+                </div>
+              </section>
+            )}
 
             {activeWitness && activeLeg && playerOwnsFloor && (
               <div className="advocacy-box">
