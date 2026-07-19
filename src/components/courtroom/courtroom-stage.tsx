@@ -59,12 +59,14 @@ class RendererBoundary extends Component<
 
 export function CourtroomStage({
   audibleSemanticPerformance,
+  captureAtMs,
   frame,
   presentationRuntime,
   runtimeSnapshot,
   onQualityChange,
 }: Readonly<{
   audibleSemanticPerformance: CourtroomAudibleSemanticPerformance | null;
+  captureAtMs?: number;
   frame: CourtroomPresentationFrame;
   presentationRuntime: CourtroomPresentationRuntimeState;
   runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
@@ -164,6 +166,7 @@ export function CourtroomStage({
       data-camera-shot={cameraShot}
       data-camera-target={presentationRuntime.camera.target ?? "none"}
       data-camera-transition={cameraTransition}
+      data-capture-clock={captureAtMs === undefined ? "live" : "fixed"}
       data-announcement-change={
         runtimeSnapshot.announcement?.change ?? "none"
       }
@@ -198,6 +201,7 @@ export function CourtroomStage({
               audibleSemanticPerformance={audibleSemanticPerformance}
               cameraShot={cameraShot}
               cameraTransition={cameraTransition}
+              captureAtMs={captureAtMs}
               frame={frame}
               onContextLost={handleContextLost}
               onContextRestored={handleContextRestored}

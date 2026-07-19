@@ -36,6 +36,7 @@ type CourtroomCanvasProps = Readonly<{
   audibleSemanticPerformance: CourtroomAudibleSemanticPerformance | null;
   cameraShot: CameraShot;
   cameraTransition: CameraTransition;
+  captureAtMs?: number;
   frame: CourtroomPresentationFrame;
   onContextLost: () => void;
   onContextRestored: () => void;
@@ -52,6 +53,7 @@ type RuntimeFrameSample = Readonly<{
 type RuntimeFrameSampler = {
   current: {
     frameTimeSeconds: number;
+    presentationRuntime: CourtroomPresentationRuntimeState;
     revision: number;
     sample: RuntimeFrameSample;
   };
@@ -61,14 +63,17 @@ function sampleRuntimeFrame(
   sampler: RuntimeFrameSampler,
   presentationRuntime: CourtroomPresentationRuntimeState,
   frameTimeSeconds: number,
+  captureAtMs?: number,
 ): RuntimeFrameSample {
+  const frameKey = captureAtMs ?? frameTimeSeconds;
   if (
+    sampler.current.presentationRuntime === presentationRuntime &&
     sampler.current.revision === presentationRuntime.revision &&
-    sampler.current.frameTimeSeconds === frameTimeSeconds
+    sampler.current.frameTimeSeconds === frameKey
   ) {
     return sampler.current.sample;
   }
-  const observedAtMs = performance.now();
+  const observedAtMs = captureAtMs ?? performance.now();
   const sample = {
     observedAtMs,
     snapshot: selectCourtroomPresentationRuntime(
@@ -77,7 +82,8 @@ function sampleRuntimeFrame(
     ),
   };
   sampler.current = {
-    frameTimeSeconds,
+    frameTimeSeconds: frameKey,
+    presentationRuntime,
     revision: presentationRuntime.revision,
     sample,
   };
@@ -90,6 +96,7 @@ type CharacterFigureProps = Readonly<{
   runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
   runtimeSampler: RuntimeFrameSampler;
   semanticPerformance: CourtroomAudibleSemanticPerformance | null;
+  captureAtMs?: number;
   slot: SceneActorKey;
   position: Vector3Tuple;
   color: string;
@@ -502,6 +509,7 @@ function dampValue(
 }
 
 function CharacterFigure({
+  captureAtMs,
   frame,
   presentationRuntime,
   runtimeSnapshot,
@@ -540,6 +548,7 @@ function CharacterFigure({
     invalidate();
   }, [
     animation,
+    captureAtMs,
     emphasis,
     invalidate,
     mouthIsActive,
@@ -563,6 +572,7 @@ function CharacterFigure({
         runtimeSampler,
         presentationRuntime,
         clock.elapsedTime,
+        captureAtMs,
       );
     const sampledRuntimeOwnsActor = sampledRuntime.sceneActor === slot;
     const sampledAnimation =
@@ -584,7 +594,7 @@ function CharacterFigure({
     const pose = semanticPose(
       sampledAnimation,
       sampledPosture,
-      reducedMotion ? 0 : nowMs,
+      reducedMotion ? 0 : (captureAtMs ?? nowMs),
     );
     const semanticStyle = deriveCourtroomSemanticStyle(
       sampledSemanticPerformance,
@@ -726,6 +736,7 @@ function CharacterFigure({
     if (
       unsettled ||
       (!reducedMotion &&
+        captureAtMs === undefined &&
         (hasFutureMouthCue ||
           isLoopingPose(sampledAnimation) ||
           courtroomSemanticStyleIsAnimated(
@@ -783,11 +794,13 @@ function CharacterFigure({
 }
 
 function Jury({
+  captureAtMs,
   frame,
   presentationRuntime,
   runtimeSnapshot,
   runtimeSampler,
 }: Readonly<{
+  captureAtMs?: number;
   frame: CourtroomPresentationFrame;
   presentationRuntime: CourtroomPresentationRuntimeState;
   runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
@@ -805,6 +818,7 @@ function Jury({
     <group>
       {positions.map((position, index) => (
         <CharacterFigure
+          captureAtMs={captureAtMs}
           color={index % 2 === 0 ? "#31485d" : "#6b4952"}
           frame={frame}
           key={`${position.join(":")}`}
@@ -877,10 +891,12 @@ function displaySurfaceMotion(
 }
 
 function CourtroomDisplaySurface({
+  captureAtMs,
   presentationRuntime,
   reducedMotion,
   runtimeSampler,
 }: Readonly<{
+  captureAtMs?: number;
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
   runtimeSampler: RuntimeFrameSampler;
@@ -891,7 +907,7 @@ function CourtroomDisplaySurface({
 
   useEffect(() => {
     invalidate();
-  }, [invalidate, presentationRuntime.revision, reducedMotion]);
+  }, [captureAtMs, invalidate, presentationRuntime, reducedMotion]);
 
   useFrame(({ clock }) => {
     if (!surface.current || !material.current) return;
@@ -899,6 +915,7 @@ function CourtroomDisplaySurface({
       runtimeSampler,
       presentationRuntime,
       clock.elapsedTime,
+      captureAtMs,
     );
     const palette = displayPalette[snapshot.display.mode];
     const progress = reducedMotion
@@ -918,6 +935,7 @@ function CourtroomDisplaySurface({
 
     if (
       !reducedMotion &&
+      captureAtMs === undefined &&
       snapshot.transitionActive &&
       snapshot.displayPhase !== "steady"
     ) {
@@ -942,10 +960,12 @@ function CourtroomDisplaySurface({
 }
 
 function CourtroomArchitecture({
+  captureAtMs,
   presentationRuntime,
   reducedMotion,
   runtimeSampler,
 }: Readonly<{
+  captureAtMs?: number;
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
   runtimeSampler: RuntimeFrameSampler;
@@ -966,6 +986,7 @@ function CourtroomArchitecture({
       <Box color="#594033" position={[-2.65, 0.72, -3.25]} size={[2.35, 1.25, 1.35]} />
       <Box color="#2b211e" position={[-2.65, 2.25, -3.72]} size={[2.9, 2.15, 0.18]} />
       <CourtroomDisplaySurface
+        captureAtMs={captureAtMs}
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
         runtimeSampler={runtimeSampler}
@@ -1040,10 +1061,12 @@ function rulingTransitionProgress(
 }
 
 function JudgeGavel({
+  captureAtMs,
   presentationRuntime,
   reducedMotion,
   runtimeSampler,
 }: Readonly<{
+  captureAtMs?: number;
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
   runtimeSampler: RuntimeFrameSampler;
@@ -1053,7 +1076,7 @@ function JudgeGavel({
 
   useEffect(() => {
     invalidate();
-  }, [invalidate, presentationRuntime.revision, reducedMotion]);
+  }, [captureAtMs, invalidate, presentationRuntime, reducedMotion]);
 
   useFrame(({ clock }, rawDelta) => {
     if (!gavel.current) return;
@@ -1061,6 +1084,7 @@ function JudgeGavel({
       runtimeSampler,
       presentationRuntime,
       clock.elapsedTime,
+      captureAtMs,
     );
     const phase = snapshot.rulingPhase;
     const progress =
@@ -1114,7 +1138,9 @@ function JudgeGavel({
     if (
       !reducedMotion &&
       (unsettled ||
-        (snapshot.transitionActive && snapshot.rulingPhase === "gavel"))
+        (captureAtMs === undefined &&
+          snapshot.transitionActive &&
+          snapshot.rulingPhase === "gavel"))
     ) {
       invalidate();
     }
@@ -1139,10 +1165,12 @@ function JudgeGavel({
 }
 
 function CanvasPerformanceMetadata({
+  captureAtMs,
   presentationRuntime,
   reducedMotion,
   runtimeSampler,
 }: Readonly<{
+  captureAtMs?: number;
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
   runtimeSampler: RuntimeFrameSampler;
@@ -1158,13 +1186,14 @@ function CanvasPerformanceMetadata({
 
   useEffect(() => {
     invalidate();
-  }, [invalidate, presentationRuntime.revision, reducedMotion]);
+  }, [captureAtMs, invalidate, presentationRuntime, reducedMotion]);
 
   useFrame(({ clock }) => {
     const { observedAtMs: nowMs, snapshot } = sampleRuntimeFrame(
       runtimeSampler,
       presentationRuntime,
       clock.elapsedTime,
+      captureAtMs,
     );
     const active = runtimeMouthIsActive(snapshot);
     const shape = active && reducedMotion ? "narrow" : snapshot.mouthShape;
@@ -1199,6 +1228,7 @@ function CanvasPerformanceMetadata({
       snapshot.mouthCues.some(({ endAtMs }) => endAtMs > nowMs);
     if (
       !reducedMotion &&
+      captureAtMs === undefined &&
       (hasFutureMouthCue || snapshot.transitionActive)
     ) {
       invalidate();
@@ -1212,6 +1242,7 @@ function CourtroomScene({
   audibleSemanticPerformance,
   cameraShot,
   cameraTransition,
+  captureAtMs,
   frame,
   onContextLost,
   onContextRestored,
@@ -1221,6 +1252,7 @@ function CourtroomScene({
 }: CourtroomCanvasProps) {
   const runtimeSampler = useRef<RuntimeFrameSampler["current"]>({
     frameTimeSeconds: Number.NaN,
+    presentationRuntime,
     revision: presentationRuntime.revision,
     sample: { observedAtMs: 0, snapshot: runtimeSnapshot },
   });
@@ -1239,11 +1271,13 @@ function CourtroomScene({
       />
       <pointLight color="#d9b36d" intensity={32} position={[-4, 4, 2]} />
       <CourtroomArchitecture
+        captureAtMs={captureAtMs}
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
         runtimeSampler={runtimeSampler}
       />
       <CharacterFigure
+        captureAtMs={captureAtMs}
         color="#4e2632"
         frame={frame}
         position={[0, 1.45, -4.72]}
@@ -1258,11 +1292,13 @@ function CourtroomScene({
         slot="judge"
       />
       <JudgeGavel
+        captureAtMs={captureAtMs}
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
         runtimeSampler={runtimeSampler}
       />
       <CharacterFigure
+        captureAtMs={captureAtMs}
         color="#203b58"
         frame={frame}
         position={[-2.5, 0.25, 1.35]}
@@ -1278,6 +1314,7 @@ function CourtroomScene({
         slot="user_counsel"
       />
       <CharacterFigure
+        captureAtMs={captureAtMs}
         color="#6b2638"
         frame={frame}
         position={[2.5, 0.25, 1.35]}
@@ -1293,6 +1330,7 @@ function CourtroomScene({
         slot="opposing_counsel"
       />
       <CharacterFigure
+        captureAtMs={captureAtMs}
         color="#315c50"
         frame={frame}
         position={[3.8, 0.45, -1.65]}
@@ -1308,6 +1346,7 @@ function CourtroomScene({
         slot="witness"
       />
       <CharacterFigure
+        captureAtMs={captureAtMs}
         color="#4b4b48"
         frame={frame}
         position={[-2.65, 0.45, -3.05]}
@@ -1324,6 +1363,7 @@ function CourtroomScene({
         slot="clerk"
       />
       <Jury
+        captureAtMs={captureAtMs}
         frame={frame}
         presentationRuntime={presentationRuntime}
         runtimeSnapshot={runtimeSnapshot}
@@ -1335,6 +1375,7 @@ function CourtroomScene({
         reducedMotion={reducedMotion}
       />
       <CanvasPerformanceMetadata
+        captureAtMs={captureAtMs}
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
         runtimeSampler={runtimeSampler}
@@ -1352,6 +1393,7 @@ export default function CourtroomCanvas({
   audibleSemanticPerformance,
   cameraShot,
   cameraTransition,
+  captureAtMs,
   frame,
   onContextLost,
   onContextRestored,
@@ -1382,6 +1424,7 @@ export default function CourtroomCanvas({
         audibleSemanticPerformance={audibleSemanticPerformance}
         cameraShot={cameraShot}
         cameraTransition={cameraTransition}
+        captureAtMs={captureAtMs}
         frame={frame}
         onContextLost={onContextLost}
         onContextRestored={onContextRestored}

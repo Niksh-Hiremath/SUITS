@@ -25,6 +25,7 @@ describe("courtroom runtime renderer boundary", () => {
       "data-camera-shot",
       "data-camera-target",
       "data-camera-transition",
+      "data-capture-clock",
       "data-announcement-change",
       "data-announcement-kind",
       "data-display-mode",
@@ -105,6 +106,11 @@ describe("courtroom runtime renderer boundary", () => {
     expect(canvas).toContain("function sampleRuntimeFrame(");
     expect(canvas).toContain("clock.elapsedTime");
     expect(canvas).toContain("sampler.current.frameTimeSeconds");
+    expect(canvas).toContain("captureAtMs ?? performance.now()");
+    expect(canvas).toContain("captureAtMs === undefined &&");
+    expect(canvas).toContain(
+      "sampler.current.presentationRuntime === presentationRuntime",
+    );
     expect(
       canvas.match(/selectCourtroomPresentationRuntime\(/gu),
     ).toHaveLength(1);
@@ -185,6 +191,8 @@ describe("courtroom runtime renderer boundary", () => {
     expect(stage).toContain("? frame.camera.transition");
     expect(canvas).toContain('const transition = reducedMotion ? "cut" : cameraTransition');
     expect(canvas).toContain('reducedMotion ? "narrow"');
-    expect(canvas).toContain("reducedMotion ? 0 : nowMs");
+    expect(canvas).toContain(
+      "reducedMotion ? 0 : (captureAtMs ?? nowMs)",
+    );
   });
 });

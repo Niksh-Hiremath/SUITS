@@ -280,6 +280,7 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain(
       "runtimeSnapshot={presentationRuntimeSnapshot}",
     );
+    expect(sources.page).not.toContain("captureAtMs=");
     expect(sources.page).toContain("onQualityChange={setCourtroomQuality}");
     expect(sources.page).toContain('(prefers-reduced-motion: reduce)');
     expect(sources.courtroomStage).toContain("ssr: false");
