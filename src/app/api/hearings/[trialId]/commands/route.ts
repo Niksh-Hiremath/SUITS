@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 
-import {
-  HearingCommandPreparationSchema,
-  HearingPlayerCommandSchema,
-} from "@/domain/hearing-runtime";
+import { HearingPlayerCommandSchema } from "@/domain/hearing-runtime";
 import {
   CASE_OWNER_COOKIE_NAME,
-  callConvexCaseService,
   isTrustedRequestOrigin,
   verifyCaseOwnerSession,
 } from "@/server/case-api";
@@ -21,21 +16,13 @@ import {
 import {
   CourtroomCommandOrchestrationError,
   orchestrateCourtroomCommand,
-  type CourtroomCommandDurableService,
 } from "@/server/hearing-api/courtroom-command";
+import { createCourtroomCommandDurableService } from "@/server/hearing-api/durable-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 type RouteContext = { params: Promise<{ trialId: string }> };
-
-const TerminalModelCallResponseSchema = z
-  .object({
-    callId: z.string().trim().min(1).max(240),
-    attemptCount: z.number().int().nonnegative(),
-    replayed: z.boolean(),
-  })
-  .strict();
 
 export async function POST(
   request: NextRequest,
@@ -92,72 +79,10 @@ export async function POST(
   try {
     const ownerId = ownerSession.ownerId;
     const trialId = parsedTrialId.data;
-    const durableService: CourtroomCommandDurableService = {
-      prepare: async (command, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/command/prepare",
-          body: { ownerId, trialId, command },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitWitness: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/command/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitOpponentPlan: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/opponent-plan/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitCounselResponse: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/counsel-response/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitObjectionRuling: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/objection-ruling/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitNegotiationDecision: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/negotiation/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitJuryResponse: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/jury-response/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      commitDebrief: async (generation, signal) =>
-        await callConvexCaseService({
-          path: "/service/hearings/debrief/commit",
-          body: { ownerId, trialId, generation },
-          responseSchema: HearingCommandPreparationSchema,
-          signal,
-        }),
-      recordTerminalTrace: async (trace, signal) => {
-        await callConvexCaseService({
-          path: "/service/hearings/model-call/terminal",
-          body: { ownerId, trialId, trace },
-          responseSchema: TerminalModelCallResponseSchema,
-          signal,
-        });
-      },
-    };
+    const durableService = createCourtroomCommandDurableService({
+      ownerId,
+      trialId,
+    });
     const view = await orchestrateCourtroomCommand({
       command: body,
       provider: new EnvironmentCourtroomModelProvider(),
