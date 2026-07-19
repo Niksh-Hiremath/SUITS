@@ -9,10 +9,17 @@ import {
 } from "../courtroom-ai/model-call-trace";
 import {
   COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+  DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+  JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   CounselRoleResponseModelOutputSchema,
+  DebriefGeneratorModelOutputSchema,
+  JuryRoleResponseModelOutputSchema,
   OpponentPlannerModelOutputSchema,
   type CounselRoleResponseModelOutput,
+  type DebriefCitationSet,
+  type DebriefGeneratorModelOutput,
+  type JuryRoleResponseModelOutput,
   type OpponentPlannerModelOutput,
 } from "../courtroom-ai/call-contracts";
 import {
@@ -20,6 +27,16 @@ import {
   CounselResponseRequestSchema,
   type CounselResponseRequest,
 } from "../courtroom-ai/counsel-response";
+import {
+  DEBRIEF_GENERATOR_REQUEST_SCHEMA_VERSION,
+  DebriefGeneratorRequestSchema,
+  type DebriefGeneratorRequest,
+} from "../courtroom-ai/debrief-generator";
+import {
+  JURY_RESPONSE_REQUEST_SCHEMA_VERSION,
+  JuryResponseRequestSchema,
+  type JuryResponseRequest,
+} from "../courtroom-ai/jury-response";
 import {
   OPPONENT_PLANNER_REQUEST_SCHEMA_VERSION,
   OpponentPlannerRequestSchema,
@@ -33,7 +50,10 @@ import {
   type WitnessAnswerRequest,
   type WitnessAnswerModelOutput,
 } from "../courtroom-ai/witness-answer";
-import { OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION } from "../knowledge";
+import {
+  KNOWLEDGE_VIEW_SCHEMA_VERSION_V2,
+  OPPONENT_COUNSEL_PUBLIC_KNOWLEDGE_VIEW_SCHEMA_VERSION,
+} from "../knowledge";
 import { ModelMetadataSchema } from "../trial-engine/schemas";
 import { HearingRuntimeViewV1Schema } from "./schema";
 
@@ -45,10 +65,29 @@ export const HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION =
   "hearing-opponent-plan-precommit.v1" as const;
 export const HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
   "hearing-counsel-response-precommit.v1" as const;
+export const HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
+  "hearing-jury-response-precommit.v1" as const;
+export const HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION =
+  "hearing-debrief-generator-precommit.v1" as const;
 const HEARING_OPPONENT_PLANNER_PROMPT_VERSION =
   "opponent-planner.prompt.v2" as const;
 const HEARING_COUNSEL_RESPONSE_PROMPT_VERSION =
   "role-responder.counsel.prompt.v2" as const;
+const HEARING_JURY_RESPONSE_PROMPT_VERSION =
+  "role-responder.jury.prompt.v1" as const;
+const HEARING_DEBRIEF_GENERATOR_PROMPT_VERSION =
+  "debrief-generator.prompt.v1" as const;
+
+/** Every server-prepared model request that may cross the secret boundary. */
+export const HearingModelRequestSchema = z.union([
+  WitnessAnswerRequestSchema,
+  OpponentPlannerRequestSchema,
+  CounselResponseRequestSchema,
+  JuryResponseRequestSchema,
+  DebriefGeneratorRequestSchema,
+]);
+
+export type HearingModelRequest = z.infer<typeof HearingModelRequestSchema>;
 
 const CompletedHearingCommandPreparationSchema = z
   .object({
@@ -62,11 +101,7 @@ const ModelRequiredHearingCommandPreparationSchema = z
   .object({
     schemaVersion: z.literal(HEARING_COMMAND_PREPARATION_SCHEMA_VERSION),
     status: z.literal("model_required"),
-    request: z.union([
-      WitnessAnswerRequestSchema,
-      OpponentPlannerRequestSchema,
-      CounselResponseRequestSchema,
-    ]),
+    request: HearingModelRequestSchema,
   })
   .strict();
 
@@ -108,6 +143,18 @@ export type HearingCounselResponseModelRequiredPreparation = Omit<
 > &
   Readonly<{ request: CounselResponseRequest }>;
 
+export type HearingJuryResponseModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: JuryResponseRequest }>;
+
+export type HearingDebriefGeneratorModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: DebriefGeneratorRequest }>;
+
 /** Narrow a model-required preparation before entering witness-only code. */
 export function isHearingWitnessModelRequiredPreparation(
   preparation: HearingCommandPreparation,
@@ -137,6 +184,27 @@ export function isHearingCounselResponseModelRequiredPreparation(
     preparation.status === "model_required" &&
     preparation.request.schemaVersion ===
       COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering jury-only code. */
+export function isHearingJuryResponseModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingJuryResponseModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion === JURY_RESPONSE_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering debrief-only code. */
+export function isHearingDebriefGeneratorModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingDebriefGeneratorModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion ===
+      DEBRIEF_GENERATOR_REQUEST_SCHEMA_VERSION
   );
 }
 
@@ -233,6 +301,181 @@ export function hashCounselResponseModelOutput(outputInput: unknown): string {
   return sha256Utf8(JSON.stringify(output));
 }
 
+function juryResponseCitationSets(output: JuryRoleResponseModelOutput) {
+  return [
+    ...output.deliberationSegments.map(({ citations }) => citations),
+    ...output.findings.map(({ citations }) => citations),
+  ];
+}
+
+/** Canonical jury-considerable citations retained by the generic call audit. */
+export function juryResponseOutputCitations(
+  outputInput: unknown,
+): CourtroomModelCallCitationSet {
+  const output = JuryRoleResponseModelOutputSchema.parse(outputInput);
+  const citations = juryResponseCitationSets(output);
+  return CourtroomModelCallCitationSetSchema.parse({
+    factIds: stableUnique(citations.flatMap(({ factIds }) => factIds)),
+    evidenceIds: stableUnique(
+      citations.flatMap(({ evidenceIds }) => evidenceIds),
+    ),
+    testimonyIds: stableUnique(
+      citations.flatMap(({ testimonyIds }) => testimonyIds),
+    ),
+    eventIds: [],
+    sourceSegmentIds: [],
+    priorStatementIds: [],
+  });
+}
+
+/** Runtime-neutral jury digest shared by the server and Convex boundary. */
+export function hashJuryResponseModelOutput(outputInput: unknown): string {
+  const output = JuryRoleResponseModelOutputSchema.parse(outputInput);
+  return sha256Utf8(JSON.stringify(output));
+}
+
+export const HearingDebriefTranscriptEventBindingSchema = z
+  .object({
+    turnId: CaseGraphEntityIdSchema,
+    sourceEventId: CaseGraphEntityIdSchema,
+  })
+  .strict();
+
+const HearingDebriefTranscriptEventBindingsSchema = z
+  .array(HearingDebriefTranscriptEventBindingSchema)
+  .max(2_000)
+  .superRefine((bindings, context) => {
+    bindings.forEach((binding, index) => {
+      if (
+        index > 0 &&
+        bindings[index - 1].turnId.localeCompare(binding.turnId) >= 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "turnId"],
+          message:
+            "Transcript event bindings must be unique and sorted by turn ID",
+        });
+      }
+    });
+  });
+
+export type HearingDebriefTranscriptEventBinding = z.infer<
+  typeof HearingDebriefTranscriptEventBindingSchema
+>;
+
+function debriefGeneratorCitationSets(
+  output: DebriefGeneratorModelOutput,
+): DebriefCitationSet[] {
+  const citations = [output.overallAssessment.citations];
+  for (const field of [
+    "strengths",
+    "weakQuestions",
+    "missedEvidence",
+    "contradictions",
+    "objectionAccuracy",
+    "witnessStrategy",
+    "settlementChoices",
+    "juryMovement",
+  ] as const) {
+    citations.push(...output[field].map((point) => point.citations));
+  }
+  citations.push(
+    ...output.improvedClosing.segments.map((segment) => segment.citations),
+  );
+  return citations;
+}
+
+const GENERIC_TRACE_CITATION_LIMIT = 128;
+
+function boundedStableUnique(identifiers: readonly string[]): string[] {
+  return stableUnique(identifiers).slice(0, GENERIC_TRACE_CITATION_LIMIT);
+}
+
+function debriefCitedTranscriptTurnIds(
+  output: DebriefGeneratorModelOutput,
+): string[] {
+  return stableUnique(
+    debriefGeneratorCitationSets(output).flatMap(
+      ({ transcriptTurnIds }) => transcriptTurnIds,
+    ),
+  );
+}
+
+/**
+ * Canonical debrief citations represented by the generic durable call audit.
+ * The caller supplies only the cited turn-to-event bindings; the strict list
+ * must cover every cited turn exactly once and cannot include uncited turns.
+ */
+export function debriefGeneratorOutputCitations(
+  outputInput: unknown,
+  transcriptEventBindingsInput: readonly HearingDebriefTranscriptEventBinding[],
+): CourtroomModelCallCitationSet {
+  const output = DebriefGeneratorModelOutputSchema.parse(outputInput);
+  const transcriptEventBindings =
+    HearingDebriefTranscriptEventBindingsSchema.parse(
+      transcriptEventBindingsInput,
+    );
+  const citedTranscriptTurnIds = debriefCitedTranscriptTurnIds(output);
+  const boundTranscriptTurnIds = transcriptEventBindings.map(
+    ({ turnId }) => turnId,
+  );
+  if (!sameIdentifierSet(citedTranscriptTurnIds, boundTranscriptTurnIds)) {
+    throw new Error(
+      "Transcript event bindings must exactly cover cited debrief turns",
+    );
+  }
+  const sourceEventIdByTurnId = new Map(
+    transcriptEventBindings.map(({ turnId, sourceEventId }) => [
+      turnId,
+      sourceEventId,
+    ]),
+  );
+  const citations = debriefGeneratorCitationSets(output);
+  return CourtroomModelCallCitationSetSchema.parse({
+    factIds: boundedStableUnique(
+      citations.flatMap((citation) => [
+        ...citation.admittedFactIds,
+        ...citation.unadmittedFactIds,
+        ...citation.excludedFactIds,
+        ...citation.hiddenFactIds,
+      ]),
+    ),
+    evidenceIds: boundedStableUnique(
+      citations.flatMap((citation) => [
+        ...citation.admittedEvidenceIds,
+        ...citation.unadmittedEvidenceIds,
+        ...citation.excludedEvidenceIds,
+      ]),
+    ),
+    testimonyIds: boundedStableUnique(
+      citations.flatMap((citation) => [
+        ...citation.activeTestimonyIds,
+        ...citation.strickenTestimonyIds,
+      ]),
+    ),
+    eventIds: boundedStableUnique(
+      citedTranscriptTurnIds.map((turnId) => {
+        const sourceEventId = sourceEventIdByTurnId.get(turnId);
+        if (sourceEventId === undefined) {
+          throw new Error("A cited debrief turn is missing its event binding");
+        }
+        return sourceEventId;
+      }),
+    ),
+    sourceSegmentIds: boundedStableUnique(
+      citations.flatMap((citation) => citation.hiddenSourceSegmentIds),
+    ),
+    priorStatementIds: [],
+  });
+}
+
+/** Runtime-neutral debrief digest shared by the server and Convex boundary. */
+export function hashDebriefGeneratorModelOutput(outputInput: unknown): string {
+  const output = DebriefGeneratorModelOutputSchema.parse(outputInput);
+  return sha256Utf8(JSON.stringify(output));
+}
+
 function proposedCitationCount(output: WitnessAnswerModelOutput): number {
   return output.segments.reduce(
     (total, segment) =>
@@ -300,6 +543,52 @@ function counselResponseUnsupportedCitationCount(
       segment.citations.instructionIds.length +
       segment.citations.ruleIds.length +
       segment.citations.settlementOfferIds.length,
+    0,
+  );
+}
+
+function juryResponseProposedCitationCount(
+  output: JuryRoleResponseModelOutput,
+): number {
+  return juryResponseCitationSets(output).reduce(
+    (total, citations) =>
+      total +
+      Object.values(citations).reduce(
+        (citationTotal, identifiers) =>
+          citationTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
+function juryResponseUnsupportedCitationCount(
+  output: JuryRoleResponseModelOutput,
+): number {
+  return juryResponseCitationSets(output).reduce(
+    (total, citations) =>
+      total +
+      citations.transcriptTurnIds.length +
+      citations.sourceSegmentIds.length +
+      citations.priorStatementIds.length +
+      citations.issueIds.length +
+      citations.ruleIds.length +
+      citations.settlementOfferIds.length,
+    0,
+  );
+}
+
+function debriefGeneratorProposedCitationCount(
+  output: DebriefGeneratorModelOutput,
+): number {
+  return debriefGeneratorCitationSets(output).reduce(
+    (total, citations) =>
+      total +
+      Object.values(citations).reduce(
+        (citationTotal, identifiers) =>
+          citationTotal + identifiers.length,
+        0,
+      ),
     0,
   );
 }
@@ -376,6 +665,217 @@ function addMismatch(
   message: string,
 ): void {
   context.addIssue({ code: "custom", path, message });
+}
+
+type CourtroomModelCallTrace = z.infer<typeof CourtroomModelCallTraceSchema>;
+type ModelMetadata = z.infer<typeof ModelMetadataSchema>;
+
+type FinalTrialTraceExpectation = Readonly<{
+  callClass: CourtroomModelCallTrace["callClass"];
+  task: CourtroomModelCallTrace["task"];
+  actorRole: NonNullable<CourtroomModelCallTrace["actorRole"]>;
+  model: CourtroomModelCallTrace["model"];
+  promptVersion: string;
+  outputSchemaVersion: string;
+  outputHash: string;
+  outputCharacterCount: number;
+  citations: CourtroomModelCallCitationSet;
+  proposedCitationCount: number;
+}>;
+
+function validateFinalTrialPrecommitTrace(
+  envelope: Readonly<{
+    trialId: string;
+    callId: string;
+    expectedStateVersion: number;
+    expectedLastEventId: string;
+    modelMetadata: ModelMetadata;
+    trace: CourtroomModelCallTrace;
+  }>,
+  expected: FinalTrialTraceExpectation,
+  context: z.RefinementCtx,
+): void {
+  const { modelMetadata, trace } = envelope;
+  const acceptedAttempt = trace.attempts.find(
+    (attempt) => attempt.attempt === trace.acceptedAttempt,
+  );
+  const aggregateUsage = aggregateAttemptUsage(trace.attempts);
+
+  for (const [field, envelopeValue, traceValue] of [
+    ["trialId", envelope.trialId, trace.trialId],
+    ["callId", envelope.callId, trace.callId],
+    [
+      "expectedStateVersion",
+      envelope.expectedStateVersion,
+      trace.expectedStateVersion,
+    ],
+    [
+      "expectedLastEventId",
+      envelope.expectedLastEventId,
+      trace.expectedLastEventId,
+    ],
+  ] as const) {
+    if (envelopeValue !== traceValue) {
+      addMismatch(
+        context,
+        ["trace", field],
+        `Trace ${field} must match the final-trial pre-commit envelope`,
+      );
+    }
+  }
+
+  if (
+    trace.status !== "accepted" ||
+    trace.callClass !== expected.callClass ||
+    trace.task !== expected.task ||
+    trace.actorRole !== expected.actorRole ||
+    trace.actorId === null ||
+    trace.responseId !== null
+  ) {
+    addMismatch(
+      context,
+      ["trace", "task"],
+      "Final-trial pre-commit requires the exact accepted call class, task, and actor role",
+    );
+  }
+  if (
+    trace.inputEventIds.length !== 1 ||
+    trace.inputEventIds[0] !== envelope.expectedLastEventId
+  ) {
+    addMismatch(
+      context,
+      ["trace", "inputEventIds"],
+      "Final-trial generation must retain one exact canonical event-head binding",
+    );
+  }
+  if (
+    trace.knowledgeScope.knowledgeSchemaVersion !==
+      KNOWLEDGE_VIEW_SCHEMA_VERSION_V2 ||
+    trace.knowledgeScope.stateVersion !== envelope.expectedStateVersion
+  ) {
+    addMismatch(
+      context,
+      ["trace", "knowledgeScope"],
+      "Final-trial generation must audit a V2 KnowledgeView at the bound head",
+    );
+  }
+  if (
+    trace.model !== expected.model ||
+    modelMetadata.model !== expected.model ||
+    modelMetadata.model !== trace.model
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "model"],
+      `Final-trial generation and its trace must use ${expected.model}`,
+    );
+  }
+  if (
+    trace.outputSchemaVersion !== expected.outputSchemaVersion ||
+    modelMetadata.schemaVersion !== expected.outputSchemaVersion
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "schemaVersion"],
+      "Final-trial output, trace, and metadata schema versions must match",
+    );
+  }
+  if (
+    trace.promptVersion !== expected.promptVersion ||
+    modelMetadata.promptVersion !== expected.promptVersion ||
+    modelMetadata.promptVersion !== trace.promptVersion
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "promptVersion"],
+      "Final-trial trace and metadata must use the exact prompt version",
+    );
+  }
+  if (
+    modelMetadata.retryCount !== trace.retryCount ||
+    modelMetadata.validationFailureCount !== trace.validationFailureCount
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "retryCount"],
+      "Final-trial trace and metadata retry accounting must match",
+    );
+  }
+  if (
+    trace.latencyMs === null ||
+    modelMetadata.latencyMs !== trace.latencyMs ||
+    modelMetadata.estimatedCostUsd !== trace.estimatedCostUsd
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "latencyMs"],
+      "Final-trial trace and metadata timing and cost must match",
+    );
+  }
+  const usageMatches =
+    trace.usage === null
+      ? aggregateUsage === null &&
+        modelMetadata.inputTokens === null &&
+        modelMetadata.outputTokens === null
+      : aggregateUsage !== null &&
+        sameUsage(trace.usage, aggregateUsage) &&
+        modelMetadata.inputTokens === trace.usage.inputTokens &&
+        modelMetadata.outputTokens === trace.usage.outputTokens;
+  if (!usageMatches) {
+    addMismatch(
+      context,
+      ["modelMetadata", "inputTokens"],
+      "Accepted final-trial usage must match its attempts and metadata",
+    );
+  }
+  if (
+    acceptedAttempt === undefined ||
+    acceptedAttempt.status !== "accepted" ||
+    acceptedAttempt.providerRequestId === null ||
+    modelMetadata.requestId !== acceptedAttempt.providerRequestId
+  ) {
+    addMismatch(
+      context,
+      ["modelMetadata", "requestId"],
+      "Final-trial metadata must identify the accepted provider request",
+    );
+  }
+  if (acceptedAttempt?.providerResponseId === null) {
+    addMismatch(
+      context,
+      ["trace", "attempts"],
+      "The accepted final-trial attempt must retain its provider response ID",
+    );
+  }
+  if (
+    trace.outputHash !== expected.outputHash ||
+    acceptedAttempt?.outputHash !== expected.outputHash ||
+    trace.outputCharacterCount !== expected.outputCharacterCount
+  ) {
+    addMismatch(
+      context,
+      ["trace", "outputHash"],
+      "Final-trial trace output identity must match the validated candidate",
+    );
+  }
+  if (
+    !sameCitations(trace.acceptedCitations, expected.citations) ||
+    acceptedAttempt?.proposedCitationCount !==
+      expected.proposedCitationCount
+  ) {
+    addMismatch(
+      context,
+      ["trace", "acceptedCitations"],
+      "Final-trial citations must exactly match the validated candidate",
+    );
+  }
+  if (trace.committedActionId !== null || trace.committedEventId !== null) {
+    addMismatch(
+      context,
+      ["trace", "committedActionId"],
+      "A final-trial pre-commit trace cannot identify committed records",
+    );
+  }
 }
 
 /**
@@ -954,4 +1454,115 @@ export const HearingCounselResponsePrecommitSchema = z
 
 export type HearingCounselResponsePrecommit = z.infer<
   typeof HearingCounselResponsePrecommitSchema
+>;
+
+/**
+ * Strict server-to-Convex handoff for one accepted jury deliberation. The
+ * deterministic commit reconstructs the jury request and derives any verdict
+ * action; the model cannot supply a canonical action or event identity.
+ */
+export const HearingJuryResponsePrecommitSchema = z
+  .object({
+    schemaVersion: z.literal(HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION),
+    trialId: CaseGraphEntityIdSchema,
+    callId: CaseGraphEntityIdSchema,
+    decisionId: CaseGraphEntityIdSchema,
+    expectedStateVersion: z.number().int().nonnegative(),
+    expectedLastEventId: CaseGraphEntityIdSchema,
+    output: JuryRoleResponseModelOutputSchema,
+    modelMetadata: ModelMetadataSchema,
+    trace: CourtroomModelCallTraceSchema,
+  })
+  .strict()
+  .superRefine((envelope, context) => {
+    const outputHash = hashJuryResponseModelOutput(envelope.output);
+    const citations = juryResponseOutputCitations(envelope.output);
+    validateFinalTrialPrecommitTrace(
+      envelope,
+      {
+        callClass: "role_responder",
+        task: "jury_deliberation",
+        actorRole: "jury",
+        model: "gpt-5.6-luna",
+        promptVersion: HEARING_JURY_RESPONSE_PROMPT_VERSION,
+        outputSchemaVersion: JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+        outputHash,
+        outputCharacterCount: JSON.stringify(envelope.output).length,
+        citations,
+        proposedCitationCount: juryResponseProposedCitationCount(
+          envelope.output,
+        ),
+      },
+      context,
+    );
+    if (juryResponseUnsupportedCitationCount(envelope.output) !== 0) {
+      addMismatch(
+        context,
+        ["output", "deliberationSegments"],
+        "Jury output cannot contain citation classes outside the jury-considerable record",
+      );
+    }
+  });
+
+export type HearingJuryResponsePrecommit = z.infer<
+  typeof HearingJuryResponsePrecommitSchema
+>;
+
+/**
+ * Strict server-to-Convex handoff for one accepted Terra coaching artifact.
+ * Only cited transcript turn-to-event bindings cross back to Convex; hidden
+ * debrief knowledge and the full request remain outside this envelope.
+ */
+export const HearingDebriefGeneratorPrecommitSchema = z
+  .object({
+    schemaVersion: z.literal(
+      HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+    ),
+    trialId: CaseGraphEntityIdSchema,
+    callId: CaseGraphEntityIdSchema,
+    expectedStateVersion: z.number().int().nonnegative(),
+    expectedLastEventId: CaseGraphEntityIdSchema,
+    transcriptEventBindings: HearingDebriefTranscriptEventBindingsSchema,
+    output: DebriefGeneratorModelOutputSchema,
+    modelMetadata: ModelMetadataSchema,
+    trace: CourtroomModelCallTraceSchema,
+  })
+  .strict()
+  .superRefine((envelope, context) => {
+    let citations: CourtroomModelCallCitationSet;
+    try {
+      citations = debriefGeneratorOutputCitations(
+        envelope.output,
+        envelope.transcriptEventBindings,
+      );
+    } catch {
+      addMismatch(
+        context,
+        ["transcriptEventBindings"],
+        "Debrief transcript bindings must exactly cover every cited turn",
+      );
+      return;
+    }
+    validateFinalTrialPrecommitTrace(
+      envelope,
+      {
+        callClass: "debrief_generator",
+        task: "generate_debrief",
+        actorRole: "debrief",
+        model: "gpt-5.6-terra",
+        promptVersion: HEARING_DEBRIEF_GENERATOR_PROMPT_VERSION,
+        outputSchemaVersion: DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+        outputHash: hashDebriefGeneratorModelOutput(envelope.output),
+        outputCharacterCount: JSON.stringify(envelope.output).length,
+        citations,
+        proposedCitationCount: debriefGeneratorProposedCitationCount(
+          envelope.output,
+        ),
+      },
+      context,
+    );
+  });
+
+export type HearingDebriefGeneratorPrecommit = z.infer<
+  typeof HearingDebriefGeneratorPrecommitSchema
 >;
