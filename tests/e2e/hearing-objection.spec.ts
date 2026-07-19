@@ -31,6 +31,41 @@ type UnorderedObservation = Observation extends infer Entry
     : never
   : never;
 
+type LocalAudioEvent = Readonly<{
+  order: number;
+  atMs: number;
+  scheduledStartAtMs: number | null;
+  event:
+    | "dialogue_synthesize"
+    | "ended"
+    | "interruption_fetch"
+    | "objection_synthesize"
+    | "ruling_synthesize"
+    | "start"
+    | "stop";
+  sourceId: number | null;
+}>;
+
+type PerformanceActorObservation = Readonly<{
+  slot: string;
+  animation: string | null;
+  posture: string | null;
+  mouthActive: string | null;
+}>;
+
+type PerformanceObservation = Readonly<{
+  order: number;
+  atMs: number;
+  activeSceneActor: string | null;
+  performanceSource: string | null;
+  performancePurpose: string | null;
+  cameraShot: string | null;
+  cameraTransition: string | null;
+  actors: readonly PerformanceActorObservation[];
+  canvasMouthActor: string | null;
+  canvasMouthShape: string | null;
+}>;
+
 function parseControl(payload: unknown): JsonControl | null {
   if (typeof payload !== "string") return null;
   try {
@@ -87,34 +122,14 @@ async function installAudioProbe(
         slowNextStart: boolean;
         nextOrder: number;
         nextSourceId: number;
-        events: Array<{
-          order: number;
-          event:
-            | "ended"
-            | "interruption_fetch"
-            | "objection_synthesize"
-            | "ruling_synthesize"
-            | "start"
-            | "stop";
-          sourceId: number | null;
-        }>;
+        events: LocalAudioEvent[];
       };
     };
     const state = {
       slowNextStart: false,
       nextOrder: 0,
       nextSourceId: 0,
-      events: [] as Array<{
-        order: number;
-        event:
-          | "ended"
-          | "interruption_fetch"
-          | "objection_synthesize"
-          | "ruling_synthesize"
-          | "start"
-          | "stop";
-        sourceId: number | null;
-      }>,
+      events: [] as LocalAudioEvent[],
     };
     Object.defineProperty(scope, "__suitsE2EAudioState", {
       configurable: false,
@@ -124,6 +139,7 @@ async function installAudioProbe(
     });
     const recordLocal = (
       event:
+        | "dialogue_synthesize"
         | "ended"
         | "interruption_fetch"
         | "objection_synthesize"
@@ -131,8 +147,15 @@ async function installAudioProbe(
         | "start"
         | "stop",
       sourceId: number | null = null,
+      scheduledStartAtMs: number | null = null,
     ): void => {
-      state.events.push({ order: ++state.nextOrder, event, sourceId });
+      state.events.push({
+        order: ++state.nextOrder,
+        atMs: performance.now(),
+        event,
+        scheduledStartAtMs,
+        sourceId,
+      });
       if (event === "ended" || event === "start" || event === "stop") {
         scope.__suitsE2EAudioProbe(event);
       }
@@ -153,8 +176,17 @@ async function installAudioProbe(
         recordLocal("ended", sourceId);
         runtimeOnEnded?.call(this, event);
       };
-      recordLocal("start", sourceId);
-      return Reflect.apply(originalStart, this, arguments_);
+      const contextTime = this.context.currentTime;
+      const observedAtMs = performance.now();
+      const scheduledContextTime = Math.max(
+        contextTime,
+        arguments_[0] ?? 0,
+      );
+      const scheduledStartAtMs =
+        observedAtMs + (scheduledContextTime - contextTime) * 1_000;
+      const result = Reflect.apply(originalStart, this, arguments_);
+      recordLocal("start", sourceId, scheduledStartAtMs);
+      return result;
     };
     prototype.stop = function (...arguments_: Parameters<AudioBufferSourceNode["stop"]>) {
       recordLocal("stop", sourceIds.get(this) ?? null);
@@ -188,6 +220,11 @@ async function installAudioProbe(
             control.clipId === "courtroom.overruled.v1"
           ) {
             recordLocal("ruling_synthesize");
+          } else if (
+            control.type === "synthesize" &&
+            typeof control.text === "string"
+          ) {
+            recordLocal("dialogue_synthesize");
           }
         } catch {
           // Binary audio and invalid data remain outside the observation ledger.
@@ -196,6 +233,154 @@ async function installAudioProbe(
       return Reflect.apply(originalWebSocketSend, this, [data]);
     };
   });
+}
+
+async function installPerformanceProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const actorSlots = [
+      "judge",
+      "user_counsel",
+      "opposing_counsel",
+      "witness",
+      "clerk",
+      "jury",
+    ] as const;
+    const scope = window as typeof window & {
+      __suitsE2EPerformanceState: {
+        nextOrder: number;
+        lastSignature: string | null;
+        observations: PerformanceObservation[];
+      };
+    };
+    const state = {
+      nextOrder: 0,
+      lastSignature: null as string | null,
+      observations: [] as PerformanceObservation[],
+    };
+    Object.defineProperty(scope, "__suitsE2EPerformanceState", {
+      configurable: false,
+      enumerable: false,
+      value: state,
+      writable: false,
+    });
+
+    const capture = (): void => {
+      const stage = document.querySelector<HTMLElement>(
+        '[data-testid="courtroom-stage"]',
+      );
+      if (stage === null) return;
+      const actors = actorSlots.flatMap((slot) => {
+        const actor = stage.querySelector<HTMLElement>(
+          `[data-actor-slot="${slot}"]`,
+        );
+        return actor === null
+          ? []
+          : [
+              {
+                slot,
+                animation: actor.getAttribute("data-animation"),
+                posture: actor.getAttribute("data-posture"),
+                mouthActive: actor.getAttribute("data-mouth-active"),
+              },
+            ];
+      });
+      const canvas = stage.querySelector<HTMLCanvasElement>("canvas");
+      const semanticState = {
+        activeSceneActor: stage.getAttribute("data-active-scene-actor"),
+        performanceSource: stage.getAttribute("data-performance-source"),
+        performancePurpose: stage.getAttribute("data-performance-purpose"),
+        cameraShot: stage.getAttribute("data-camera-shot"),
+        cameraTransition: stage.getAttribute("data-camera-transition"),
+        actors,
+        canvasMouthActor: canvas?.getAttribute("data-mouth-actor") ?? null,
+        canvasMouthShape: canvas?.getAttribute("data-mouth-shape") ?? null,
+      };
+      const signature = JSON.stringify(semanticState);
+      if (signature === state.lastSignature) return;
+      state.lastSignature = signature;
+      state.observations.push({
+        order: ++state.nextOrder,
+        atMs: performance.now(),
+        ...semanticState,
+      });
+      if (state.observations.length > 12_000) state.observations.shift();
+    };
+
+    const observer = new MutationObserver(capture);
+    observer.observe(document, {
+      attributes: true,
+      attributeFilter: [
+        "data-active-scene-actor",
+        "data-performance-source",
+        "data-performance-purpose",
+        "data-camera-shot",
+        "data-camera-transition",
+        "data-actor-slot",
+        "data-animation",
+        "data-posture",
+        "data-mouth-active",
+        "data-mouth-actor",
+        "data-mouth-shape",
+      ],
+      childList: true,
+      subtree: true,
+    });
+    queueMicrotask(capture);
+  });
+}
+
+async function readPerformanceObservations(
+  page: Page,
+): Promise<PerformanceObservation[]> {
+  return page.evaluate(() =>
+    (
+      window as typeof window & {
+        __suitsE2EPerformanceState: {
+          observations: PerformanceObservation[];
+        };
+      }
+    ).__suitsE2EPerformanceState.observations,
+  );
+}
+
+function performanceActor(
+  observation: PerformanceObservation,
+  slot: string,
+): PerformanceActorObservation | undefined {
+  return observation.actors.find((actor) => actor.slot === slot);
+}
+
+function isNonRestMouth(observation: PerformanceObservation): boolean {
+  return (
+    observation.canvasMouthShape !== null &&
+    observation.canvasMouthShape !== "rest"
+  );
+}
+
+async function waitForPerformanceObservation(
+  page: Page,
+  predicate: (observation: PerformanceObservation) => boolean,
+  afterOrder = 0,
+  timeout = 30_000,
+): Promise<PerformanceObservation> {
+  let matched: PerformanceObservation | undefined;
+  await expect
+    .poll(
+      async () => {
+        const observations = await readPerformanceObservations(page);
+        matched = observations.find(
+          (observation) =>
+            observation.order > afterOrder && predicate(observation),
+        );
+        return matched !== undefined;
+      },
+      { timeout },
+    )
+    .toBe(true);
+  if (matched === undefined) {
+    throw new Error("Expected courtroom performance state was not recorded");
+  }
+  return matched;
 }
 
 test.describe("production-path partial objection", () => {
@@ -237,6 +422,7 @@ test.describe("production-path partial objection", () => {
       });
     });
     await installAudioProbe(page, (observation) => record(observation));
+    await installPerformanceProbe(page);
 
     const response = await page.goto("/hearing/");
     expect(response?.ok()).toBe(true);
@@ -444,17 +630,7 @@ test.describe("production-path partial objection", () => {
       (
         window as typeof window & {
           __suitsE2EAudioState: {
-            events: Array<{
-              order: number;
-              event:
-                | "ended"
-                | "interruption_fetch"
-                | "objection_synthesize"
-                | "ruling_synthesize"
-                | "start"
-                | "stop";
-              sourceId: number | null;
-            }>;
+            events: LocalAudioEvent[];
           };
         }
       ).__suitsE2EAudioState.events,
@@ -510,6 +686,231 @@ test.describe("production-path partial objection", () => {
     });
     await expect(page.getByText(/Objection telemetry/u)).toContainText(
       "1 candidate",
+    );
+
+    const objectionPerformance = await waitForPerformanceObservation(
+      page,
+      (entry) => {
+        const actor = performanceActor(entry, "opposing_counsel");
+        return (
+          entry.activeSceneActor === "opposing_counsel" &&
+          entry.performanceSource === "playback" &&
+          entry.performancePurpose === "objection" &&
+          entry.cameraShot === "opposing_counsel_close" &&
+          entry.cameraTransition === "blend" &&
+          actor?.animation === "objecting" &&
+          actor.posture === "standing"
+        );
+      },
+    );
+    const rulingPerformance = await waitForPerformanceObservation(
+      page,
+      (entry) => {
+        const actor = performanceActor(entry, "judge");
+        return (
+          entry.activeSceneActor === "judge" &&
+          entry.performanceSource === "playback" &&
+          entry.performancePurpose === "ruling" &&
+          entry.cameraShot === "judge_close" &&
+          entry.cameraTransition === "blend" &&
+          actor?.animation === "ruling" &&
+          actor.posture === "seated"
+        );
+      },
+      objectionPerformance.order,
+    );
+    const resumedPerformance = await waitForPerformanceObservation(
+      page,
+      (entry) => {
+        const actor = performanceActor(entry, "witness");
+        return (
+          entry.activeSceneActor === "witness" &&
+          entry.performanceSource === "playback" &&
+          entry.performancePurpose === "testimony" &&
+          entry.cameraShot === "witness_close" &&
+          entry.cameraTransition === "blend" &&
+          actor?.animation === "speaking" &&
+          actor.posture === "seated" &&
+          actor.mouthActive === "true" &&
+          entry.canvasMouthActor === "witness" &&
+          isNonRestMouth(entry)
+        );
+      },
+      rulingPerformance.order,
+    );
+    const terminalPerformance = await waitForPerformanceObservation(
+      page,
+      (entry) =>
+        entry.performanceSource === "base" &&
+        entry.performancePurpose === "base" &&
+        entry.canvasMouthActor === "none" &&
+        entry.canvasMouthShape === "rest" &&
+        entry.actors.length === 6 &&
+        entry.actors.every((actor) => actor.mouthActive === "false"),
+      resumedPerformance.order,
+    );
+    expect(terminalPerformance.order).toBeGreaterThan(
+      resumedPerformance.order,
+    );
+    const settledCameraPerformance = await waitForPerformanceObservation(
+      page,
+      (entry) =>
+        entry.performanceSource === "base" &&
+        entry.cameraShot === "witness_counsel_two_shot" &&
+        entry.cameraTransition === "blend" &&
+        entry.canvasMouthShape === "rest",
+      terminalPerformance.order,
+    );
+
+    const completedAudioEvents = await page.evaluate(() =>
+      (
+        window as typeof window & {
+          __suitsE2EAudioState: { events: LocalAudioEvent[] };
+        }
+      ).__suitsE2EAudioState.events,
+    );
+    const completedRulingSynthesis = completedAudioEvents.find(
+      (entry) => entry.event === "ruling_synthesize",
+    );
+    const dialogueSynthesis = completedAudioEvents.find(
+      (entry) =>
+        entry.event === "dialogue_synthesize" &&
+        entry.order >
+          (completedRulingSynthesis?.order ?? Number.POSITIVE_INFINITY),
+    );
+    const firstObjectionStart = completedAudioEvents.find(
+      (entry) =>
+        entry.event === "start" &&
+        entry.order >
+          (objectionSynthesis?.order ?? Number.POSITIVE_INFINITY) &&
+        entry.order <
+          (completedRulingSynthesis?.order ?? Number.NEGATIVE_INFINITY),
+    );
+    const firstRulingStart = completedAudioEvents.find(
+      (entry) =>
+        entry.event === "start" &&
+        entry.order >
+          (completedRulingSynthesis?.order ?? Number.POSITIVE_INFINITY) &&
+        entry.order <
+          (dialogueSynthesis?.order ?? Number.NEGATIVE_INFINITY),
+    );
+    const firstResumedStart = completedAudioEvents.find(
+      (entry) =>
+        entry.event === "start" &&
+        entry.order > (dialogueSynthesis?.order ?? Number.POSITIVE_INFINITY),
+    );
+    expect(dialogueSynthesis).toBeDefined();
+    expect(firstObjectionStart).toBeDefined();
+    expect(firstRulingStart).toBeDefined();
+    expect(firstResumedStart).toBeDefined();
+
+    const performanceLedger = await readPerformanceObservations(page);
+    const mouthChecks = [
+      {
+        purpose: "objection",
+        actor: "opposing_counsel",
+        start: firstObjectionStart,
+        afterOrder: objectionPerformance.order,
+        beforeOrder: rulingPerformance.order,
+      },
+      {
+        purpose: "ruling",
+        actor: "judge",
+        start: firstRulingStart,
+        afterOrder: rulingPerformance.order,
+        beforeOrder: resumedPerformance.order,
+      },
+      {
+        purpose: "testimony",
+        actor: "witness",
+        start: firstResumedStart,
+        afterOrder: resumedPerformance.order,
+        beforeOrder: terminalPerformance.order,
+      },
+    ] as const;
+    for (const check of mouthChecks) {
+      const scheduledStart = check.start;
+      if (scheduledStart === undefined) {
+        throw new Error(`Expected a Web Audio source start for ${check.purpose}`);
+      }
+      const scheduledStartAtMs = scheduledStart.scheduledStartAtMs;
+      if (scheduledStartAtMs === null) {
+        throw new Error(`Expected a scheduled audio start for ${check.purpose}`);
+      }
+      const actorMouthStates = performanceLedger.filter(
+        (entry) =>
+          entry.order >= check.afterOrder &&
+          entry.order < check.beforeOrder &&
+          entry.performancePurpose === check.purpose &&
+          entry.canvasMouthActor === check.actor &&
+          isNonRestMouth(entry),
+      );
+      expect(actorMouthStates.length).toBeGreaterThan(0);
+      expect(actorMouthStates[0]?.atMs).toBeGreaterThanOrEqual(
+        scheduledStartAtMs,
+      );
+      expect(
+        performanceLedger.some(
+          (entry) =>
+            entry.performancePurpose === check.purpose &&
+            entry.atMs < scheduledStartAtMs &&
+            entry.canvasMouthActor === check.actor &&
+            isNonRestMouth(entry),
+        ),
+      ).toBe(false);
+      for (const mouthState of actorMouthStates) {
+        expect(
+          mouthState.actors
+            .filter((actor) => actor.slot !== check.actor)
+            .every((actor) => actor.mouthActive === "false"),
+        ).toBe(true);
+      }
+    }
+
+    await expect(courtroomStage).toHaveAttribute("data-performance-purpose", "base");
+    await expect(courtroomStage).toHaveAttribute("data-camera-transition", "blend");
+    await expect(courtroomStage.locator("canvas")).toHaveAttribute(
+      "data-mouth-shape",
+      "rest",
+    );
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const reducedBase = await waitForPerformanceObservation(
+      page,
+      (entry) =>
+        entry.performanceSource === "base" &&
+        entry.performancePurpose === "base" &&
+        entry.cameraTransition === "cut" &&
+        entry.canvasMouthShape === "rest",
+      settledCameraPerformance.order,
+    );
+    await page.getByRole("button", { name: "Test speaker" }).click();
+    const reducedSpeakerTest = await waitForPerformanceObservation(
+      page,
+      (entry) => {
+        const actor = performanceActor(entry, "judge");
+        return (
+          entry.activeSceneActor === "judge" &&
+          entry.performancePurpose === "speaker_test" &&
+          entry.cameraShot === "judge_close" &&
+          entry.cameraTransition === "cut" &&
+          actor?.animation === "speaking" &&
+          actor.mouthActive === "true" &&
+          entry.canvasMouthActor === "judge" &&
+          entry.canvasMouthShape === "narrow"
+        );
+      },
+      reducedBase.order,
+    );
+    await waitForPerformanceObservation(
+      page,
+      (entry) =>
+        entry.performanceSource === "base" &&
+        entry.performancePurpose === "base" &&
+        entry.cameraTransition === "cut" &&
+        entry.canvasMouthActor === "none" &&
+        entry.canvasMouthShape === "rest",
+      reducedSpeakerTest.order,
     );
 
     const commandRequestsAfterRuling = observations.filter(
