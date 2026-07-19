@@ -544,16 +544,16 @@ Deliverables:
 
 - [x] partial-transcript candidate detector;
 - [x] interrupt coordinator with stale revision protection;
-- [ ] cached objection reaction;
-- [ ] GPT-5.6 objection/ruling schema;
+- [x] cached objection reaction;
+- [x] GPT-5.6 objection/ruling schema;
 - [ ] sustained/overruled/rephrase/strike/resume flows;
-- [ ] simultaneous speaker and barge-in handling;
+- [x] simultaneous speaker and barge-in handling;
 - [ ] objection metrics and eval fixtures.
 
 Gate:
 
 - [ ] E2E fixture proves objection can interrupt before final STT, cancel active audio, obtain a validated ruling, and resume coherently.
-- [ ] Late model/audio events cannot alter the committed post-ruling state.
+- [x] Late model/audio events cannot alter the committed post-ruling state.
 
 ### Milestone 7 — Animated courtroom
 
@@ -873,6 +873,13 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: this is a framework-independent component checkpoint, not the Milestone 6 gate. The hearing controller, protected Next route, atomic Convex four-event preparation, existing Luna ruling loop, ruling clips, and end-to-end sustained/overruled resume behavior are not yet wired. The cached objection reaction, model/ruling deliverable, flow/eval checkboxes, and both milestone gates remain open.
   - Commits: `6e5b874` and `1bd6853`.
 
+- 2026-07-19 19:42-22:36 IST - Milestone 6 durable final-bound interruption checkpoint
+  - Changed: wired the conservative partial detector into the hearing controller so PCM is fenced immediately, the cached local objection reaction plays before any model dispatch, and the exact final STT revision becomes the only durable question. Added an atomic four-event `ASK_QUESTION -> REQUEST_RESPONSE -> OBJECT -> BEGIN_INTERRUPTION` prefix; owner-bound recovery metadata; server-only judge/witness leases; strict Luna ruling and resumed-witness fences; no-write candidate withdrawal; current-versus-historical performance authority; reload recovery; sustained rephrase/cancel and overruled resume handling; normal resumed-testimony barge-in; and durable-head-first playback.
+  - Recovery hardening: lease credentials never reach the browser; near-expiry claims renew before Luna dispatch; hung renewals abort before the skew-adjusted durable takeover deadline; malformed or late claims are released; the prepared objection ground is immutable; pending-to-complete reload audio is coalesced before drain; aborted/unmounted runs cannot publish or enqueue; and a failed pending ruling clip schedules owner recovery only after recording cleanup. Candidate withdrawal uses a neutral local correction and never fabricates an "Overruled" ruling.
+  - Verified: the focused interruption/controller/page slice passed 159 tests before the final lease regressions; the final BFF suite passed 21 tests; the full speech/hearing slice passed 13 files and 121 tests; three Convex suites passed 47 tests; scoped lint and both TypeScript surfaces passed; and independent page and BFF re-audits reported no remaining actionable issue. The repository gate then passed 141 files/1,201 tests with three explicit live-only skips, three evals, the production build, and the six-function Convex public-surface allowlist. `npx convex dev --once` synchronized the linked development deployment in 7.95 seconds without a login prompt and added the three final-bound claim indexes.
+  - Remaining: this is not the Milestone 6 gate. A production-path browser E2E fixture still must prove the audible objection occurs before final STT, active audio is cancelled, and the validated ruling resumes coherently. The combined sustained/overruled/rephrase/strike/resume deliverable and objection eval fixtures remain open. No microphone permission or audible-output claim is made.
+  - Commits: `1177e88`, `23b331a`, `dbdc290`, `f170c52`, `501bb35`, `ac143ca`, `da2bdde`, `87a04ce`, and `affd284`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -936,6 +943,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The existing Luna objection resolver cannot safely consume a raw browser partial. Its canonical preparation requires an active durable `ASK_QUESTION -> REQUEST_RESPONSE -> OBJECT -> BEGIN_INTERRUPTION` chain with exact question, response, objection, interruption, and head bindings. The smallest safe M6 seam is therefore one protected final-bound interruption request backed by an atomic four-action Convex preparation, followed by the existing validated ruling loop and atomic ruling commit.
 - Cancelling STT immediately at the first detector match would make an often-incomplete partial the canonical question. The safe browser flow must stop further PCM, dispatch the cached reaction, finalize the already-buffered utterance, intercept that exact final so it cannot enter the normal question path, and seal its revision onto the partial trigger before any billable/durable objection work starts.
 
+- A final-bound ruling cannot be whole-chain single-flight if the BFF trusts a fixed heartbeat interval or the raw absolute expiry. The provider must wait for an immediate renewal when the claim is near expiry, every renewal request must time out before `leaseExpiresAt - clockSkew - safetyBuffer`, and claim acquisition must reserve execution time. Otherwise Convex can grant takeover while the prior Luna request is still running.
+- Reload recovery cannot enqueue both a pending ruling and its later complete continuation as independent audio jobs. The queue must retain the earliest controller baseline while replacing the pending adoption with the complete response before drain; cancellation/unmount and concurrent courtroom activity also need synchronous fences before canonical publication.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -994,6 +1004,11 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Probe the two pinned GPT-5.6 models with fixed server-owned content only, `store:false`, low reasoning, and no case/transcript/audio data. Share successful results for five minutes, degraded results for fifteen seconds, and require a serializable protected Convex permit so parallel server instances cannot amplify billable calls beyond five preflight snapshots per rolling ten minutes.
 - Treat the partial detector as a conservative local latency optimization, never as legal authority. The browser envelope is intentionally actorless; the protected service must reload the exact owner-bound trial head, derive counsel/witness/rules, rerun the detector with canonical context, and reject any forged or stale candidate before appending events.
 - Use final-bound dispatch for the production M6 path: the partial may stop PCM and trigger the cached “Objection!” performance immediately, but the durable question and protected resolver request must bind the exact final STT text/revision. Keep immediate partial dispatch available only as an isolated coordinator mode for a future separately audited candidate-model path.
+
+- Persist the exact final-bound four-event prefix atomically before Luna reasoning, then allow only the server-held lease owner to commit the matching judge ruling and optional resumed witness answer. Treat the canonical objection ground, question/response/event IDs, source/committed heads, decision ID, and target completion head as one immutable scope.
+- Keep final-bound lease tokens server-only. Use the shared 30-second durable duration, a conservative five-second cross-service clock-skew allowance, a one-second pre-expiry abort buffer, and a bounded 60-second acquisition window that releases late claims rather than starting model work near the route deadline.
+- Treat a revised final that no longer matches the partial candidate as a no-write withdrawal at the unchanged source head. Play only the neutral local correction "Correction. The objection is withdrawn."; never invent a judge ruling for an event that was not committed.
+- Recover interruptions through an owner-only BFF route with no browser-selected interrupt, actor, ground, or lease authority. Publish the durable head before audio, suppress historical performance, coalesce pending-to-complete recovery before drain, and fence aborted or concurrent recovery before mutating page state.
 
 ## 16. Verification Evidence
 
@@ -1185,6 +1200,17 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm test` — exit 0 after the final coordinator hardening; 136 files and 1,039 tests passed with three explicit live-only skips.
   - Two independent read-only audits plus primary review identified the required protected integration seam. The current slice has no imports outside `src/domain/objections`, performs no network or durable mutation, and is not counted as cached-audio, Convex, Luna, or E2E interruption proof.
   - `git push origin main` — exit 0 for `6e5b874` (`feat: detect partial objection candidates`) and `1bd6853` (`feat: coordinate partial objection interrupts`).
+
+- 2026-07-19 19:42-22:36 IST - Milestone 6 durable final-bound interruption verification
+  - `npx vitest run src/app/api/hearings/route.test.ts` - exit 0; 21 BFF tests passed. They cover exact owner/session/origin binding, no browser authority or lease-token disclosure, whole-ruling single-flight, delayed-claim renewal before provider dispatch, hung-renew abort before the skew-adjusted takeover deadline, invalid-horizon and late-claim release, pre-aborted guard settlement, immutable objection ground, current/historical response authority, witness-failure salvage, no-write withdrawal, and owner-only reload recovery.
+  - `npx vitest run src/lib/speech src/app/hearing` - exit 0; 13 files and 121 tests passed. Coverage includes partial/final fencing, cached objection/ruling delivery, neutral withdrawal correction, pending recovery after audio failure, exact resumed-witness binding, ruling dedupe, barge-in, durable baseline adoption, pending-to-complete queue coalescing, and abort-before-publication.
+  - `npx vitest run convex/finalBoundInterruption.integration.test.ts convex/trialEvents.integration.test.ts convex/hearingRuntime.integration.test.ts` - exit 0; three files and 47 tests passed for the atomic prefix, claim/renew/release/takeover, same-transaction credential revalidation, exact ruling/witness commits, recovery reconstruction, no-write withdrawal, and ordinary non-final-bound compatibility.
+  - `npx eslint` over the changed interruption, route, controller, page, and Convex files; `npm run typecheck`; and `npx tsc -p convex/tsconfig.json --noEmit --pretty false` - exit 0. Two independent final re-audits found no remaining actionable page, recovery, lease, identity, or ground-binding issue.
+  - `npm run lint` - initial exit 1 because ESLint traversed `services/speech/.venv` and linted PyTorch's vendored JavaScript. Adding `**/.venv/**` to the global ignore fixed the repository configuration; the rerun exited 0 with only the four existing generated Convex warnings.
+  - `npm test` - exit 0; 141 files passed, three live-only files skipped, 1,201 tests passed, and three tests skipped. `npm run eval` - exit 0; three evals passed. `npm run typecheck` and Convex TypeScript - exit 0.
+  - `npm run build` - exit 0 in 14.9 seconds; Next.js 16.2.10 compiled/typechecked, generated 19/19 pages, and registered both protected interruption routes. `npm run verify:convex-surface` - exit 0; exactly six authenticated public Convex functions remain.
+  - `npx convex dev --once` - exit 0; the linked `cheery-bandicoot-36` development deployment became ready in 7.95 seconds without a login prompt and added `finalBoundInterruptionClaims.by_claim_id`, `.by_interrupt`, and `.by_owner_trial`. No production deployment, microphone permission, audible playback, or live final-bound Luna request was exercised in this checkpoint.
+  - `git push origin main` - exit 0 through `affd284`; all scoped implementation, test, lint-ignore, and generated-type commits are on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
