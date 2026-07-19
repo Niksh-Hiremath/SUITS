@@ -6,14 +6,26 @@ import {
 } from "../src/domain/case-graph";
 import {
   CourtroomModelCallTraceSchema,
+  type CounselRoleResponseModelOutput,
   type CourtroomModelCallTrace,
+  type OpponentPlannerModelOutput,
   type WitnessAnswerModelOutput,
 } from "../src/domain/courtroom-ai";
 import {
+  HearingCounselResponsePrecommitSchema,
+  HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
+  counselResponseOutputCitations,
+  hashOpponentPlannerModelOutput,
   witnessAnswerOutputCitations,
+  type HearingCounselResponsePrecommit,
+  type HearingOpponentPlanPrecommit,
   type HearingWitnessGenerationPrecommit,
 } from "../src/domain/hearing-runtime/model-boundary";
+import {
+  parsePersistedOpponentDirective,
+  type PersistedOpponentDirective,
+} from "../src/domain/hearing-runtime/opponent-directive";
 import type { TrialPolicyActorBindingInput } from "../src/domain/trial-policy";
 import {
   TRIAL_ACTION_SCHEMA_VERSION_V3,
@@ -307,6 +319,512 @@ async function requireStoredGeneratedWitnessEvent(
   ) {
     return invalidWitnessGeneration();
   }
+}
+
+function invalidOpponentPlan(): never {
+  throw new Error("OPPONENT_PLAN_GENERATION_INVALID");
+}
+
+function staleOpponentPlan(): never {
+  throw new Error("OPPONENT_PLAN_GENERATION_STALE");
+}
+
+function invalidCounselResponse(): never {
+  throw new Error("COUNSEL_GENERATION_INVALID");
+}
+
+function staleCounselResponse(): never {
+  throw new Error("COUNSEL_GENERATION_STALE");
+}
+
+function parseOpponentPlanGenerationJson(
+  generationJson: string,
+): HearingOpponentPlanPrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidOpponentPlan();
+  }
+  const parsed = HearingOpponentPlanPrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidOpponentPlan();
+}
+
+function parseCounselResponseGenerationJson(
+  generationJson: string,
+): HearingCounselResponsePrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidCounselResponse();
+  }
+  const parsed = HearingCounselResponsePrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidCounselResponse();
+}
+
+function eventIdForGeneratedAction(actionId: string): string {
+  return `event:${actionId}`;
+}
+
+function sameOrderedIdentifiers(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((identifier, index) => identifier === right[index])
+  );
+}
+
+function sameOrderedStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function requireDirectiveMatchesPlannerOutput(
+  directive: PersistedOpponentDirective,
+  output: OpponentPlannerModelOutput,
+): void {
+  if (directive.plannerOutputHash !== hashOpponentPlannerModelOutput(output)) {
+    return invalidOpponentPlan();
+  }
+
+  if (directive.selectedMoveIndex === null) {
+    if (
+      directive.directive.kind !== "end_examination" ||
+      output.proposedMoves.some(
+        (move) =>
+          move.kind === "question_witness" &&
+          move.witnessId === directive.appearance.witnessId,
+      ) ||
+      directive.directive.disposition !==
+        (directive.appearance.answeredQuestionCount === 0
+          ? "waived"
+          : "completed")
+    ) {
+      return invalidOpponentPlan();
+    }
+    return;
+  }
+
+  const selectedMove = output.proposedMoves[directive.selectedMoveIndex];
+  if (
+    selectedMove?.kind !== "question_witness" ||
+    directive.directive.kind !== "question_witness" ||
+    selectedMove.witnessId !== directive.appearance.witnessId ||
+    directive.directive.witnessId !== selectedMove.witnessId ||
+    directive.directive.goal !== selectedMove.goal ||
+    !sameOrderedIdentifiers(
+      directive.directive.presentedEvidenceIds,
+      selectedMove.presentedEvidenceIds,
+    ) ||
+    !sameOrderedIdentifiers(
+      directive.directive.permittedFactIds,
+      selectedMove.citations.factIds,
+    ) ||
+    !sameOrderedIdentifiers(
+      directive.directive.permittedEvidenceIds,
+      selectedMove.citations.evidenceIds,
+    ) ||
+    !sameOrderedIdentifiers(
+      directive.directive.permittedTestimonyIds,
+      selectedMove.citations.testimonyIds,
+    )
+  ) {
+    return invalidOpponentPlan();
+  }
+}
+
+type GeneratedOpponentPlanAction = Extract<
+  TrialActionV3,
+  { type: "UPDATE_OPPOSING_STRATEGY" }
+>;
+
+function requireGeneratedOpponentPlanAction(
+  action: TrialActionV3,
+  generation: HearingOpponentPlanPrecommit,
+): GeneratedOpponentPlanAction {
+  if (
+    action.type !== "UPDATE_OPPOSING_STRATEGY" ||
+    action.source !== "ai" ||
+    action.actor.role !== "opposing_counsel" ||
+    action.actor.side !== "opposing" ||
+    action.actor.witnessId !== null ||
+    action.modelMetadata === null ||
+    action.responseId !== null ||
+    action.interruptId !== null
+  ) {
+    return invalidOpponentPlan();
+  }
+
+  const { output, trace } = generation;
+  if (
+    trace.expectedStateVersion === null ||
+    trace.expectedLastEventId === null ||
+    action.trialId !== generation.trialId ||
+    action.trialId !== trace.trialId ||
+    action.actor.actorId !== trace.actorId ||
+    action.expectedStateVersion !== trace.expectedStateVersion ||
+    action.causationId !== trace.expectedLastEventId ||
+    action.correlationId !== action.trialId ||
+    !sameCanonicalJson(action.modelMetadata, generation.modelMetadata)
+  ) {
+    return staleOpponentPlan();
+  }
+
+  if (
+    !sameOrderedStrings(action.payload.objectives, output.objectives) ||
+    !sameOrderedIdentifiers(
+      action.payload.witnessPriorityIds,
+      output.witnessPriorityIds,
+    ) ||
+    !sameOrderedIdentifiers(
+      action.payload.evidencePriorityIds,
+      output.evidencePriorityIds,
+    ) ||
+    action.payload.settlementPosture !== output.settlementPosture ||
+    !sameOrderedStrings(action.payload.privateNotes, output.privateNotes) ||
+    typeof action.payload.pendingDirectiveJson !== "string"
+  ) {
+    return invalidOpponentPlan();
+  }
+
+  let directive: PersistedOpponentDirective;
+  try {
+    directive = parsePersistedOpponentDirective(
+      action.payload.pendingDirectiveJson,
+    );
+  } catch {
+    return invalidOpponentPlan();
+  }
+  if (
+    directive.decisionId !== generation.decisionId ||
+    directive.plannerCallId !== generation.callId ||
+    directive.strategyId !== action.payload.strategyId ||
+    directive.strategyRevision !== action.payload.revision ||
+    directive.strategyEventId !== eventIdForGeneratedAction(action.actionId) ||
+    directive.trialHead.trialId !== action.trialId ||
+    directive.trialHead.stateVersion !== action.expectedStateVersion ||
+    directive.trialHead.lastEventId !== action.causationId ||
+    directive.actorId !== action.actor.actorId
+  ) {
+    return invalidOpponentPlan();
+  }
+  requireDirectiveMatchesPlannerOutput(directive, output);
+  return action;
+}
+
+function requireOpponentDirectiveAtCurrentHead(
+  state: TrialStateV3,
+  action: GeneratedOpponentPlanAction,
+): void {
+  let directive: PersistedOpponentDirective;
+  try {
+    directive = parsePersistedOpponentDirective(
+      action.payload.pendingDirectiveJson ?? "",
+    );
+  } catch {
+    return invalidOpponentPlan();
+  }
+  const appearance = state.activeAppearanceId
+    ? state.appearances[state.activeAppearanceId]
+    : undefined;
+  const leg = appearance?.legs[directive.appearance.examinationKind];
+  if (
+    state.version !== action.expectedStateVersion ||
+    state.eventIds.at(-1) !== action.causationId ||
+    state.activeAppearanceId !== directive.appearance.appearanceId ||
+    state.activeWitnessId !== directive.appearance.witnessId ||
+    appearance?.witnessId !== directive.appearance.witnessId ||
+    appearance?.stage !== directive.appearance.examinationKind ||
+    leg?.answeredQuestionCount !==
+      directive.appearance.answeredQuestionCount ||
+    !sameCanonicalJson(state.actors[action.actor.actorId], action.actor)
+  ) {
+    return staleOpponentPlan();
+  }
+}
+
+async function requireStoredGeneratedEvent(
+  ctx: MutationCtx,
+  input: Readonly<{
+    action: TrialActionV3;
+    eventId: string;
+  }>,
+): Promise<TrialEventV3> {
+  const row = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) => index.eq("eventId", input.eventId))
+    .unique();
+  if (!row) throw new Error("GENERATED_EVENT_NOT_FOUND");
+  const event = storedEventToV3(row);
+  if (
+    event.actionId !== input.action.actionId ||
+    event.trialId !== input.action.trialId ||
+    event.type !== input.action.type ||
+    !sameCanonicalJson(event.actor, input.action.actor) ||
+    event.source !== input.action.source ||
+    event.causationId !== input.action.causationId ||
+    event.correlationId !== input.action.correlationId ||
+    event.responseId !== input.action.responseId ||
+    event.interruptId !== input.action.interruptId ||
+    !sameCanonicalJson(event.modelMetadata, input.action.modelMetadata) ||
+    !sameCanonicalJson(event.payload, input.action.payload)
+  ) {
+    throw new Error("GENERATED_EVENT_CONFLICT");
+  }
+  return event;
+}
+
+async function requireCounselDirectiveAtHead(
+  ctx: MutationCtx,
+  generation: HearingCounselResponsePrecommit,
+): Promise<PersistedOpponentDirective> {
+  const row = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_event_id", (index) =>
+      index.eq("eventId", generation.expectedLastEventId),
+    )
+    .unique();
+  if (!row) return staleCounselResponse();
+
+  const event = storedEventToV3(row);
+  if (
+    event.trialId !== generation.trialId ||
+    event.stateVersion !== generation.expectedStateVersion ||
+    event.type !== "UPDATE_OPPOSING_STRATEGY" ||
+    event.actor.actorId !== generation.trace.actorId ||
+    event.source !== "ai" ||
+    typeof event.payload.pendingDirectiveJson !== "string"
+  ) {
+    return staleCounselResponse();
+  }
+
+  let directive: PersistedOpponentDirective;
+  try {
+    directive = parsePersistedOpponentDirective(
+      event.payload.pendingDirectiveJson,
+    );
+  } catch {
+    return invalidCounselResponse();
+  }
+  if (
+    directive.decisionId !== generation.decisionId ||
+    directive.plannerCallId !== generation.planBinding.plannerCallId ||
+    directive.plannerOutputHash !== generation.planBinding.plannerOutputHash ||
+    directive.strategyId !== generation.planBinding.strategyId ||
+    directive.strategyRevision !== generation.planBinding.strategyRevision ||
+    directive.strategyId !== event.payload.strategyId ||
+    directive.strategyRevision !== event.payload.revision ||
+    directive.strategyEventId !== event.eventId ||
+    directive.trialHead.trialId !== event.trialId ||
+    directive.trialHead.stateVersion + 1 !== event.stateVersion ||
+    directive.trialHead.lastEventId !== event.causationId ||
+    directive.actorId !== event.actor.actorId
+  ) {
+    return invalidCounselResponse();
+  }
+  return directive;
+}
+
+function materializedCounselText(
+  output: CounselRoleResponseModelOutput,
+): string {
+  return output.speechSegments.map((segment) => segment.text).join(" ");
+}
+
+function citationsWithinDirective(
+  output: CounselRoleResponseModelOutput,
+  directive: PersistedOpponentDirective,
+): boolean {
+  if (directive.directive.kind !== "question_witness") {
+    return output.speechSegments.every(
+      (segment) =>
+        segment.citations.factIds.length === 0 &&
+        segment.citations.evidenceIds.length === 0 &&
+        segment.citations.testimonyIds.length === 0,
+    );
+  }
+  const allowedFacts = new Set(directive.directive.permittedFactIds);
+  const allowedEvidence = new Set(
+    directive.directive.permittedEvidenceIds,
+  );
+  const allowedTestimony = new Set(
+    directive.directive.permittedTestimonyIds,
+  );
+  return output.speechSegments.every(
+    (segment) =>
+      segment.citations.factIds.every((id) => allowedFacts.has(id)) &&
+      segment.citations.evidenceIds.every((id) => allowedEvidence.has(id)) &&
+      segment.citations.testimonyIds.every((id) =>
+        allowedTestimony.has(id),
+      ) &&
+      segment.citations.factIds.length +
+        segment.citations.evidenceIds.length +
+        segment.citations.testimonyIds.length >
+        0,
+  );
+}
+
+type GeneratedCounselAction = Extract<
+  TrialActionV3,
+  { type: "ASK_QUESTION" | "END_EXAMINATION" }
+>;
+
+function requireGeneratedCounselAction(
+  action: TrialActionV3,
+  generation: HearingCounselResponsePrecommit,
+  directive: PersistedOpponentDirective,
+): GeneratedCounselAction {
+  if (
+    (action.type !== "ASK_QUESTION" &&
+      action.type !== "END_EXAMINATION") ||
+    action.source !== "ai" ||
+    action.actor.role !== "opposing_counsel" ||
+    action.actor.side !== "opposing" ||
+    action.actor.witnessId !== null ||
+    action.modelMetadata === null ||
+    action.responseId !== null ||
+    action.interruptId !== null ||
+    action.trialId !== generation.trialId ||
+    action.actor.actorId !== generation.trace.actorId ||
+    action.actor.actorId !== directive.actorId ||
+    action.expectedStateVersion !== generation.expectedStateVersion ||
+    action.causationId !== generation.expectedLastEventId ||
+    action.correlationId !== action.trialId ||
+    !sameCanonicalJson(action.modelMetadata, generation.modelMetadata) ||
+    !citationsWithinDirective(generation.output, directive)
+  ) {
+    return invalidCounselResponse();
+  }
+
+  const output = generation.output;
+  const citations = counselResponseOutputCitations(output);
+  const text = materializedCounselText(output);
+  if (directive.directive.kind === "question_witness") {
+    if (
+      action.type !== "ASK_QUESTION" ||
+      output.proposedAction.kind !== "ask_question" ||
+      !text.includes("?") ||
+      action.payload.witnessId !== directive.appearance.witnessId ||
+      action.payload.examinationKind !==
+        directive.appearance.examinationKind ||
+      action.payload.text !== text ||
+      !sameOrderedIdentifiers(
+        output.proposedAction.presentedEvidenceIds,
+        directive.directive.presentedEvidenceIds,
+      ) ||
+      !sameOrderedIdentifiers(
+        action.payload.presentedEvidenceIds,
+        directive.directive.presentedEvidenceIds,
+      ) ||
+      !sameIdentifierSet(action.payload.factIds ?? [], citations.factIds) ||
+      !sameIdentifierSet(
+        action.payload.evidenceIds ?? [],
+        citations.evidenceIds,
+      ) ||
+      !sameIdentifierSet(
+        action.payload.testimonyIds ?? [],
+        citations.testimonyIds,
+      )
+    ) {
+      return invalidCounselResponse();
+    }
+    return action;
+  }
+
+  if (
+    action.type !== "END_EXAMINATION" ||
+    output.proposedAction.kind !== "end_examination" ||
+    output.proposedAction.disposition !== directive.directive.disposition ||
+    action.payload.witnessId !== directive.appearance.witnessId ||
+    action.payload.examinationKind !== directive.appearance.examinationKind ||
+    action.payload.disposition !== directive.directive.disposition ||
+    action.payload.turnId === undefined ||
+    action.payload.text !== text ||
+    action.payload.citations === undefined ||
+    !sameIdentifierSet(
+      action.payload.citations.factIds,
+      citations.factIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.citations.evidenceIds,
+      citations.evidenceIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.citations.testimonyIds,
+      citations.testimonyIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.citations.eventIds,
+      citations.eventIds,
+    ) ||
+    !sameIdentifierSet(
+      action.payload.citations.sourceSegmentIds,
+      citations.sourceSegmentIds,
+    )
+  ) {
+    return invalidCounselResponse();
+  }
+  return action;
+}
+
+function requireCounselContinuation(
+  continuation: TrialActionV3 | null,
+  primary: GeneratedCounselAction,
+): TrialActionV3 | null {
+  if (primary.type === "ASK_QUESTION") {
+    if (
+      continuation === null ||
+      continuation.type !== "REQUEST_RESPONSE" ||
+      continuation.source !== "system" ||
+      continuation.actor.role !== "system" ||
+      continuation.actor.side !== "neutral" ||
+      continuation.actor.witnessId !== null ||
+      continuation.modelMetadata !== null ||
+      continuation.interruptId !== null ||
+      continuation.responseId === null ||
+      continuation.responseId !== continuation.payload.responseId ||
+      continuation.payload.purpose !== "answer_question" ||
+      continuation.trialId !== primary.trialId ||
+      continuation.expectedStateVersion !==
+        primary.expectedStateVersion + 1 ||
+      continuation.causationId !==
+        eventIdForGeneratedAction(primary.actionId) ||
+      continuation.correlationId !== primary.trialId
+    ) {
+      return invalidCounselResponse();
+    }
+    return continuation;
+  }
+
+  if (continuation === null) return null;
+  if (
+    continuation.type !== "RELEASE_WITNESS" ||
+    continuation.source !== "deterministic" ||
+    (continuation.actor.role !== "user_counsel" &&
+      continuation.actor.role !== "opposing_counsel") ||
+    continuation.actor.side !==
+      (continuation.actor.role === "user_counsel" ? "user" : "opposing") ||
+    continuation.actor.witnessId !== null ||
+    continuation.modelMetadata !== null ||
+    continuation.responseId !== null ||
+    continuation.interruptId !== null ||
+    continuation.trialId !== primary.trialId ||
+    continuation.expectedStateVersion !== primary.expectedStateVersion + 1 ||
+    continuation.causationId !== eventIdForGeneratedAction(primary.actionId) ||
+    continuation.correlationId !== primary.trialId ||
+    continuation.payload.witnessId !== primary.payload.witnessId
+  ) {
+    return invalidCounselResponse();
+  }
+  return continuation;
 }
 
 async function requirePublishedGraph(
@@ -1126,7 +1644,6 @@ export const appendGeneratedForOwner = internalMutation({
         .unique(),
       args.ownerId,
     );
-
     const receipt = await appendActiveAction(ctx, {
       action,
       ownerId: args.ownerId,
@@ -1148,6 +1665,217 @@ export const appendGeneratedForOwner = internalMutation({
       eventId: committedEventId,
       trace: generation.trace,
     });
+
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: action.actionId,
+      committedEventId,
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return receipt;
+  },
+});
+
+/**
+ * Atomically commits one accepted private opponent plan and its redacted
+ * audit. The canonical pending directive is stored only in private strategy
+ * state and is bound to the exact pre-plan head and resulting strategy event.
+ */
+export const appendOpponentPlanForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+    generationJson: v.string(),
+    writeSnapshot: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInput: unknown;
+    try {
+      actionInput = parseJsonObject(args.actionJson, "actionJson");
+    } catch {
+      return invalidOpponentPlan();
+    }
+    const parsedAction = TrialActionV3Schema.safeParse(actionInput);
+    if (!parsedAction.success) return invalidOpponentPlan();
+    const generation = parseOpponentPlanGenerationJson(args.generationJson);
+    const action = requireGeneratedOpponentPlanAction(
+      parsedAction.data,
+      generation,
+    );
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", action.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    if (projection.stateVersion === action.expectedStateVersion) {
+      requireOpponentDirectiveAtCurrentHead(
+        await loadActiveHead(ctx, projection),
+        action,
+      );
+    }
+
+    const receipt = await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
+      projection,
+      writeSnapshot: args.writeSnapshot,
+      playerControlledOnly: false,
+    });
+    const committedEventId = receipt.eventIds[0];
+    if (
+      receipt.eventIds.length !== 1 ||
+      committedEventId === undefined ||
+      committedEventId !== eventIdForGeneratedAction(action.actionId) ||
+      receipt.actionId !== action.actionId ||
+      receipt.trialId !== action.trialId
+    ) {
+      return invalidOpponentPlan();
+    }
+    await requireStoredGeneratedEvent(ctx, {
+      action,
+      eventId: committedEventId,
+    });
+
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: action.actionId,
+      committedEventId,
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return receipt;
+  },
+});
+
+/**
+ * Atomically commits one accepted public counsel turn, its required optional
+ * deterministic continuation, and the redacted model audit. The audit always
+ * points to the primary AI action/event rather than the continuation.
+ */
+export const appendCounselTurnForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+    continuationActionJson: v.union(v.string(), v.null()),
+    generationJson: v.string(),
+    writeSnapshot: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInput: unknown;
+    let continuationInput: unknown = null;
+    try {
+      actionInput = parseJsonObject(args.actionJson, "actionJson");
+      if (args.continuationActionJson !== null) {
+        continuationInput = parseJsonObject(
+          args.continuationActionJson,
+          "continuationActionJson",
+        );
+      }
+    } catch {
+      return invalidCounselResponse();
+    }
+    const parsedAction = TrialActionV3Schema.safeParse(actionInput);
+    const parsedContinuation =
+      continuationInput === null
+        ? null
+        : TrialActionV3Schema.safeParse(continuationInput);
+    if (
+      !parsedAction.success ||
+      (parsedContinuation !== null && !parsedContinuation.success)
+    ) {
+      return invalidCounselResponse();
+    }
+
+    const generation = parseCounselResponseGenerationJson(
+      args.generationJson,
+    );
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", parsedAction.data.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    const directive = await requireCounselDirectiveAtHead(ctx, generation);
+    const action = requireGeneratedCounselAction(
+      parsedAction.data,
+      generation,
+      directive,
+    );
+    const continuation = requireCounselContinuation(
+      parsedContinuation?.data ?? null,
+      action,
+    );
+
+    const receipt = await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
+      projection,
+      writeSnapshot:
+        continuation === null ? args.writeSnapshot : false,
+      playerControlledOnly: false,
+    });
+    const committedEventId = receipt.eventIds[0];
+    if (
+      receipt.eventIds.length !== 1 ||
+      committedEventId === undefined ||
+      committedEventId !== eventIdForGeneratedAction(action.actionId) ||
+      receipt.actionId !== action.actionId ||
+      receipt.trialId !== action.trialId
+    ) {
+      return invalidCounselResponse();
+    }
+    await requireStoredGeneratedEvent(ctx, {
+      action,
+      eventId: committedEventId,
+    });
+
+    if (continuation !== null) {
+      const continuedProjection = requireOwnedProjection(
+        await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (index) =>
+            index.eq("trialId", action.trialId),
+          )
+          .unique(),
+        args.ownerId,
+      );
+      const continuationReceipt = await appendActiveAction(ctx, {
+        action: continuation,
+        ownerId: args.ownerId,
+        projection: continuedProjection,
+        writeSnapshot: args.writeSnapshot,
+        playerControlledOnly: false,
+      });
+      const continuationEventId = continuationReceipt.eventIds[0];
+      if (
+        continuationReceipt.eventIds.length !== 1 ||
+        continuationEventId === undefined ||
+        continuationEventId !==
+          eventIdForGeneratedAction(continuation.actionId) ||
+        continuationReceipt.actionId !== continuation.actionId ||
+        continuationReceipt.trialId !== continuation.trialId
+      ) {
+        return invalidCounselResponse();
+      }
+      await requireStoredGeneratedEvent(ctx, {
+        action: continuation,
+        eventId: continuationEventId,
+      });
+    }
 
     const committedTrace = CourtroomModelCallTraceSchema.parse({
       ...generation.trace,
