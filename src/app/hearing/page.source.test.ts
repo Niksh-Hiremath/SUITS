@@ -53,6 +53,12 @@ describe("V3 hearing page boundary", () => {
     expect(sources.commandRoute).toContain(
       'path: "/service/hearings/counsel-response/commit"',
     );
+    expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/jury-response/commit"',
+    );
+    expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/debrief/commit"',
+    );
     expect(sources.commandRoute).toContain("orchestrateCourtroomCommand");
     expect(sources.commandRoute).toContain(
       'path: "/service/hearings/model-call/terminal"',
@@ -71,6 +77,12 @@ describe("V3 hearing page boundary", () => {
     expect(sources.convexHttp).toContain(
       '>("hearingRuntime:commitCounselGeneration")',
     );
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:commitJuryGeneration")',
+    );
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:commitDebriefGeneration")',
+    );
     expect(sources.convexHttp).not.toContain(
       '>("hearingRuntime:command")',
     );
@@ -84,6 +96,12 @@ describe("V3 hearing page boundary", () => {
     );
     expect(sources.runtime).toContain(
       "export const commitWitnessGeneration = internalAction",
+    );
+    expect(sources.runtime).toContain(
+      "export const commitJuryGeneration = internalAction",
+    );
+    expect(sources.runtime).toContain(
+      "export const commitDebriefGeneration = internalAction",
     );
     expect(sources.runtime).not.toContain("createDeterministicWitnessAnswer");
 

@@ -6,24 +6,40 @@ import { describe, expect, it } from "vitest";
 import {
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
 } from "@/domain/hearing-runtime";
+import {
+  createDebriefGeneratorOutputFixture,
+  createDebriefGeneratorRequestFixture,
+} from "@/domain/courtroom-ai/debrief-generator.test-fixtures";
+import {
+  createJuryResponseOutputFixture,
+  createJuryResponseRequestFixture,
+} from "@/domain/courtroom-ai/jury-response.test-fixtures";
 import {
   createCounselQuestionOutputFixture,
   createCounselResponseRequestFixture,
 } from "@/server/courtroom-ai/counsel-response.test-fixtures";
 import { generateCounselResponse } from "@/server/courtroom-ai/counsel-response";
+import { generateDebrief } from "@/server/courtroom-ai/debrief-generator";
 import { ScriptedCourtroomModelProvider } from "@/server/courtroom-ai/fake-provider";
 import {
   createOpponentPlannerOutputFixture,
   createOpponentPlannerRequestFixture,
 } from "@/server/courtroom-ai/opponent-planner.test-fixtures";
 import { generateOpponentPlan } from "@/server/courtroom-ai/opponent-planner";
+import { generateJuryResponse } from "@/server/courtroom-ai/jury-response";
 import {
   HearingServiceCounselResponseCommitRequestSchema,
+  HearingServiceDebriefCommitRequestSchema,
+  HearingServiceJuryResponseCommitRequestSchema,
   HearingServiceOpponentPlanCommitRequestSchema,
 } from "../../../convex/http";
 
@@ -97,10 +113,57 @@ async function validCounselResponsePrecommit() {
   });
 }
 
+async function validJuryResponsePrecommit() {
+  const request = createJuryResponseRequestFixture();
+  const generated = await generateJuryResponse({
+    request,
+    provider: new ScriptedCourtroomModelProvider([
+      { type: "output", output: createJuryResponseOutputFixture() },
+    ]),
+  });
+  return HearingJuryResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    output: generated.output,
+    modelMetadata: generated.modelMetadata,
+    trace: generated.trace,
+  });
+}
+
+async function validDebriefPrecommit() {
+  const request = createDebriefGeneratorRequestFixture();
+  const generated = await generateDebrief({
+    request,
+    provider: new ScriptedCourtroomModelProvider([
+      { type: "output", output: createDebriefGeneratorOutputFixture() },
+    ]),
+  });
+  return HearingDebriefGeneratorPrecommitSchema.parse({
+    schemaVersion: HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    transcriptEventBindings: [
+      { turnId: "turn_answer", sourceEventId: "event:answer" },
+      { turnId: "turn_question", sourceEventId: "event:question" },
+    ],
+    output: generated.output,
+    modelMetadata: generated.modelMetadata,
+    trace: generated.trace,
+  });
+}
+
 describe("secret hearing model-loop HTTP boundary", () => {
-  it("accepts only strict, owner-bound, trial-bound planner and counsel precommits", async () => {
+  it("accepts only strict owner- and trial-bound generation precommits", async () => {
     const opponentGeneration = await validOpponentPlanPrecommit();
     const counselGeneration = await validCounselResponsePrecommit();
+    const juryGeneration = await validJuryResponsePrecommit();
+    const debriefGeneration = await validDebriefPrecommit();
     const opponentBody = {
       ownerId: OWNER_ID,
       trialId: opponentGeneration.trialId,
@@ -111,6 +174,16 @@ describe("secret hearing model-loop HTTP boundary", () => {
       trialId: counselGeneration.trialId,
       generation: counselGeneration,
     };
+    const juryBody = {
+      ownerId: OWNER_ID,
+      trialId: juryGeneration.trialId,
+      generation: juryGeneration,
+    };
+    const debriefBody = {
+      ownerId: OWNER_ID,
+      trialId: debriefGeneration.trialId,
+      generation: debriefGeneration,
+    };
 
     expect(
       HearingServiceOpponentPlanCommitRequestSchema.parse(opponentBody),
@@ -118,6 +191,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(
       HearingServiceCounselResponseCommitRequestSchema.parse(counselBody),
     ).toEqual(counselBody);
+    expect(
+      HearingServiceJuryResponseCommitRequestSchema.parse(juryBody),
+    ).toEqual(juryBody);
+    expect(HearingServiceDebriefCommitRequestSchema.parse(debriefBody)).toEqual(
+      debriefBody,
+    );
     expect(
       HearingServiceOpponentPlanCommitRequestSchema.safeParse({
         ...opponentBody,
@@ -134,6 +213,8 @@ describe("secret hearing model-loop HTTP boundary", () => {
     for (const [schema, body] of [
       [HearingServiceOpponentPlanCommitRequestSchema, opponentBody],
       [HearingServiceCounselResponseCommitRequestSchema, counselBody],
+      [HearingServiceJuryResponseCommitRequestSchema, juryBody],
+      [HearingServiceDebriefCommitRequestSchema, debriefBody],
     ] as const) {
       expect(
         schema.safeParse({ ...body, ownerId: "owner:browser-selected" })
@@ -184,8 +265,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     for (const expected of [
       '>("hearingRuntime:commitOpponentPlanGeneration")',
       '>("hearingRuntime:commitCounselGeneration")',
+      '>("hearingRuntime:commitJuryGeneration")',
+      '>("hearingRuntime:commitDebriefGeneration")',
       'path: "/service/hearings/opponent-plan/commit", method: "POST"',
       'path: "/service/hearings/counsel-response/commit", method: "POST"',
+      'path: "/service/hearings/jury-response/commit", method: "POST"',
+      'path: "/service/hearings/debrief/commit", method: "POST"',
     ]) {
       expect(source).toContain(expected);
     }
@@ -203,10 +288,26 @@ describe("secret hearing model-loop HTTP boundary", () => {
     const counselSection = sourceSection(
       source,
       "const commitCounselGeneration = httpAction",
+      "const commitJuryGeneration = httpAction",
+    );
+    const jurySection = sourceSection(
+      source,
+      "const commitJuryGeneration = httpAction",
+      "const commitDebriefGeneration = httpAction",
+    );
+    const debriefSection = sourceSection(
+      source,
+      "const commitDebriefGeneration = httpAction",
       "const recordTerminalModelCall = httpAction",
     );
 
-    for (const section of [witnessSection, opponentSection, counselSection]) {
+    for (const section of [
+      witnessSection,
+      opponentSection,
+      counselSection,
+      jurySection,
+      debriefSection,
+    ]) {
       expect(section).toContain("authorizeCaseServiceRequest(");
       expect(section).toContain(
         "HearingCommandPreparationSchema.parse(result)",
@@ -220,6 +321,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     );
     expect(counselSection).toContain(
       "HearingServiceCounselResponseCommitRequestSchema",
+    );
+    expect(jurySection).toContain(
+      "HearingServiceJuryResponseCommitRequestSchema",
+    );
+    expect(debriefSection).toContain(
+      "HearingServiceDebriefCommitRequestSchema",
     );
 
     const terminalSchema = sourceSection(

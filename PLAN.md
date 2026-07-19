@@ -819,6 +819,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. Convex authentication and the existing development deployment remained available.
   - Commits: `6063a05`, `69354cf`, `55d56a4`, and `59bcdf7`; this PLAN checkpoint is committed separately.
 
+- 2026-07-19 08:31 IST — Milestone 4 generated jury and coaching runtime checkpoint
+  - Changed: replaced the authored/mock trial ending with a canonical closing-to-completion continuation; added role-isolated Luna jury and Terra final-coaching requests, strict source-head/citation/precommit binding, private exact generated-artifact storage, deterministic verdict materialization from the accepted jury recommendation, complete-event materialization, and atomic event/artifact/terminal-trace commits. The secret Convex service now exposes strict jury/debrief commit routes, while browser projections receive only the redacted canonical record.
+  - Verified: 23 focused Convex/BFF/UI tests passed, including the exact 16-event closing-to-completion tail, model-role routing, private artifact schemas, replay without duplicate events, conflicting replay rejection without overwrite, cross-owner denial, absence of hidden artifact content from the browser view, and rejection of a closing request with no jury-considerable support. Both TypeScript surfaces, scoped ESLint, and `git diff --check` passed.
+  - Remaining: this is not the Milestone 4 gate. Synchronize the functions, run the broad repository gate, add explicit non-winner jury coverage, and execute a real complete Luna/Terra trial. Judge/objection and settlement model paths also still require live hearing-runtime command integration before Milestone 4 can be marked complete.
+  - Blocked: none. Convex CLI authentication is already valid; no login is requested unless the next development sync reports an authentication failure.
+  - Commit: `feat: complete generated trial finale`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -857,6 +864,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A completed opposing cross must yield explicit player control for redirect. The live smoke initially tried to call the next witness while the prior appearance was correctly at `redirect`; adding an explicit player waiver completed the flow and preserves the no-auto-waiver invariant.
 - The bounded multi-actor live run used four planner decisions and four counsel responses per witness: three grounded cross questions plus one examination-ending decision/speech. Across two witnesses this produced 24 accepted Luna calls and one successful targeted planner repair, providing real latency/cost evidence for the three-question cap.
 - A public-function audit found 25 remotely callable legacy or low-level Convex functions, including unauthenticated legacy records/mutations and billable OpenAI/ElevenLabs actions. The active V3 BFF path remains owner/secret-bound and the public raw V3 reload has been removed, but only the six authenticated `caseUploads` functions should remain public after the legacy surface is internalized. Existing rows must be preserved rather than deleted.
+- Active TrialState intentionally projects only the current head and resumable lifecycle state; it does not retain the exact closing-turn IDs or final verdict payload required by Terra coaching. The final-coaching boundary therefore reconstructs and validates those bindings from the complete ordered TrialEvent stream rather than trusting a lossy snapshot projection.
+- Jury and debrief model outputs can contain hidden authoring truth, jury-private reasoning, or coaching inference even when their canonical events are safe to expose. Persisting the exact validated outputs in private owner-bound generated-artifact rows, while committing only stable IDs and public-safe payloads to TrialEvents, preserves both auditability and knowledge isolation.
+- The strict closing contract requires public record grounding. A trial with no jury-considerable fact, admitted evidence, or active testimony must stop before the closing/model pipeline instead of manufacturing an uncited closing or verdict.
 
 ## 15. Decisions
 
@@ -895,6 +905,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Never auto-waive redirect or recross to simplify orchestration. Return the completed AI examination to the player and require an explicit high-level `finish_witness` decision before release or continuation.
 - Keep planner citation categories that lack durable call-audit support empty, even when similarly named provenance IDs are visible as context. Expand the accepted-citation audit contract first if transcript-turn, instruction, rule, issue, or settlement-offer citations later become material.
 - Internalize the unauthenticated legacy Convex records, mutation, eval, and provider actions before further deployment work. Preserve their data and CLI-admin evaluation path, remove browser links to legacy records, and lock the resulting public function allowlist with a regression check.
+- Commit each accepted jury generation as one atomic bundle containing the Luna deliberation action, deterministic verdict/debrief phase transitions, the verdict derived from the validated recommendation, the private exact artifact, and its terminal trace. Commit the accepted Terra coaching action, completion transition, private artifact, and terminal trace with the same atomicity so a crash cannot expose a partial accepted finale.
+- Keep full jury deliberation and Terra coaching artifacts out of TrialEvents, snapshots, and browser projections. Store them only in the owner-bound generated-artifact ledger and bind public events through stable decision/action/event IDs, hashes, schema versions, prompt versions, model roles, and exact source heads.
+- Reject zero-record closing before any write. Do not weaken the required public-grounding citation contract or invent deterministic support merely to force a trial to completion.
 
 ## 16. Verification Evidence
 
@@ -1017,6 +1030,14 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run verify:convex-surface` — exit 0 against the deployed function spec; exactly six public functions remain: `caseUploads.generateUploadUrl`, `registerStoredUpload`, `getLatest`, `listMine`, `getDownloadUrl`, and `listSourceSegments`.
   - `npm run lint`, `npm run typecheck`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, `npm test`, `npm run eval`, `npm run build`, and `git diff --check` — exit 0. Lint reported four generated warnings and no errors; 99 files/724 tests passed with three expected live-only skips; three evals passed; Next.js generated 17/17 pages.
   - `git push origin main` through `59bcdf7` — exit 0. The deployment contains the same visibility changes; the worktree remained clean after sync.
+
+- 2026-07-19 08:18–08:31 IST — Milestone 4 generated jury and coaching runtime checkpoint
+  - `npx tsc -p convex/tsconfig.json --noEmit --pretty false` and `npx tsc --noEmit --pretty false` — exit 0; the Convex and root TypeScript surfaces accepted the final-audit query, replay lookup, atomic generation mutations, service routes, and final continuation orchestration.
+  - Scoped ESLint over `convex/hearingRuntime.ts`, `convex/trialEvents.ts`, `convex/http.ts`, the updated integration/source tests, and the courtroom command files — exit 0 with no errors.
+  - `npx vitest run convex/hearingRuntime.integration.test.ts` — exit 0; one file and 14 tests passed. The completed-flow case asserts the exact 16-event final tail, exactly one Luna `DELIBERATE` and one Terra `GENERATE_DEBRIEF`, two correctly typed private artifacts, exact model roles/schema versions, no deterministic mock ending, no raw artifact or hidden truth in the owner view, exact replay without duplication, conflicting replay rejection without overwrite, and cross-owner read denial.
+  - `npx vitest run convex/hearingRuntime.integration.test.ts src/server/hearing-api/convex-http.source.test.ts src/app/hearing/page.source.test.ts src/server/hearing-api/courtroom-command.test.ts` — exit 0; four files and 23 tests passed, including strict secret endpoint schemas/references and no-record closing rejection before a model call or durable write.
+  - `git diff --check` — exit 0 before the checkpoint plan update.
+  - Convex development sync, full repository gate, explicit `unable_to_reach` preservation coverage, and the real complete Luna/Terra trial remain pending and are not reported as passed here.
 
 ## 17. Blocked external prerequisites
 

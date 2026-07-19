@@ -11,6 +11,10 @@ import {
   COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
   COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+  DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+  DebriefGeneratorModelOutputSchema,
+  JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+  JuryRoleResponseModelOutputSchema,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   CounselRoleResponseModelOutputSchema,
   CourtroomModelCallTraceSchema,
@@ -18,30 +22,45 @@ import {
   WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
   WitnessAnswerModelOutputSchema,
   type CounselResponseRequest,
+  type DebriefCitationSet,
+  type DebriefGeneratorRequest,
+  type JuryResponseRequest,
   type OpponentPlannerRequest,
 } from "../src/domain/courtroom-ai";
 import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_START_SCHEMA_VERSION,
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
   counselResponseOutputCitations,
+  debriefGeneratorOutputCitations,
   hashCounselResponseModelOutput,
+  hashDebriefGeneratorModelOutput,
+  hashJuryResponseModelOutput,
   hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
   isHearingCounselResponseModelRequiredPreparation,
+  isHearingDebriefGeneratorModelRequiredPreparation,
+  isHearingJuryResponseModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
+  juryResponseOutputCitations,
   opponentPlannerOutputCitations,
   witnessAnswerOutputCitations,
   type HearingCounselResponsePrecommit,
   type HearingCommandPreparation,
+  type HearingDebriefGeneratorPrecommit,
+  type HearingJuryResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
@@ -98,6 +117,16 @@ const commitCounselGenerationReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
   HearingCommandPreparation
 >("hearingRuntime:commitCounselGeneration");
+const commitJuryGenerationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitJuryGeneration");
+const commitDebriefGenerationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitDebriefGeneration");
 const readReference = makeFunctionReference<
   "action",
   Readonly<{ ownerId: string; trialId: string }>,
@@ -549,13 +578,17 @@ async function fakeOpponentPlanGeneration(
     throw new Error("Expected opponent planner preparation");
   }
   const request = preparation.request;
-  const factId =
-    request.knowledgeView.counsel.facts[0]?.factId ??
-    request.knowledgeView.publicRecord.facts[0]?.factId;
-  const evidenceId = request.opportunities.presentableEvidenceIds[0];
+  const isClosing = request.opportunities.canClose;
+  const factId = isClosing
+    ? request.knowledgeView.publicRecord.facts[0]?.factId
+    : (request.knowledgeView.counsel.facts[0]?.factId ??
+      request.knowledgeView.publicRecord.facts[0]?.factId);
+  const evidenceId = isClosing
+    ? request.knowledgeView.publicRecord.evidence[0]?.evidenceId
+    : request.opportunities.presentableEvidenceIds[0];
   const testimonyId =
     request.knowledgeView.publicRecord.testimony[0]?.testimonyId;
-  if (move === "question" && !factId && !evidenceId && !testimonyId) {
+  if ((move === "question" || isClosing) && !factId && !evidenceId && !testimonyId) {
     throw new Error("Fixture requires grounding for an opponent question");
   }
   const citations = {
@@ -575,12 +608,22 @@ async function fakeOpponentPlanGeneration(
     objectives: [
       "Test the active witness without exceeding the permitted record.",
     ],
-    witnessPriorityIds: [request.procedure.activeWitnessId],
+    witnessPriorityIds:
+      request.procedure.activeWitnessId === null
+        ? []
+        : [request.procedure.activeWitnessId],
     evidencePriorityIds: [],
     settlementPosture: "avoid",
     privateNotes: ["Keep this examination grounded in the scoped record."],
-    proposedMoves:
-      move === "question"
+    proposedMoves: isClosing
+      ? [
+          {
+            kind: "give_closing",
+            rationale: "A record-grounded closing completes the defense case.",
+            citations,
+          },
+        ]
+      : move === "question"
         ? [
             {
               kind: "question_witness",
@@ -647,20 +690,17 @@ async function fakeCounselGeneration(
   }
   const request = preparation.request;
   const directive = request.directive;
-  if (directive.kind === "give_closing") {
-    throw new Error("This examination fixture does not materialize closings");
-  }
   const citations = {
     factIds:
-      directive.kind === "question_witness"
+      directive.kind === "question_witness" || directive.kind === "give_closing"
         ? directive.permittedFactIds.slice(0, 1)
         : [],
     evidenceIds:
-      directive.kind === "question_witness"
+      directive.kind === "question_witness" || directive.kind === "give_closing"
         ? directive.permittedEvidenceIds.slice(0, 1)
         : [],
     testimonyIds:
-      directive.kind === "question_witness"
+      directive.kind === "question_witness" || directive.kind === "give_closing"
         ? directive.permittedTestimonyIds.slice(0, 1)
         : [],
     transcriptTurnIds: [],
@@ -678,16 +718,19 @@ async function fakeCounselGeneration(
         text:
           directive.kind === "question_witness"
             ? "That account is the one you ask this court to accept, correct?"
+            : directive.kind === "give_closing"
+              ? "The jury-considerable testimony does not carry the user's burden."
             : "No further questions, Your Honor.",
         citations,
       },
     ],
-    proposedAction:
-      directive.kind === "question_witness"
+    proposedAction: directive.kind === "question_witness"
         ? {
             kind: "ask_question",
             presentedEvidenceIds: directive.presentedEvidenceIds,
           }
+        : directive.kind === "give_closing"
+          ? { kind: "give_closing" }
         : {
             kind: "end_examination",
             disposition: directive.disposition,
@@ -696,7 +739,7 @@ async function fakeCounselGeneration(
       activity: "speaking",
       emotion: "confident",
       intensity: 0.5,
-      gazeTarget: "witness",
+      gazeTarget: directive.kind === "give_closing" ? "jury" : "witness",
       gesture: "open_palm",
       speakingStyle: "firm",
     },
@@ -725,6 +768,416 @@ async function fakeCounselGeneration(
     expectedStateVersion: request.expectedStateVersion,
     expectedLastEventId: request.expectedLastEventId,
     planBinding: request.planBinding,
+    output,
+    modelMetadata: audit.modelMetadata,
+    trace: audit.trace,
+  });
+}
+
+function juryKnowledgeScope(request: JuryResponseRequest) {
+  const record = request.knowledgeView.publicRecord;
+  return {
+    knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
+    knowledgeViewHash: sha256Utf8(JSON.stringify(request.knowledgeView)),
+    stateVersion: request.knowledgeView.stateVersion,
+    factCount: record.facts.length,
+    evidenceCount: record.evidence.length,
+    testimonyCount: record.testimony.length,
+    priorStatementCount: 0,
+    sourceSegmentCount: new Set([
+      ...record.facts.flatMap(({ sourceSegmentIds }) => sourceSegmentIds),
+      ...record.evidence.flatMap(({ sourceSegmentIds }) => sourceSegmentIds),
+    ]).size,
+    publicRecordEventCount: new Set(
+      record.testimony.map(({ transcriptEventId }) => transcriptEventId),
+    ).size,
+    currentExchangeCount: 0,
+  };
+}
+
+function uniqueFinalCount(...lists: readonly string[][]): number {
+  return new Set(lists.flat()).size;
+}
+
+function debriefKnowledgeScope(request: DebriefGeneratorRequest) {
+  const { strata } = request.knowledgeView;
+  const admitted = strata.admittedRecord.record;
+  const proceduralEventIds = [
+    ...request.transcript.map(({ sourceEventId }) => sourceEventId),
+    ...request.procedure.objections.flatMap((objection) => [
+      objection.sourceEventId,
+      ...(objection.rulingEventId === null ? [] : [objection.rulingEventId]),
+    ]),
+    ...request.procedure.settlementOffers.flatMap((offer) => [
+      offer.sourceEventId,
+      offer.lastEventId,
+    ]),
+    ...(request.procedure.verdict === null
+      ? []
+      : [request.procedure.verdict.sourceEventId]),
+  ];
+  return {
+    knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
+    knowledgeViewHash: sha256Utf8(JSON.stringify(request.knowledgeView)),
+    stateVersion: request.knowledgeView.stateVersion,
+    factCount: uniqueFinalCount(
+      admitted.facts.map(({ factId }) => factId),
+      strata.unadmittedRecord.facts.map(({ factId }) => factId),
+      strata.excludedOrStricken.facts.map(({ factId }) => factId),
+      strata.hiddenAuthoringTruth.facts.map(({ factId }) => factId),
+    ),
+    evidenceCount: uniqueFinalCount(
+      admitted.evidence.map(({ evidenceId }) => evidenceId),
+      strata.unadmittedRecord.evidence.map(({ evidenceId }) => evidenceId),
+      strata.excludedOrStricken.evidence.map(
+        ({ evidenceId }) => evidenceId,
+      ),
+    ),
+    testimonyCount: uniqueFinalCount(
+      admitted.testimony.map(({ testimonyId }) => testimonyId),
+      strata.excludedOrStricken.testimony.map(
+        ({ testimonyId }) => testimonyId,
+      ),
+    ),
+    priorStatementCount: 0,
+    sourceSegmentCount: new Set([
+      ...admitted.facts.flatMap(({ sourceSegmentIds }) => sourceSegmentIds),
+      ...admitted.evidence.flatMap(
+        ({ sourceSegmentIds }) => sourceSegmentIds,
+      ),
+      ...strata.hiddenAuthoringTruth.facts.flatMap(
+        ({ sourceSegmentIds }) => sourceSegmentIds,
+      ),
+    ]).size,
+    publicRecordEventCount: new Set(proceduralEventIds).size,
+    currentExchangeCount: 0,
+  };
+}
+
+function acceptedFinalTrace(input: Readonly<{
+  request: JuryResponseRequest | DebriefGeneratorRequest;
+  actorRole: "jury" | "debrief";
+  callClass: "role_responder" | "debrief_generator";
+  task: "jury_deliberation" | "generate_debrief";
+  model: "gpt-5.6-luna" | "gpt-5.6-terra";
+  promptVersion: "role-responder.jury.prompt.v1" | "debrief-generator.prompt.v1";
+  outputSchemaVersion: string;
+  outputHash: string;
+  outputCharacterCount: number;
+  proposedCitationCount: number;
+  acceptedCitations: ReturnType<typeof juryResponseOutputCitations>;
+  knowledgeScope: ReturnType<typeof juryKnowledgeScope>;
+  startedAt: string;
+}>) {
+  const completedAt = new Date(Date.parse(input.startedAt) + 250).toISOString();
+  const usage = {
+    inputTokens: 150,
+    outputTokens: 45,
+    totalTokens: 195,
+    cachedInputTokens: 40,
+    cacheWriteTokens: 0,
+    reasoningTokens: 8,
+  };
+  const providerRequestId = `request:test:${sha256Utf8(input.request.callId).slice(0, 24)}`;
+  const trace = CourtroomModelCallTraceSchema.parse({
+    schemaVersion: COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+    callId: input.request.callId,
+    trialId: input.request.trialId,
+    responseId: null,
+    actorId: input.request.actorId,
+    actorRole: input.actorRole,
+    callClass: input.callClass,
+    task: input.task,
+    inputEventIds: [input.request.expectedLastEventId],
+    expectedStateVersion: input.request.expectedStateVersion,
+    expectedLastEventId: input.request.expectedLastEventId,
+    provider: "scripted-courtroom-model",
+    model: input.model,
+    providerProtocolVersion: "courtroom-model-provider.v1",
+    promptVersion: input.promptVersion,
+    outputSchemaVersion: input.outputSchemaVersion,
+    knowledgeScope: input.knowledgeScope,
+    promptAudit: {
+      stablePrefixHash: sha256Utf8("fake-final-stable-prefix"),
+      trustedContextHash: sha256Utf8("fake-final-trusted-context"),
+      untrustedInputHash: sha256Utf8("fake-final-untrusted-input"),
+      inputCharacterCount: 90,
+    },
+    status: "accepted",
+    startedAt: input.startedAt,
+    completedAt,
+    latencyMs: 250,
+    firstStructuredDeltaMs: 25,
+    firstAcceptedSegmentMs: null,
+    retryCount: 0,
+    validationFailureCount: 0,
+    estimatedCostUsd: null,
+    usage,
+    acceptedAttempt: 1,
+    acceptedCitations: input.acceptedCitations,
+    acceptedCitationCount: Object.values(input.acceptedCitations).reduce(
+      (total, identifiers) => total + identifiers.length,
+      0,
+    ),
+    outputHash: input.outputHash,
+    outputCharacterCount: input.outputCharacterCount,
+    committedActionId: null,
+    committedEventId: null,
+    safeFailureCode: null,
+    attempts: [
+      {
+        schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+        attempt: 1,
+        mode: "initial",
+        status: "accepted",
+        providerRequestId,
+        providerResponseId: `response:test:${sha256Utf8(input.request.callId).slice(0, 24)}`,
+        startedAt: input.startedAt,
+        completedAt,
+        latencyMs: 250,
+        firstStructuredDeltaMs: 25,
+        streamEventCount: 3,
+        structuredDeltaCount: 1,
+        streamedCharacterCount: input.outputCharacterCount,
+        outputHash: input.outputHash,
+        proposedCitationCount: input.proposedCitationCount,
+        usage,
+        validationIssueCodes: [],
+        safeErrorCode: null,
+      },
+    ],
+  });
+  return {
+    trace,
+    modelMetadata: {
+      model: input.model,
+      requestId: providerRequestId,
+      promptVersion: input.promptVersion,
+      schemaVersion: input.outputSchemaVersion,
+      latencyMs: 250,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: null,
+      retryCount: 0,
+      validationFailureCount: 0,
+    },
+  };
+}
+
+async function fakeJuryGeneration(
+  preparation: HearingCommandPreparation,
+  startedAt: string,
+): Promise<HearingJuryResponsePrecommit> {
+  if (!isHearingJuryResponseModelRequiredPreparation(preparation)) {
+    throw new Error("Expected jury response preparation");
+  }
+  const request = preparation.request;
+  const record = request.knowledgeView.publicRecord;
+  const instructionIds = record.instructions.map(
+    ({ instructionId }) => instructionId,
+  );
+  const citations = {
+    factIds: record.facts.slice(0, 1).map(({ factId }) => factId),
+    evidenceIds: record.evidence
+      .slice(0, 1)
+      .map(({ evidenceId }) => evidenceId),
+    testimonyIds: record.testimony
+      .slice(0, 1)
+      .map(({ testimonyId }) => testimonyId),
+    transcriptTurnIds: [],
+    sourceSegmentIds: [],
+    priorStatementIds: [],
+    issueIds: [],
+    instructionIds,
+    ruleIds: [],
+    settlementOfferIds: [],
+  };
+  const output = JuryRoleResponseModelOutputSchema.parse({
+    schemaVersion: JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    deliberationSegments: [
+      {
+        text: "The admitted testimony and instructions support a verdict on the record.",
+        citations,
+      },
+    ],
+    findings: [
+      {
+        conclusion: "The user carried the fictional burden on the admitted record.",
+        weight: "strong",
+        citations,
+      },
+    ],
+    recommendation: {
+      outcome: "user_prevails",
+      decision: "The jury finds for the user on the jury-considerable record.",
+      confidence: 0.76,
+    },
+    performance: {
+      activity: "speaking",
+      emotion: "neutral",
+      intensity: 0.45,
+      gazeTarget: "judge",
+      gesture: "none",
+      speakingStyle: "deliberative",
+    },
+  });
+  const outputHash = hashJuryResponseModelOutput(output);
+  const audit = acceptedFinalTrace({
+    request,
+    actorRole: "jury",
+    callClass: "role_responder",
+    task: "jury_deliberation",
+    model: "gpt-5.6-luna",
+    promptVersion: "role-responder.jury.prompt.v1",
+    outputSchemaVersion: output.schemaVersion,
+    outputHash,
+    outputCharacterCount: JSON.stringify(output).length,
+    proposedCitationCount: proposedCitationCount([
+      ...output.deliberationSegments.map((segment) => segment.citations),
+      ...output.findings.map((finding) => finding.citations),
+    ]),
+    acceptedCitations: juryResponseOutputCitations(output),
+    knowledgeScope: juryKnowledgeScope(request),
+    startedAt,
+  });
+  return HearingJuryResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    output,
+    modelMetadata: audit.modelMetadata,
+    trace: audit.trace,
+  });
+}
+
+function emptyDebriefCitations(
+  overrides: Partial<DebriefCitationSet> = {},
+): DebriefCitationSet {
+  return {
+    admittedFactIds: [],
+    admittedEvidenceIds: [],
+    activeTestimonyIds: [],
+    transcriptTurnIds: [],
+    unadmittedFactIds: [],
+    unadmittedEvidenceIds: [],
+    excludedFactIds: [],
+    excludedEvidenceIds: [],
+    strickenTestimonyIds: [],
+    hiddenFactIds: [],
+    hiddenSourceSegmentIds: [],
+    coachingInferenceIds: [],
+    ...overrides,
+  };
+}
+
+async function fakeDebriefGeneration(
+  preparation: HearingCommandPreparation,
+  startedAt: string,
+): Promise<HearingDebriefGeneratorPrecommit> {
+  if (!isHearingDebriefGeneratorModelRequiredPreparation(preparation)) {
+    throw new Error("Expected debrief generation preparation");
+  }
+  const request = preparation.request;
+  const admitted = request.knowledgeView.strata.admittedRecord.record;
+  const citations = emptyDebriefCitations({
+    admittedFactIds: admitted.facts.slice(0, 1).map(({ factId }) => factId),
+    admittedEvidenceIds: admitted.evidence
+      .slice(0, 1)
+      .map(({ evidenceId }) => evidenceId),
+    activeTestimonyIds: admitted.testimony
+      .slice(0, 2)
+      .map(({ testimonyId }) => testimonyId),
+    transcriptTurnIds: request.transcript.map(({ turnId }) => turnId),
+  });
+  const output = DebriefGeneratorModelOutputSchema.parse({
+    schemaVersion: DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+    overallAssessment: {
+      text: "The examination created a coherent record for this fictional hearing.",
+      basis: "admitted_record",
+      citations,
+    },
+    strengths: [
+      {
+        title: "Coherent examination",
+        assessment: "The transcript shows a focused witness sequence.",
+        recommendation: "Keep the same disciplined structure.",
+        basis: "admitted_record",
+        citations,
+      },
+    ],
+    weakQuestions: [],
+    missedEvidence: [],
+    contradictions: [],
+    objectionAccuracy: [],
+    witnessStrategy: [],
+    settlementChoices: [],
+    juryMovement: [],
+    improvedClosing: {
+      segments: [
+        {
+          text: "The admitted testimony supports the requested fictional result.",
+          citations,
+        },
+      ],
+    },
+    limitations: [
+      "This fictional educational coaching is not legal advice or a real-case prediction.",
+    ],
+  });
+  const sourceEventIdByTurnId = new Map(
+    request.transcript.map(({ turnId, sourceEventId }) => [
+      turnId,
+      sourceEventId,
+    ]),
+  );
+  const transcriptEventBindings = [...citations.transcriptTurnIds]
+    .sort((left, right) => left.localeCompare(right))
+    .map((turnId) => {
+      const sourceEventId = sourceEventIdByTurnId.get(turnId);
+      if (!sourceEventId) throw new Error("Fixture debrief turn is unbound");
+      return { turnId, sourceEventId };
+    });
+  const outputHash = hashDebriefGeneratorModelOutput(output);
+  const citationGroups = [
+    output.overallAssessment.citations,
+    ...output.strengths.map((point) => point.citations),
+    ...output.weakQuestions.map((point) => point.citations),
+    ...output.missedEvidence.map((point) => point.citations),
+    ...output.contradictions.map((point) => point.citations),
+    ...output.objectionAccuracy.map((point) => point.citations),
+    ...output.witnessStrategy.map((point) => point.citations),
+    ...output.settlementChoices.map((point) => point.citations),
+    ...output.juryMovement.map((point) => point.citations),
+    ...output.improvedClosing.segments.map((segment) => segment.citations),
+  ];
+  const audit = acceptedFinalTrace({
+    request,
+    actorRole: "debrief",
+    callClass: "debrief_generator",
+    task: "generate_debrief",
+    model: "gpt-5.6-terra",
+    promptVersion: "debrief-generator.prompt.v1",
+    outputSchemaVersion: output.schemaVersion,
+    outputHash,
+    outputCharacterCount: JSON.stringify(output).length,
+    proposedCitationCount: proposedCitationCount(citationGroups),
+    acceptedCitations: debriefGeneratorOutputCitations(
+      output,
+      transcriptEventBindings,
+    ),
+    knowledgeScope: debriefKnowledgeScope(request),
+    startedAt,
+  });
+  return HearingDebriefGeneratorPrecommitSchema.parse({
+    schemaVersion: HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    transcriptEventBindings,
     output,
     modelMetadata: audit.modelMetadata,
     trace: audit.trace,
@@ -765,6 +1218,26 @@ async function commitModelPreparation(
     const generation = await fakeCounselGeneration(preparation, startedAt);
     return HearingCommandPreparationSchema.parse(
       await backend.action(commitCounselGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+  }
+  if (isHearingJuryResponseModelRequiredPreparation(preparation)) {
+    const generation = await fakeJuryGeneration(preparation, startedAt);
+    return HearingCommandPreparationSchema.parse(
+      await backend.action(commitJuryGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+  }
+  if (isHearingDebriefGeneratorModelRequiredPreparation(preparation)) {
+    const generation = await fakeDebriefGeneration(preparation, startedAt);
+    return HearingCommandPreparationSchema.parse(
+      await backend.action(commitDebriefGenerationReference, {
         ownerId: OWNER_ID,
         trialId: preparation.request.trialId,
         generationJson: JSON.stringify(generation),
@@ -2071,6 +2544,34 @@ describe("V3 hearing runtime facade", () => {
     expect(persisted).toEqual({ graphs: [], projections: [], events: [] });
   });
 
+  it("rejects a closing workflow with no jury-considerable support", async () => {
+    const backend = convexTest(schema, modules);
+    const view = await start(backend);
+    const request = playerCommand(
+      view,
+      "90909090-9090-4090-8090-909090909090",
+      "2026-07-19T02:59:00.000Z",
+      {
+        type: "finish_trial",
+        closingText: "There is no record to submit.",
+      },
+    );
+    await expect(
+      backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        commandJson: JSON.stringify(request),
+      }),
+    ).rejects.toThrow("JURY_CONSIDERABLE_RECORD_REQUIRED");
+    const unchanged = HearingRuntimeViewV1Schema.parse(
+      await backend.action(readReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+      }),
+    );
+    expect(unchanged).toEqual(view);
+  });
+
   it("calls, questions, releases, switches witnesses, completes, and resumes only from V3 events", async () => {
     const backend = convexTest({ schema, modules });
     let view = await start(backend);
@@ -2205,7 +2706,160 @@ describe("V3 hearing runtime facade", () => {
     ).rejects.toThrow("TRIAL_NOT_FOUND");
 
     const stored = await backend.run(async (ctx) => ({
-      eventCount: (
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", view.trial.trialId),
+        )
+        .collect(),
+      artifacts: await ctx.db
+        .query("courtroomGeneratedArtifacts")
+        .withIndex("by_owner_trial_kind", (index) =>
+          index.eq("ownerId", OWNER_ID).eq("trialId", view.trial.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+      legacyTrials: await ctx.db.query("trials").collect(),
+      legacyTurns: await ctx.db.query("turns").collect(),
+    }));
+    expect(stored.events).toHaveLength(view.trial.sequence);
+    expect(stored.events.slice(-16).map(({ eventType }) => eventType)).toEqual([
+      "REST_CASE",
+      "REST_CASE",
+      "BEGIN_PHASE",
+      "BEGIN_PHASE",
+      "GIVE_CLOSING",
+      "UPDATE_OPPOSING_STRATEGY",
+      "GIVE_CLOSING",
+      "BEGIN_PHASE",
+      "INSTRUCT_JURY",
+      "BEGIN_PHASE",
+      "DELIBERATE",
+      "BEGIN_PHASE",
+      "RENDER_VERDICT",
+      "BEGIN_PHASE",
+      "GENERATE_DEBRIEF",
+      "BEGIN_PHASE",
+    ]);
+    expect(
+      stored.events
+        .slice(-16)
+        .filter(({ source }) => source === "ai")
+        .map(({ eventType }) => eventType),
+    ).toEqual([
+      "UPDATE_OPPOSING_STRATEGY",
+      "GIVE_CLOSING",
+      "DELIBERATE",
+      "GENERATE_DEBRIEF",
+    ]);
+    expect(stored.events.map(({ payloadJson }) => payloadJson).join("\n")).not
+      .toContain("deterministic development jury");
+    expect(stored.artifacts.map(({ artifactKind }) => artifactKind).sort()).toEqual(
+      ["final_debrief", "jury_deliberation"],
+    );
+    const juryArtifact = stored.artifacts.find(
+      ({ artifactKind }) => artifactKind === "jury_deliberation",
+    );
+    const debriefArtifact = stored.artifacts.find(
+      ({ artifactKind }) => artifactKind === "final_debrief",
+    );
+    expect(juryArtifact).toMatchObject({
+      ownerId: OWNER_ID,
+      trialId: view.trial.trialId,
+      model: "gpt-5.6-luna",
+      artifactSchemaVersion: JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    });
+    expect(debriefArtifact).toMatchObject({
+      ownerId: OWNER_ID,
+      trialId: view.trial.trialId,
+      model: "gpt-5.6-terra",
+      artifactSchemaVersion: DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+    });
+    expect(
+      JuryRoleResponseModelOutputSchema.parse(
+        JSON.parse(juryArtifact?.artifactJson ?? "null"),
+      ).recommendation.decision,
+    ).toBe("The jury finds for the user on the jury-considerable record.");
+    expect(
+      DebriefGeneratorModelOutputSchema.parse(
+        JSON.parse(debriefArtifact?.artifactJson ?? "null"),
+      ).limitations[0],
+    ).toContain("not legal advice");
+    const juryEvent = stored.events.find(
+      ({ eventType }) => eventType === "DELIBERATE",
+    );
+    const juryCall = stored.calls.find(
+      ({ callId }) => callId === juryArtifact?.callId,
+    );
+    if (
+      !juryArtifact ||
+      juryArtifact.decisionId === null ||
+      !juryEvent ||
+      !juryCall
+    ) {
+      throw new Error("Expected a complete stored jury generation");
+    }
+    const committedJuryTrace = CourtroomModelCallTraceSchema.parse(
+      JSON.parse(juryCall.traceJson),
+    );
+    const replayGeneration = HearingJuryResponsePrecommitSchema.parse({
+      schemaVersion: HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+      trialId: view.trial.trialId,
+      callId: juryArtifact.callId,
+      decisionId: juryArtifact.decisionId,
+      expectedStateVersion: juryArtifact.sourceStateVersion,
+      expectedLastEventId: juryArtifact.sourceLastEventId,
+      output: JSON.parse(juryArtifact.artifactJson),
+      modelMetadata: {
+        model: juryEvent.model,
+        requestId: juryEvent.modelRequestId ?? null,
+        promptVersion: juryEvent.promptVersion,
+        schemaVersion: juryEvent.modelSchemaVersion,
+        latencyMs: juryEvent.modelLatencyMs ?? null,
+        inputTokens: juryEvent.inputTokens ?? null,
+        outputTokens: juryEvent.outputTokens ?? null,
+        estimatedCostUsd: juryEvent.estimatedCostUsd ?? null,
+        retryCount: juryEvent.retryCount,
+        validationFailureCount: juryEvent.validationFailureCount,
+      },
+      trace: {
+        ...committedJuryTrace,
+        committedActionId: null,
+        committedEventId: null,
+      },
+    });
+    const replayPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(commitJuryGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify(replayGeneration),
+      }),
+    );
+    expect(replayPreparation).toMatchObject({
+      status: "completed",
+      view,
+    });
+    await expect(
+      backend.action(commitJuryGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        generationJson: JSON.stringify({
+          ...replayGeneration,
+          output: {
+            ...replayGeneration.output,
+            recommendation: {
+              ...replayGeneration.output.recommendation,
+              decision: "A conflicting replay must not overwrite the artifact.",
+            },
+          },
+        }),
+      }),
+    ).rejects.toThrow("JURY_GENERATION_INVALID");
+    const replayCounts = await backend.run(async (ctx) => ({
+      artifacts: (await ctx.db.query("courtroomGeneratedArtifacts").collect())
+        .length,
+      calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      events: (
         await ctx.db
           .query("trialEvents")
           .withIndex("by_trial_sequence", (index) =>
@@ -2213,10 +2867,21 @@ describe("V3 hearing runtime facade", () => {
           )
           .collect()
       ).length,
-      legacyTrials: await ctx.db.query("trials").collect(),
-      legacyTurns: await ctx.db.query("turns").collect(),
     }));
-    expect(stored.eventCount).toBe(view.trial.sequence);
+    expect(replayCounts).toEqual({
+      artifacts: stored.artifacts.length,
+      calls: stored.calls.length,
+      events: stored.events.length,
+    });
+    expect(
+      stored.calls
+        .filter(({ trialId }) => trialId === view.trial.trialId)
+        .map(({ task }) => task),
+    ).toEqual(
+      expect.arrayContaining(["jury_deliberation", "generate_debrief"]),
+    );
+    expect(JSON.stringify(view)).not.toContain("hiddenAuthoringTruth");
+    expect(JSON.stringify(view)).not.toContain("overallAssessment");
     expect(stored.legacyTrials).toEqual([]);
     expect(stored.legacyTurns).toEqual([]);
   });

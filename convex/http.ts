@@ -14,6 +14,8 @@ import {
 import {
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
@@ -204,6 +206,16 @@ const commitCounselGenerationReference = makeFunctionReference<
   { ownerId: string; trialId: string; generationJson: string },
   HearingCommandPreparation
 >("hearingRuntime:commitCounselGeneration");
+const commitJuryGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitJuryGeneration");
+const commitDebriefGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitDebriefGeneration");
 const recordTerminalModelCallReference = makeFunctionReference<
   "mutation",
   { ownerId: string; traceJson: string },
@@ -265,6 +277,38 @@ export const HearingServiceCounselResponseCommitRequestSchema = z
     ownerId: CaseServiceOwnerIdSchema,
     trialId: z.string().trim().min(1).max(256),
     generation: HearingCounselResponsePrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceJuryResponseCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingJuryResponsePrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceDebriefCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingDebriefGeneratorPrecommitSchema,
   })
   .strict()
   .superRefine((body, context) => {
@@ -545,6 +589,42 @@ const commitCounselGeneration = httpAction(async (ctx, request) => {
   }
 });
 
+const commitJuryGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceJuryResponseCommitRequestSchema,
+    );
+    const result = await ctx.runAction(commitJuryGenerationReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      generationJson: JSON.stringify(body.generation),
+    });
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const commitDebriefGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceDebriefCommitRequestSchema,
+    );
+    const result = await ctx.runAction(commitDebriefGenerationReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      generationJson: JSON.stringify(body.generation),
+    });
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const recordTerminalModelCall = httpAction(async (ctx, request) => {
   try {
     await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
@@ -589,6 +669,8 @@ http.route({ path: "/service/hearings/command/prepare", method: "POST", handler:
 http.route({ path: "/service/hearings/command/commit", method: "POST", handler: commitWitnessGeneration });
 http.route({ path: "/service/hearings/opponent-plan/commit", method: "POST", handler: commitOpponentPlanGeneration });
 http.route({ path: "/service/hearings/counsel-response/commit", method: "POST", handler: commitCounselGeneration });
+http.route({ path: "/service/hearings/jury-response/commit", method: "POST", handler: commitJuryGeneration });
+http.route({ path: "/service/hearings/debrief/commit", method: "POST", handler: commitDebriefGeneration });
 http.route({ path: "/service/hearings/model-call/terminal", method: "POST", handler: recordTerminalModelCall });
 http.route({ path: "/service/hearings/read", method: "POST", handler: readHearing });
 

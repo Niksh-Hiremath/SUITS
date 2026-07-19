@@ -1,8 +1,14 @@
 import { v } from "convex/values";
 
-import { CaseGraphV1Schema, type CaseGraphV1 } from "../src/domain/case-graph";
+import {
+  CaseGraphV1Schema,
+  sha256Utf8,
+  type CaseGraphV1,
+} from "../src/domain/case-graph";
 import {
   CourtroomModelCallTraceSchema,
+  DebriefGeneratorModelOutputSchema,
+  JuryRoleResponseModelOutputSchema,
   type CounselRoleResponseModelOutput,
   type CourtroomModelCallTrace,
   type OpponentPlannerModelOutput,
@@ -10,12 +16,19 @@ import {
 } from "../src/domain/courtroom-ai";
 import {
   HearingCounselResponsePrecommitSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
   counselResponseOutputCitations,
+  hashDebriefGeneratorModelOutput,
+  hashJuryResponseModelOutput,
   hashOpponentPlannerModelOutput,
+  juryResponseOutputCitations,
   witnessAnswerOutputCitations,
   type HearingCounselResponsePrecommit,
+  type HearingDebriefGeneratorPrecommit,
+  type HearingJuryResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingWitnessGenerationPrecommit,
 } from "../src/domain/hearing-runtime/model-boundary";
@@ -329,6 +342,22 @@ function staleCounselResponse(): never {
   throw new Error("COUNSEL_GENERATION_STALE");
 }
 
+function invalidJuryGeneration(): never {
+  throw new Error("JURY_GENERATION_INVALID");
+}
+
+function staleJuryGeneration(): never {
+  throw new Error("JURY_GENERATION_STALE");
+}
+
+function invalidDebriefGeneration(): never {
+  throw new Error("DEBRIEF_GENERATION_INVALID");
+}
+
+function staleDebriefGeneration(): never {
+  throw new Error("DEBRIEF_GENERATION_STALE");
+}
+
 function parseOpponentPlanGenerationJson(
   generationJson: string,
 ): HearingOpponentPlanPrecommit {
@@ -353,6 +382,68 @@ function parseCounselResponseGenerationJson(
   }
   const parsed = HearingCounselResponsePrecommitSchema.safeParse(input);
   return parsed.success ? parsed.data : invalidCounselResponse();
+}
+
+function parseJuryGenerationJson(
+  generationJson: string,
+): HearingJuryResponsePrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidJuryGeneration();
+  }
+  const parsed = HearingJuryResponsePrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidJuryGeneration();
+}
+
+function parseDebriefGenerationJson(
+  generationJson: string,
+): HearingDebriefGeneratorPrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidDebriefGeneration();
+  }
+  const parsed = HearingDebriefGeneratorPrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidDebriefGeneration();
+}
+
+function finalRuntimeId(prefix: string, material: unknown): string {
+  return `${prefix}:${sha256Utf8(canonicalJson(material))}`;
+}
+
+function juryGenerationIds(generation: HearingJuryResponsePrecommit) {
+  const material = {
+    trialId: generation.trialId,
+    decisionId: generation.decisionId,
+  };
+  return {
+    actionId: finalRuntimeId("action:jury-deliberation", material),
+    verdictPhaseActionId: finalRuntimeId("action:phase-verdict", material),
+    verdictActionId: finalRuntimeId("action:render-verdict", material),
+    debriefPhaseActionId: finalRuntimeId("action:phase-debrief", material),
+    verdictId: finalRuntimeId("verdict:jury", material),
+    artifactId: finalRuntimeId("artifact:jury", material),
+  };
+}
+
+function debriefGenerationIds(generation: HearingDebriefGeneratorPrecommit) {
+  const material = {
+    trialId: generation.trialId,
+    sourceStateVersion: generation.expectedStateVersion,
+    sourceLastEventId: generation.expectedLastEventId,
+  };
+  const debriefId = finalRuntimeId("debrief:final", material);
+  return {
+    actionId: finalRuntimeId("action:debrief-generation", material),
+    completePhaseActionId: finalRuntimeId("action:phase-complete", {
+      trialId: generation.trialId,
+      debriefId,
+    }),
+    debriefId,
+  };
 }
 
 function eventIdForGeneratedAction(actionId: string): string {
@@ -880,6 +971,330 @@ function requireCounselContinuation(
     return invalidCounselResponse();
   }
   return continuation;
+}
+
+function terminalTimeWithOffset(value: string | null, offset: number): string {
+  if (value === null) return invalidJuryGeneration();
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || timestamp < 0) {
+    return invalidJuryGeneration();
+  }
+  return new Date(timestamp + offset).toISOString();
+}
+
+function sameActionActor(left: TrialActionV3, right: TrialActionV3): boolean {
+  return sameCanonicalJson(left.actor, right.actor);
+}
+
+function requireJuryGenerationActions(
+  actions: readonly TrialActionV3[],
+  generation: HearingJuryResponsePrecommit,
+): readonly [TrialActionV3, TrialActionV3, TrialActionV3, TrialActionV3] {
+  if (actions.length !== 4) return invalidJuryGeneration();
+  const [deliberation, verdictPhase, verdict, debriefPhase] = actions;
+  if (!deliberation || !verdictPhase || !verdict || !debriefPhase) {
+    return invalidJuryGeneration();
+  }
+  const ids = juryGenerationIds(generation);
+  const citations = juryResponseOutputCitations(generation.output);
+  const baseTime = generation.trace.completedAt;
+  if (
+    deliberation.type !== "DELIBERATE" ||
+    deliberation.actionId !== ids.actionId ||
+    deliberation.trialId !== generation.trialId ||
+    deliberation.expectedStateVersion !== generation.expectedStateVersion ||
+    deliberation.causationId !== generation.expectedLastEventId ||
+    deliberation.correlationId !== generation.trialId ||
+    deliberation.source !== "ai" ||
+    deliberation.actor.role !== "jury" ||
+    deliberation.actor.side !== "neutral" ||
+    deliberation.actor.witnessId !== null ||
+    deliberation.actor.actorId !== generation.trace.actorId ||
+    deliberation.responseId !== null ||
+    deliberation.interruptId !== null ||
+    !sameCanonicalJson(deliberation.modelMetadata, generation.modelMetadata) ||
+    deliberation.requestedAt !== terminalTimeWithOffset(baseTime, 0) ||
+    !sameCanonicalJson(deliberation.payload, {})
+  ) {
+    return staleJuryGeneration();
+  }
+  if (
+    verdictPhase.type !== "BEGIN_PHASE" ||
+    verdictPhase.actionId !== ids.verdictPhaseActionId ||
+    verdictPhase.trialId !== generation.trialId ||
+    verdictPhase.expectedStateVersion !== generation.expectedStateVersion + 1 ||
+    verdictPhase.causationId !== eventIdForGeneratedAction(deliberation.actionId) ||
+    verdictPhase.correlationId !== generation.trialId ||
+    verdictPhase.source !== "deterministic" ||
+    verdictPhase.actor.role !== "judge" ||
+    verdictPhase.actor.side !== "neutral" ||
+    verdictPhase.actor.witnessId !== null ||
+    verdictPhase.responseId !== null ||
+    verdictPhase.interruptId !== null ||
+    verdictPhase.modelMetadata !== null ||
+    verdictPhase.requestedAt !== terminalTimeWithOffset(baseTime, 1) ||
+    verdictPhase.payload.phase !== "verdict"
+  ) {
+    return invalidJuryGeneration();
+  }
+  if (
+    verdict.type !== "RENDER_VERDICT" ||
+    verdict.actionId !== ids.verdictActionId ||
+    verdict.trialId !== generation.trialId ||
+    verdict.expectedStateVersion !== generation.expectedStateVersion + 2 ||
+    verdict.causationId !== eventIdForGeneratedAction(verdictPhase.actionId) ||
+    verdict.correlationId !== generation.trialId ||
+    verdict.source !== "deterministic" ||
+    !sameActionActor(verdict, verdictPhase) ||
+    verdict.responseId !== null ||
+    verdict.interruptId !== null ||
+    verdict.modelMetadata !== null ||
+    verdict.requestedAt !== terminalTimeWithOffset(baseTime, 2) ||
+    verdict.payload.verdictId !== ids.verdictId ||
+    verdict.payload.decision !== generation.output.recommendation.decision ||
+    !sameIdentifierSet(verdict.payload.citations.factIds, citations.factIds) ||
+    !sameIdentifierSet(
+      verdict.payload.citations.evidenceIds,
+      citations.evidenceIds,
+    ) ||
+    !sameIdentifierSet(
+      verdict.payload.citations.testimonyIds,
+      citations.testimonyIds,
+    ) ||
+    verdict.payload.citations.eventIds.length !== 0 ||
+    verdict.payload.citations.sourceSegmentIds.length !== 0
+  ) {
+    return invalidJuryGeneration();
+  }
+  if (
+    debriefPhase.type !== "BEGIN_PHASE" ||
+    debriefPhase.actionId !== ids.debriefPhaseActionId ||
+    debriefPhase.trialId !== generation.trialId ||
+    debriefPhase.expectedStateVersion !== generation.expectedStateVersion + 3 ||
+    debriefPhase.causationId !== eventIdForGeneratedAction(verdict.actionId) ||
+    debriefPhase.correlationId !== generation.trialId ||
+    debriefPhase.source !== "deterministic" ||
+    !sameActionActor(debriefPhase, verdictPhase) ||
+    debriefPhase.responseId !== null ||
+    debriefPhase.interruptId !== null ||
+    debriefPhase.modelMetadata !== null ||
+    debriefPhase.requestedAt !== terminalTimeWithOffset(baseTime, 3) ||
+    debriefPhase.payload.phase !== "debrief"
+  ) {
+    return invalidJuryGeneration();
+  }
+  return [deliberation, verdictPhase, verdict, debriefPhase];
+}
+
+function requireDebriefGenerationActions(
+  actions: readonly TrialActionV3[],
+  generation: HearingDebriefGeneratorPrecommit,
+): readonly [TrialActionV3, TrialActionV3] {
+  if (actions.length !== 2) return invalidDebriefGeneration();
+  const [debrief, completePhase] = actions;
+  if (!debrief || !completePhase) return invalidDebriefGeneration();
+  const ids = debriefGenerationIds(generation);
+  const completedAt = generation.trace.completedAt;
+  if (completedAt === null) return invalidDebriefGeneration();
+  const completedTimestamp = Date.parse(completedAt);
+  if (!Number.isFinite(completedTimestamp) || completedTimestamp < 0) {
+    return invalidDebriefGeneration();
+  }
+  const at = (offset: number) =>
+    new Date(completedTimestamp + offset).toISOString();
+  if (
+    debrief.type !== "GENERATE_DEBRIEF" ||
+    debrief.actionId !== ids.actionId ||
+    debrief.trialId !== generation.trialId ||
+    debrief.expectedStateVersion !== generation.expectedStateVersion ||
+    debrief.causationId !== generation.expectedLastEventId ||
+    debrief.correlationId !== generation.trialId ||
+    debrief.source !== "ai" ||
+    debrief.actor.role !== "debrief_coach" ||
+    debrief.actor.side !== "neutral" ||
+    debrief.actor.witnessId !== null ||
+    debrief.actor.actorId !== generation.trace.actorId ||
+    debrief.responseId !== null ||
+    debrief.interruptId !== null ||
+    !sameCanonicalJson(debrief.modelMetadata, generation.modelMetadata) ||
+    debrief.requestedAt !== at(0) ||
+    debrief.payload.debriefId !== ids.debriefId
+  ) {
+    return staleDebriefGeneration();
+  }
+  if (
+    completePhase.type !== "BEGIN_PHASE" ||
+    completePhase.actionId !== ids.completePhaseActionId ||
+    completePhase.trialId !== generation.trialId ||
+    completePhase.expectedStateVersion !== generation.expectedStateVersion + 1 ||
+    completePhase.causationId !== eventIdForGeneratedAction(debrief.actionId) ||
+    completePhase.correlationId !== generation.trialId ||
+    completePhase.source !== "deterministic" ||
+    completePhase.actor.role !== "judge" ||
+    completePhase.actor.side !== "neutral" ||
+    completePhase.actor.witnessId !== null ||
+    completePhase.responseId !== null ||
+    completePhase.interruptId !== null ||
+    completePhase.modelMetadata !== null ||
+    completePhase.requestedAt !== at(1) ||
+    completePhase.payload.phase !== "complete"
+  ) {
+    return invalidDebriefGeneration();
+  }
+  return [debrief, completePhase];
+}
+
+type GeneratedArtifactRecord = Readonly<{
+  artifactId: string;
+  artifactKind: "jury_deliberation" | "final_debrief";
+  ownerId: string;
+  trialId: string;
+  callId: string;
+  decisionId: string | null;
+  actionId: string;
+  eventId: string;
+  sourceStateVersion: number;
+  sourceLastEventId: string;
+  committedStateVersion: number;
+  artifactJson: string;
+  artifactHash: string;
+  artifactSchemaVersion: string;
+  promptVersion: string;
+  model: HearingJuryResponsePrecommit["modelMetadata"]["model"];
+  createdAt: number;
+}>;
+
+function comparableArtifact(row: Doc<"courtroomGeneratedArtifacts">) {
+  return {
+    artifactId: row.artifactId,
+    artifactKind: row.artifactKind,
+    ownerId: row.ownerId,
+    trialId: row.trialId,
+    callId: row.callId,
+    decisionId: row.decisionId,
+    actionId: row.actionId,
+    eventId: row.eventId,
+    sourceStateVersion: row.sourceStateVersion,
+    sourceLastEventId: row.sourceLastEventId,
+    committedStateVersion: row.committedStateVersion,
+    artifactJson: row.artifactJson,
+    artifactHash: row.artifactHash,
+    artifactSchemaVersion: row.artifactSchemaVersion,
+    promptVersion: row.promptVersion,
+    model: row.model,
+    createdAt: row.createdAt,
+  };
+}
+
+async function persistGeneratedArtifact(
+  ctx: MutationCtx,
+  record: GeneratedArtifactRecord,
+): Promise<void> {
+  assertIdentifier(record.artifactId, "artifactId");
+  if (
+    record.artifactJson.length === 0 ||
+    record.artifactJson.length > MAX_JSON_CHARACTERS
+  ) {
+    throw new Error("COURTROOM_GENERATED_ARTIFACT_INVALID");
+  }
+  const existing = await ctx.db
+    .query("courtroomGeneratedArtifacts")
+    .withIndex("by_artifact_id", (index) =>
+      index.eq("artifactId", record.artifactId),
+    )
+    .unique();
+  if (existing) {
+    if (!sameCanonicalJson(comparableArtifact(existing), record)) {
+      throw new Error("COURTROOM_GENERATED_ARTIFACT_CONFLICT");
+    }
+    return;
+  }
+  const callRows = await ctx.db
+    .query("courtroomGeneratedArtifacts")
+    .withIndex("by_call_id", (index) => index.eq("callId", record.callId))
+    .collect();
+  const eventRows = await ctx.db
+    .query("courtroomGeneratedArtifacts")
+    .withIndex("by_trial_event", (index) =>
+      index.eq("trialId", record.trialId).eq("eventId", record.eventId),
+    )
+    .collect();
+  if (callRows.length > 0 || eventRows.length > 0) {
+    throw new Error("COURTROOM_GENERATED_ARTIFACT_CONFLICT");
+  }
+  await ctx.db.insert("courtroomGeneratedArtifacts", record);
+}
+
+async function persistJuryArtifact(
+  ctx: MutationCtx,
+  ownerId: string,
+  generation: HearingJuryResponsePrecommit,
+): Promise<void> {
+  const output = JuryRoleResponseModelOutputSchema.parse(generation.output);
+  const artifactJson = canonicalJson(output);
+  const artifactHash = hashJuryResponseModelOutput(output);
+  const ids = juryGenerationIds(generation);
+  if (
+    generation.trace.completedAt === null ||
+    generation.trace.outputHash !== artifactHash
+  ) {
+    return invalidJuryGeneration();
+  }
+  await persistGeneratedArtifact(ctx, {
+    artifactId: ids.artifactId,
+    artifactKind: "jury_deliberation",
+    ownerId,
+    trialId: generation.trialId,
+    callId: generation.callId,
+    decisionId: generation.decisionId,
+    actionId: ids.actionId,
+    eventId: eventIdForGeneratedAction(ids.actionId),
+    sourceStateVersion: generation.expectedStateVersion,
+    sourceLastEventId: generation.expectedLastEventId,
+    committedStateVersion: generation.expectedStateVersion + 1,
+    artifactJson,
+    artifactHash,
+    artifactSchemaVersion: output.schemaVersion,
+    promptVersion: generation.modelMetadata.promptVersion,
+    model: generation.modelMetadata.model,
+    createdAt: Date.parse(generation.trace.completedAt),
+  });
+}
+
+async function persistDebriefArtifact(
+  ctx: MutationCtx,
+  ownerId: string,
+  generation: HearingDebriefGeneratorPrecommit,
+): Promise<void> {
+  const output = DebriefGeneratorModelOutputSchema.parse(generation.output);
+  const artifactJson = canonicalJson(output);
+  const artifactHash = hashDebriefGeneratorModelOutput(output);
+  const ids = debriefGenerationIds(generation);
+  if (
+    generation.trace.completedAt === null ||
+    generation.trace.outputHash !== artifactHash
+  ) {
+    return invalidDebriefGeneration();
+  }
+  await persistGeneratedArtifact(ctx, {
+    artifactId: ids.debriefId,
+    artifactKind: "final_debrief",
+    ownerId,
+    trialId: generation.trialId,
+    callId: generation.callId,
+    decisionId: null,
+    actionId: ids.actionId,
+    eventId: eventIdForGeneratedAction(ids.actionId),
+    sourceStateVersion: generation.expectedStateVersion,
+    sourceLastEventId: generation.expectedLastEventId,
+    committedStateVersion: generation.expectedStateVersion + 1,
+    artifactJson,
+    artifactHash,
+    artifactSchemaVersion: output.schemaVersion,
+    promptVersion: generation.modelMetadata.promptVersion,
+    model: generation.modelMetadata.model,
+    createdAt: Date.parse(generation.trace.completedAt),
+  });
 }
 
 async function requirePublishedGraph(
@@ -1923,6 +2338,178 @@ export const appendCounselTurnForOwner = internalMutation({
       traceJson: canonicalJson(committedTrace),
     });
     return receipt;
+  },
+});
+
+/**
+ * Atomically commits one accepted Luna deliberation, its private artifact,
+ * the deterministic verdict transition, and the redacted terminal call audit.
+ */
+export const appendJuryGenerationForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJsons: v.array(v.string()),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInputs: unknown[];
+    try {
+      actionInputs = args.actionJsons.map((actionJson) =>
+        parseJsonObject(actionJson, "actionJson"),
+      );
+    } catch {
+      return invalidJuryGeneration();
+    }
+    const parsedActions = actionInputs.map((actionInput) =>
+      TrialActionV3Schema.safeParse(actionInput),
+    );
+    if (parsedActions.some((parsed) => !parsed.success)) {
+      return invalidJuryGeneration();
+    }
+    const generation = parseJuryGenerationJson(args.generationJson);
+    const actions = requireJuryGenerationActions(
+      parsedActions.map((parsed) => {
+        if (!parsed.success) return invalidJuryGeneration();
+        return parsed.data;
+      }),
+      generation,
+    );
+
+    let primaryReceipt: Awaited<ReturnType<typeof appendActiveAction>> | null =
+      null;
+    for (const [index, action] of actions.entries()) {
+      const projection = requireOwnedProjection(
+        await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (query) =>
+            query.eq("trialId", action.trialId),
+          )
+          .unique(),
+        args.ownerId,
+      );
+      const receipt = await appendActiveAction(ctx, {
+        action,
+        ownerId: args.ownerId,
+        projection,
+        writeSnapshot: index === actions.length - 1,
+        playerControlledOnly: false,
+      });
+      const committedEventId = receipt.eventIds[0];
+      if (
+        receipt.eventIds.length !== 1 ||
+        committedEventId === undefined ||
+        committedEventId !== eventIdForGeneratedAction(action.actionId) ||
+        receipt.actionId !== action.actionId ||
+        receipt.trialId !== action.trialId
+      ) {
+        return invalidJuryGeneration();
+      }
+      await requireStoredGeneratedEvent(ctx, {
+        action,
+        eventId: committedEventId,
+      });
+      if (index === 0) primaryReceipt = receipt;
+    }
+    if (primaryReceipt === null) return invalidJuryGeneration();
+
+    await persistJuryArtifact(ctx, args.ownerId, generation);
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: actions[0].actionId,
+      committedEventId: eventIdForGeneratedAction(actions[0].actionId),
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return primaryReceipt;
+  },
+});
+
+/**
+ * Atomically commits one accepted Terra coaching artifact, its stable event,
+ * the complete transition, final snapshot, and redacted terminal call audit.
+ */
+export const appendDebriefGenerationForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJsons: v.array(v.string()),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInputs: unknown[];
+    try {
+      actionInputs = args.actionJsons.map((actionJson) =>
+        parseJsonObject(actionJson, "actionJson"),
+      );
+    } catch {
+      return invalidDebriefGeneration();
+    }
+    const parsedActions = actionInputs.map((actionInput) =>
+      TrialActionV3Schema.safeParse(actionInput),
+    );
+    if (parsedActions.some((parsed) => !parsed.success)) {
+      return invalidDebriefGeneration();
+    }
+    const generation = parseDebriefGenerationJson(args.generationJson);
+    const actions = requireDebriefGenerationActions(
+      parsedActions.map((parsed) => {
+        if (!parsed.success) return invalidDebriefGeneration();
+        return parsed.data;
+      }),
+      generation,
+    );
+
+    let primaryReceipt: Awaited<ReturnType<typeof appendActiveAction>> | null =
+      null;
+    for (const [index, action] of actions.entries()) {
+      const projection = requireOwnedProjection(
+        await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (query) =>
+            query.eq("trialId", action.trialId),
+          )
+          .unique(),
+        args.ownerId,
+      );
+      const receipt = await appendActiveAction(ctx, {
+        action,
+        ownerId: args.ownerId,
+        projection,
+        writeSnapshot: index === actions.length - 1,
+        playerControlledOnly: false,
+      });
+      const committedEventId = receipt.eventIds[0];
+      if (
+        receipt.eventIds.length !== 1 ||
+        committedEventId === undefined ||
+        committedEventId !== eventIdForGeneratedAction(action.actionId) ||
+        receipt.actionId !== action.actionId ||
+        receipt.trialId !== action.trialId
+      ) {
+        return invalidDebriefGeneration();
+      }
+      await requireStoredGeneratedEvent(ctx, {
+        action,
+        eventId: committedEventId,
+      });
+      if (index === 0) primaryReceipt = receipt;
+    }
+    if (primaryReceipt === null) return invalidDebriefGeneration();
+
+    await persistDebriefArtifact(ctx, args.ownerId, generation);
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: actions[0].actionId,
+      committedEventId: eventIdForGeneratedAction(actions[0].actionId),
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return primaryReceipt;
   },
 });
 
