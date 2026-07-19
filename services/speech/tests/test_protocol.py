@@ -222,6 +222,16 @@ def test_protocol_rejects_excessive_json_nesting_without_recursing() -> None:
         parse_client_control(json.dumps(payload))
 
 
+def test_protocol_rejects_oversized_integer_tokens_without_leaking_value_error() -> None:
+    payload = (
+        '{"protocol":"suits.speech.v1","type":"ping","nonce":"ping:huge",'
+        f'"sentAtMs":{("9" * 5_000)}}}'
+    )
+
+    with pytest.raises(ProtocolDecodeError, match="valid JSON"):
+        parse_client_control(payload)
+
+
 def test_server_events_round_trip_without_embedding_audio() -> None:
     capabilities = CapabilitiesEvent(
         providers=(

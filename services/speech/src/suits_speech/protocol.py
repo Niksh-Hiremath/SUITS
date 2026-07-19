@@ -398,7 +398,7 @@ class ProtocolDecodeError(ValueError):
 def _check_wire_shape(payload: str) -> None:
     try:
         value = json.loads(payload)
-    except (json.JSONDecodeError, RecursionError) as error:
+    except (RecursionError, ValueError) as error:
         raise ProtocolDecodeError("message must be valid JSON") from error
     if not isinstance(value, dict):
         raise ProtocolDecodeError("message must be a JSON object")
