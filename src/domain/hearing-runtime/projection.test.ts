@@ -152,6 +152,44 @@ function enterRinaQuestion(harness: ReturnType<typeof createHarness>): {
 }
 
 describe("V3 hearing runtime projection", () => {
+  it("exposes the first question while keeping an unstarted examination open", () => {
+    const harness = createHarness();
+    const userCounsel = harness.actor(
+      (actor) => actor.role === "user_counsel",
+      "USER_COUNSEL_NOT_FOUND",
+    );
+    const judge = harness.actor(
+      (actor) => actor.role === "judge",
+      "JUDGE_NOT_FOUND",
+    );
+    harness.commit("BEGIN_PHASE", { phase: "case_in_chief" }, judge);
+    harness.commit(
+      "CALL_WITNESS",
+      { witnessId: "witness_rina_shah", calledBySide: "user" },
+      userCounsel,
+    );
+    harness.commit(
+      "SWEAR_WITNESS",
+      { witnessId: "witness_rina_shah" },
+      judge,
+    );
+
+    const view = buildHearingRuntimeView({
+      caseGraph: harness.caseGraph,
+      trialState: harness.state,
+      playerActorId: userCounsel.actorId,
+    });
+    expect(view.activeAppearance?.examinationLeg).toMatchObject({
+      kind: "direct",
+      ownerSide: "user",
+      status: "available",
+    });
+    expect(view.capabilities).toMatchObject({
+      canAskQuestion: true,
+      canFinishExamination: false,
+    });
+  });
+
   it("renders the dynamic roster, active examination, and ordered canonical transcript", () => {
     const harness = createHarness();
     const actors = enterRinaQuestion(harness);

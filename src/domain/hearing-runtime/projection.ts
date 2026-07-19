@@ -236,7 +236,13 @@ export function buildHearingRuntimeView(
     activeResponse.interruptId === null &&
     !hasPendingObjection;
   const playerOwnsActiveLeg = activeLeg?.ownerSide === trialState.userSide;
-  const canUseActiveLeg =
+  const canAskOnActiveLeg =
+    trialState.status === "active" &&
+    trialState.phase === "case_in_chief" &&
+    playerOwnsActiveLeg &&
+    (activeLeg?.status === "available" || activeLeg?.status === "in_progress") &&
+    activeQuestion === undefined;
+  const canFinishActiveLeg =
     trialState.status === "active" &&
     trialState.phase === "case_in_chief" &&
     playerOwnsActiveLeg &&
@@ -419,8 +425,8 @@ export function buildHearingRuntimeView(
           }
         : null,
     capabilities: {
-      canAskQuestion: canUseActiveLeg,
-      canFinishExamination: canUseActiveLeg,
+      canAskQuestion: canAskOnActiveLeg,
+      canFinishExamination: canFinishActiveLeg,
       canFinishTrial:
         trialState.status === "active" &&
         trialState.phase === "case_in_chief" &&
