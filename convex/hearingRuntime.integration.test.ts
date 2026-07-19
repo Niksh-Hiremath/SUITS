@@ -53,6 +53,8 @@ import {
   isHearingCounselResponseModelRequiredPreparation,
   isHearingDebriefGeneratorModelRequiredPreparation,
   isHearingJuryResponseModelRequiredPreparation,
+  isHearingNegotiationModelRequiredPreparation,
+  isHearingObjectionRulingModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   juryResponseOutputCitations,
@@ -176,6 +178,45 @@ function playerCommand(
 
 function stableTestRuntimeId(prefix: string, material: unknown): string {
   return `${prefix}:${sha256Utf8(JSON.stringify(material))}`;
+}
+
+function stableTestRequestId(material: unknown): string {
+  const digest = sha256Utf8(JSON.stringify(material));
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+async function continueOpposingResponse(
+  backend: TestBackend,
+  preparation: HearingCommandPreparation,
+  requestedAt: string,
+): Promise<HearingCommandPreparation> {
+  if (
+    preparation.status !== "completed" ||
+    !preparation.view.capabilities.canContinueResponse
+  ) {
+    throw new Error("Expected an opposing-response decision window");
+  }
+  const responseId = preparation.view.activeQuestion?.pendingResponseId;
+  if (!responseId) {
+    throw new Error("Expected a projected pending response ID");
+  }
+  const request = playerCommand(
+    preparation.view,
+    stableTestRequestId({
+      trialId: preparation.view.trial.trialId,
+      responseId,
+      requestedAt,
+    }),
+    requestedAt,
+    { type: "continue_response", responseId },
+  );
+  return HearingCommandPreparationSchema.parse(
+    await backend.action(prepareCommandReference, {
+      ownerId: OWNER_ID,
+      trialId: preparation.view.trial.trialId,
+      commandJson: JSON.stringify(request),
+    }),
+  );
 }
 
 async function start(backend: TestBackend) {
@@ -2113,22 +2154,24 @@ describe("V3 hearing runtime facade", () => {
         generationJson: JSON.stringify(counselGeneration),
       }),
     ).rejects.toThrow("TRIAL_NOT_FOUND");
-    const witnessPreparation = HearingCommandPreparationSchema.parse(
+    const responseWindow = HearingCommandPreparationSchema.parse(
       await backend.action(commitCounselGenerationReference, {
         ownerId: OWNER_ID,
         trialId: directAnswer.view.trial.trialId,
         generationJson: JSON.stringify(counselGeneration),
       }),
     );
-    if (!isHearingWitnessModelRequiredPreparation(witnessPreparation)) {
-      throw new Error(
-        "Counsel question should atomically request a witness answer",
-      );
+    if (responseWindow.status !== "completed") {
+      throw new Error("Counsel question should yield a player decision window");
     }
-    expect(witnessPreparation.request.question).toMatchObject({
-      examinationKind: "cross",
+    expect(responseWindow.view.capabilities).toMatchObject({
+      canObject: true,
+      canContinueResponse: true,
     });
-    expect(witnessPreparation.request.witnessId).toBe("witness_rina_shah");
+    expect(responseWindow.view.activeQuestion).toMatchObject({
+      examinationKind: "cross",
+      pendingResponseId: expect.any(String),
+    });
 
     const exactCounselReplay = HearingCommandPreparationSchema.parse(
       await backend.action(commitCounselGenerationReference, {
@@ -2137,13 +2180,36 @@ describe("V3 hearing runtime facade", () => {
         generationJson: JSON.stringify(counselGeneration),
       }),
     );
-    if (!isHearingWitnessModelRequiredPreparation(exactCounselReplay)) {
-      throw new Error("Exact counsel replay should resume witness generation");
+    if (exactCounselReplay.status !== "completed") {
+      throw new Error("Exact counsel replay should restore the decision window");
     }
-    expect(exactCounselReplay.request.responseId).toBe(
+    expect(exactCounselReplay.view).toEqual(responseWindow.view);
+
+    const witnessPreparation = await continueOpposingResponse(
+      backend,
+      responseWindow,
+      "2026-07-19T03:12:03.500Z",
+    );
+    if (!isHearingWitnessModelRequiredPreparation(witnessPreparation)) {
+      throw new Error("Continuing should require witness generation");
+    }
+    expect(witnessPreparation.request.question).toMatchObject({
+      examinationKind: "cross",
+    });
+    expect(witnessPreparation.request.witnessId).toBe("witness_rina_shah");
+
+    const exactContinueReplay = await continueOpposingResponse(
+      backend,
+      exactCounselReplay,
+      "2026-07-19T03:12:03.500Z",
+    );
+    if (!isHearingWitnessModelRequiredPreparation(exactContinueReplay)) {
+      throw new Error("Exact continue replay should resume witness generation");
+    }
+    expect(exactContinueReplay.request.responseId).toBe(
       witnessPreparation.request.responseId,
     );
-    expect(exactCounselReplay.request.callId).not.toBe(
+    expect(exactContinueReplay.request.callId).not.toBe(
       witnessPreparation.request.callId,
     );
 
@@ -2377,12 +2443,24 @@ describe("V3 hearing runtime facade", () => {
       status: "open",
     });
 
-    const recovered = HearingCommandPreparationSchema.parse(
+    const recoveredWindow = HearingCommandPreparationSchema.parse(
       await backend.action(commitCounselGenerationReference, {
         ownerId: OWNER_ID,
         trialId: request.trialId,
         generationJson: JSON.stringify(generation),
       }),
+    );
+    if (recoveredWindow.status !== "completed") {
+      throw new Error("Recovered question should yield a decision window");
+    }
+    expect(recoveredWindow.view.activeQuestion).toMatchObject({
+      questionId: primaryQuestionId,
+      pendingResponseId: expect.any(String),
+    });
+    const recovered = await continueOpposingResponse(
+      backend,
+      recoveredWindow,
+      "2026-07-19T03:20:01.500Z",
     );
     if (!isHearingWitnessModelRequiredPreparation(recovered)) {
       throw new Error("Recovered question should require witness generation");
@@ -2415,6 +2493,278 @@ describe("V3 hearing runtime facade", () => {
           call.callId === generation.callId && call.status === "accepted",
       ),
     ).toHaveLength(1);
+  });
+
+  it("pauses an opposing response and binds a user objection to the judge request", async () => {
+    const backend = convexTest({ schema, modules });
+    const planPreparation = await prepareInitialOpponentCross(backend);
+    const planGeneration = await fakeOpponentPlanGeneration(
+      planPreparation,
+      "2026-07-19T03:30:00.000Z",
+      "question",
+    );
+    const counselPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(commitOpponentPlanGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: planPreparation.request.trialId,
+        generationJson: JSON.stringify(planGeneration),
+      }),
+    );
+    const counselGeneration = await fakeCounselGeneration(
+      counselPreparation,
+      "2026-07-19T03:30:01.000Z",
+    );
+    const responseWindow = HearingCommandPreparationSchema.parse(
+      await backend.action(commitCounselGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: planPreparation.request.trialId,
+        generationJson: JSON.stringify(counselGeneration),
+      }),
+    );
+    if (responseWindow.status !== "completed") {
+      throw new Error("Expected a player objection window");
+    }
+    const activeQuestion = responseWindow.view.activeQuestion;
+    if (!activeQuestion?.pendingResponseId) {
+      throw new Error("Expected a projected pending response");
+    }
+    expect(responseWindow.view.capabilities).toMatchObject({
+      canObject: true,
+      canContinueResponse: true,
+    });
+    const objectionCommand = playerCommand(
+      responseWindow.view,
+      "84848484-8484-4484-8484-848484848484",
+      "2026-07-19T03:30:02.000Z",
+      {
+        type: "object",
+        questionId: activeQuestion.questionId,
+        responseId: activeQuestion.pendingResponseId,
+        ground: "hearsay",
+      },
+    );
+    const rulingPreparation = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        commandJson: JSON.stringify(objectionCommand),
+      }),
+    );
+    if (!isHearingObjectionRulingModelRequiredPreparation(rulingPreparation)) {
+      throw new Error("A committed interruption should require a judge ruling");
+    }
+    expect(rulingPreparation.request).toMatchObject({
+      trialId: responseWindow.view.trial.trialId,
+      actorId: expect.any(String),
+      objection: {
+        questionId: activeQuestion.questionId,
+        objectorActorId: responseWindow.view.player.actorId,
+        ground: "hearsay",
+        interruptedResponseId: activeQuestion.pendingResponseId,
+      },
+      question: {
+        questionId: activeQuestion.questionId,
+        turnId: activeQuestion.questionTurnId,
+        eventId: expect.any(String),
+      },
+      interruption: {
+        interruptedResponseId: activeQuestion.pendingResponseId,
+        sourceEventId: expect.any(String),
+      },
+      permittedOutcomes: [
+        { ruling: "sustained", remedy: "cancel_response" },
+        { ruling: "overruled", remedy: "resume_response" },
+      ],
+      knowledgeView: { actorRole: "judge" },
+    });
+    expect(rulingPreparation.request.expectedLastEventId).toBe(
+      rulingPreparation.request.interruption?.sourceEventId,
+    );
+
+    const replay = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+        commandJson: JSON.stringify(objectionCommand),
+      }),
+    );
+    if (!isHearingObjectionRulingModelRequiredPreparation(replay)) {
+      throw new Error("Exact objection replay should restore the judge request");
+    }
+    expect(replay.request.decisionId).toBe(rulingPreparation.request.decisionId);
+    expect(replay.request.callId).not.toBe(rulingPreparation.request.callId);
+
+    const events = await backend.run(async (ctx) =>
+      ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", responseWindow.view.trial.trialId),
+        )
+        .collect(),
+    );
+    expect(events.slice(-2).map(({ eventType }) => eventType)).toEqual([
+      "OBJECT",
+      "BEGIN_INTERRUPTION",
+    ]);
+    expect(events.slice(-2).map(({ actorRole }) => actorRole)).toEqual([
+      "user_counsel",
+      "system",
+    ]);
+    expect(events.at(-1)?.eventId).toBe(rulingPreparation.request.expectedLastEventId);
+  });
+
+  it("derives a private user offer and binds the opposing negotiation request", async () => {
+    const backend = convexTest({ schema, modules });
+    const initial = await start(backend);
+    expect(initial.capabilities.canProposeSettlement).toBe(false);
+    await expect(
+      backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: initial.trial.trialId,
+        commandJson: JSON.stringify(
+          playerCommand(
+            initial,
+            "85858585-8585-4585-8585-858585858585",
+            "2026-07-19T03:40:00.000Z",
+            {
+              type: "propose_settlement",
+              terms: {
+                amount: 100_000,
+                nonMonetaryTerms: ["Neutral reference"],
+                summary: "Resolve the fictional matter after the record develops.",
+              },
+            },
+          ),
+        ),
+      }),
+    ).rejects.toThrow("SETTLEMENT_DEBRIEF_RECORD_REQUIRED");
+
+    let view = initial;
+    ({ view } = await command(
+      backend,
+      view,
+      "86868686-8686-4686-8686-868686868686",
+      "2026-07-19T03:41:00.000Z",
+      { type: "call_witness", witnessId: "witness_rina_shah" },
+    ));
+    ({ view } = await command(
+      backend,
+      view,
+      "87878787-8787-4787-8787-878787878787",
+      "2026-07-19T03:42:00.000Z",
+      {
+        type: "ask_question",
+        witnessId: "witness_rina_shah",
+        examinationKind: "direct",
+        text: "What did you personally observe?",
+        presentedEvidenceIds: [],
+      },
+    ));
+    ({ view } = await command(
+      backend,
+      view,
+      "88888888-8888-4888-8888-888888888887",
+      "2026-07-19T03:43:00.000Z",
+      {
+        type: "finish_witness",
+        witnessId: "witness_rina_shah",
+        examinationKind: "direct",
+      },
+    ));
+    if (view.activeAppearance?.stage === "redirect") {
+      ({ view } = await command(
+        backend,
+        view,
+        "89898989-8989-4989-8989-898989898989",
+        "2026-07-19T03:44:00.000Z",
+        {
+          type: "finish_witness",
+          witnessId: "witness_rina_shah",
+          examinationKind: "redirect",
+        },
+      ));
+    }
+    expect(view.activeAppearance).toBeNull();
+    expect(view.capabilities.canProposeSettlement).toBe(true);
+
+    const offerCommand = playerCommand(
+      view,
+      "90909090-9090-4090-8090-909090909091",
+      "2026-07-19T03:45:00.000Z",
+      {
+        type: "propose_settlement",
+        terms: {
+          amount: 100_000,
+          nonMonetaryTerms: ["Neutral reference"],
+          summary: "Resolve the fictional matter on these terms.",
+        },
+      },
+    );
+    const negotiation = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        commandJson: JSON.stringify(offerCommand),
+      }),
+    );
+    if (!isHearingNegotiationModelRequiredPreparation(negotiation)) {
+      throw new Error("A user offer should require opposing settlement review");
+    }
+    expect(negotiation.request).toMatchObject({
+      actorId: expect.any(String),
+      representedPartyId: "party_redwood_signal",
+      counterpartyPartyId: "party_rina_shah",
+      offerBinding: {
+        mode: "respond_to_offer",
+        targetOfferId: `offer:${offerCommand.requestId}`,
+        proposedOfferId: expect.any(String),
+        counterParentOfferId: `offer:${offerCommand.requestId}`,
+        allowedRecommendations: ["counter", "accept", "reject"],
+      },
+      knowledgeView: {
+        actorRole: "opposing_counsel",
+        counsel: { partyId: "party_redwood_signal" },
+      },
+    });
+    expect(negotiation.request.knowledgeView.counsel.privateSettlement).not.toBeNull();
+    const serialized = JSON.stringify(negotiation);
+    expect(serialized).not.toContain(OWNER_ID);
+
+    const replay = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareCommandReference, {
+        ownerId: OWNER_ID,
+        trialId: view.trial.trialId,
+        commandJson: JSON.stringify(offerCommand),
+      }),
+    );
+    if (!isHearingNegotiationModelRequiredPreparation(replay)) {
+      throw new Error("Exact offer replay should restore negotiation review");
+    }
+    expect(replay.request.decisionId).toBe(negotiation.request.decisionId);
+    expect(replay.request.callId).not.toBe(negotiation.request.callId);
+
+    const settlementEvents = await backend.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", view.trial.trialId),
+          )
+          .collect()
+      ).filter(({ eventType }) => eventType === "PROPOSE_SETTLEMENT"),
+    );
+    expect(settlementEvents).toHaveLength(1);
+    expect(JSON.parse(settlementEvents[0]?.payloadJson ?? "null")).toMatchObject({
+      offerId: `offer:${offerCommand.requestId}`,
+      parentOfferId: null,
+      proposedByPartyId: "party_rina_shah",
+      recipientPartyIds: ["party_redwood_signal"],
+      terms: {
+        amount: 100_000,
+        currency: "USD",
+        nonMonetaryTerms: ["Neutral reference"],
+      },
+    });
   });
 
   it("caps one AI examination at three questions and completes its model loop in eleven steps", async () => {
@@ -2452,6 +2802,11 @@ describe("V3 hearing runtime facade", () => {
         new Date(baseTime + modelSteps * 1_000).toISOString(),
       );
       modelSteps += 1;
+      preparation = await continueOpposingResponse(
+        backend,
+        preparation,
+        new Date(baseTime + modelSteps * 1_000 - 500).toISOString(),
+      );
       if (!isHearingWitnessModelRequiredPreparation(preparation)) {
         throw new Error("Counsel question should require witness speech");
       }

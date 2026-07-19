@@ -112,6 +112,7 @@ const ActiveQuestionViewSchema = z
     examinationKind: ExaminationKindSchema,
     askedBy: ActorRefSchema,
     questionTurnId: IdentifierSchema,
+    pendingResponseId: IdentifierSchema.nullable(),
     presentedEvidenceIds: z.array(IdentifierSchema),
     status: z.enum(["open", "answered", "sustained", "withdrawn"]),
   })

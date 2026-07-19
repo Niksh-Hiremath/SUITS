@@ -38,6 +38,16 @@ import {
   type JuryResponseRequest,
 } from "../courtroom-ai/jury-response";
 import {
+  NEGOTIATION_AGENT_REQUEST_SCHEMA_VERSION,
+  NegotiationAgentRequestSchema,
+  type NegotiationAgentRequest,
+} from "../courtroom-ai/negotiation-agent";
+import {
+  OBJECTION_RULING_REQUEST_SCHEMA_VERSION,
+  ObjectionRulingRequestSchema,
+  type ObjectionRulingRequest,
+} from "../courtroom-ai/objection-ruling";
+import {
   OPPONENT_PLANNER_REQUEST_SCHEMA_VERSION,
   OpponentPlannerRequestSchema,
   type OpponentPlannerRequest,
@@ -83,6 +93,8 @@ export const HearingModelRequestSchema = z.union([
   WitnessAnswerRequestSchema,
   OpponentPlannerRequestSchema,
   CounselResponseRequestSchema,
+  ObjectionRulingRequestSchema,
+  NegotiationAgentRequestSchema,
   JuryResponseRequestSchema,
   DebriefGeneratorRequestSchema,
 ]);
@@ -143,6 +155,18 @@ export type HearingCounselResponseModelRequiredPreparation = Omit<
 > &
   Readonly<{ request: CounselResponseRequest }>;
 
+export type HearingObjectionRulingModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: ObjectionRulingRequest }>;
+
+export type HearingNegotiationModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: NegotiationAgentRequest }>;
+
 export type HearingJuryResponseModelRequiredPreparation = Omit<
   HearingModelRequiredPreparation,
   "request"
@@ -184,6 +208,28 @@ export function isHearingCounselResponseModelRequiredPreparation(
     preparation.status === "model_required" &&
     preparation.request.schemaVersion ===
       COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering objection-only code. */
+export function isHearingObjectionRulingModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingObjectionRulingModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion ===
+      OBJECTION_RULING_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering negotiation-only code. */
+export function isHearingNegotiationModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingNegotiationModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion ===
+      NEGOTIATION_AGENT_REQUEST_SCHEMA_VERSION
   );
 }
 

@@ -186,6 +186,7 @@ describe("V3 hearing runtime projection", () => {
       questionId: "question:rina:complaint",
       witnessId: "witness_rina_shah",
       askedBy: actors.userCounsel,
+      pendingResponseId: null,
       status: "open",
     });
     expect(activeView.capabilities).toEqual({

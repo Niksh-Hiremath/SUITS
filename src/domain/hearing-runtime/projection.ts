@@ -2,7 +2,7 @@ import {
   CaseGraphV1Schema,
   type CaseGraph,
 } from "../case-graph";
-import { buildKnowledgeView } from "../knowledge";
+import { buildJuryRecord, buildKnowledgeView } from "../knowledge";
 import {
   TrialStateV3Schema,
   type CitationSet,
@@ -341,6 +341,14 @@ export function buildHearingRuntimeView(
     .filter((offer) => offer.proposerPartyId === playerPartyId)
     .map(({ offerId }) => offerId)
     .sort(compareIds);
+  const juryRecord = buildJuryRecord({
+    caseGraph,
+    trial: trialState,
+  });
+  const hasSettlementDebriefRecord =
+    juryRecord.facts.length > 0 ||
+    juryRecord.evidence.length > 0 ||
+    juryRecord.testimony.length > 0;
 
   return HearingRuntimeViewV1Schema.parse({
     schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
@@ -401,6 +409,9 @@ export function buildHearingRuntimeView(
             examinationKind: activeQuestion.examinationKind,
             askedBy: questioningActor,
             questionTurnId: activeQuestion.questionTurnId,
+            pendingResponseId: opposingResponseWindowOpen
+              ? (activeResponse?.responseId ?? null)
+              : null,
             presentedEvidenceIds: activeQuestion.presentedEvidenceIds.filter(
               (evidenceId) => visibleEvidenceIds.has(evidenceId),
             ),
@@ -420,6 +431,7 @@ export function buildHearingRuntimeView(
       canObject: opposingResponseWindowOpen,
       canContinueResponse: opposingResponseWindowOpen,
       canProposeSettlement:
+        hasSettlementDebriefRecord &&
         privateSettlement !== null &&
         trialState.status === "active" &&
         activeAppearance === undefined &&
@@ -431,8 +443,12 @@ export function buildHearingRuntimeView(
           playerActor.actorId,
           trialState.phase,
         ),
-      counterableSettlementOfferIds: respondableOfferIds,
-      acceptableSettlementOfferIds: respondableOfferIds,
+      counterableSettlementOfferIds: hasSettlementDebriefRecord
+        ? respondableOfferIds
+        : [],
+      acceptableSettlementOfferIds: hasSettlementDebriefRecord
+        ? respondableOfferIds
+        : [],
       rejectableSettlementOfferIds: respondableOfferIds,
       withdrawableSettlementOfferIds: withdrawableOfferIds,
     },
