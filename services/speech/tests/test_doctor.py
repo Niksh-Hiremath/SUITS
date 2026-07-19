@@ -77,6 +77,8 @@ def _ready_probe(settings: SpeechSettings) -> _Probe:
             "safetensors",
             "kokoro",
             "misaki",
+            "en_core_web_sm",
+            "librosa",
             "numpy",
             "espeakng_loader",
         },
@@ -121,6 +123,21 @@ def test_ready_cuda_report_requires_exact_pinned_artifacts(tmp_path: Path) -> No
     assert checks["artifact.stt"].status == "pass"
     assert checks["artifact.tts"].status == "pass"
     assert checks["dependency.espeak-ng"].status == "pass"
+    assert checks["dependency.en-core-web-sm"].status == "pass"
+
+
+def test_kokoro_requires_pinned_offline_english_model(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    probe = _ready_probe(settings)
+    probe.modules.remove("en_core_web_sm")
+
+    report = run_doctor(settings, probe=probe)
+    check = _checks(report.checks)["dependency.en-core-web-sm"]
+
+    assert report.overall_status == "blocked"
+    assert check.status == "error"
+    assert check.action is not None
+    assert "en_core_web_sm" in check.action
 
 
 def test_fake_mode_skips_live_dependencies_and_artifacts(tmp_path: Path) -> None:

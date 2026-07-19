@@ -28,6 +28,7 @@ from .base import ProviderCancelled, ProviderStatus, SynthesizedPhrase, Synthesi
 KOKORO_SAMPLE_RATE_HZ: Final = 24_000
 KOKORO_CONFIG_FILENAME: Final = "config.json"
 KOKORO_MODEL_FILENAME: Final = "kokoro-v1_0.pth"
+KOKORO_ENGLISH_MODEL_PACKAGE: Final = "en_core_web_sm"
 _MAX_TEXT_CHARACTERS: Final = 2_000
 _MAX_AUDIO_SECONDS: Final = 30
 _MAX_TIMING_MARKS: Final = 2_048
@@ -216,7 +217,6 @@ class KokoroTtsProvider:
         return self.status
 
     async def _load_once(self) -> None:
-        started = perf_counter()
         try:
             self._artifacts.validate()
             loop = asyncio.get_running_loop()
@@ -240,7 +240,6 @@ class KokoroTtsProvider:
             self._diagnostic = f"local Kokoro load failed ({type(error).__name__})"
             raise KokoroLoadError("local Kokoro artifacts could not be loaded") from None
         self._backend = backend
-        self._warmup_latency_ms = max(0, round((perf_counter() - started) * 1_000))
         self._diagnostic = None
 
     async def synthesize_phrase(
@@ -259,6 +258,7 @@ class KokoroTtsProvider:
         if cancel_event.is_set():
             raise ProviderCancelled("TTS job was cancelled")
 
+        started = perf_counter()
         loop = asyncio.get_running_loop()
         work = loop.run_in_executor(
             self._executor,
@@ -279,6 +279,11 @@ class KokoroTtsProvider:
                 phrase = _physical_result(work)
                 if cancel_event.is_set():
                     raise ProviderCancelled("TTS job was cancelled")
+                if self._warmup_latency_ms is None:
+                    self._warmup_latency_ms = max(
+                        0,
+                        round((perf_counter() - started) * 1_000),
+                    )
                 return phrase
 
             # Kokoro exposes no cooperative stop primitive. Keep this coroutine
@@ -561,6 +566,7 @@ def _load_official_backend(
 ) -> KokoroBackend:
     """Use Kokoro 0.9.4 only through explicit local path arguments."""
 
+    _require_offline_english_model()
     try:
         module = importlib.import_module("kokoro")
     except ModuleNotFoundError:
@@ -598,6 +604,33 @@ def _load_official_backend(
         pipeline.load_voice(str(voice_path))
         voice_paths[voice_id] = voice_path
     return _OfficialBackend(pipelines=pipelines, voice_paths=voice_paths)
+
+
+def _require_offline_english_model() -> None:
+    """Reject a missing spaCy model before Misaki can invoke its downloader."""
+
+    try:
+        spacy_module = importlib.import_module("spacy")
+    except ModuleNotFoundError:
+        raise KokoroDependencyError(
+            "offline Kokoro English requires spaCy and the pinned en_core_web_sm package; "
+            "install the matching local speech extra before loading models"
+        ) from None
+    spacy_util = getattr(spacy_module, "util", None)
+    is_package = getattr(spacy_util, "is_package", None)
+    if not callable(is_package):
+        raise KokoroDependencyError("optional spaCy runtime has an incompatible API")
+    try:
+        installed = is_package(KOKORO_ENGLISH_MODEL_PACKAGE)
+    except Exception:
+        raise KokoroDependencyError(
+            "the pinned offline Kokoro English model could not be verified"
+        ) from None
+    if installed is not True:
+        raise KokoroDependencyError(
+            "offline Kokoro English requires the pinned en_core_web_sm package; "
+            "install the matching local speech extra before loading models"
+        )
 
 
 def _disable_dependency_content_logging() -> None:

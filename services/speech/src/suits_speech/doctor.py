@@ -219,9 +219,25 @@ _DEPENDENCIES = (
         needed_for_tts=True,
     ),
     _Dependency(
+        "dependency.en-core-web-sm",
+        "en_core_web_sm",
+        (
+            "Install the pinned en_core_web_sm package through the matching local speech "
+            "extra, then rerun the doctor."
+        ),
+        needed_for_tts=True,
+    ),
+    _Dependency(
+        "dependency.librosa",
+        "librosa",
+        "Install the pinned Nemotron audio feature dependency, then rerun the doctor.",
+        needed_for_stt=True,
+    ),
+    _Dependency(
         "dependency.numpy",
         "numpy",
-        "Install the pinned numerical runtime required by local synthesis.",
+        "Install the pinned numerical runtime required by local speech providers.",
+        needed_for_stt=True,
         needed_for_tts=True,
     ),
 )

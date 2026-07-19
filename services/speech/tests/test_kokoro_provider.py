@@ -15,6 +15,7 @@ from suits_speech.providers.kokoro import (
     KokoroArtifactError,
     KokoroBackend,
     KokoroChunk,
+    KokoroDependencyError,
     KokoroInvalidOutputError,
     KokoroLocalArtifacts,
     KokoroTtsProvider,
@@ -127,6 +128,7 @@ async def test_multi_voice_synthesis_returns_validated_pcm_and_timings(tmp_path:
 
     assert status.ready is True
     assert status.model_id == f"{MODEL_ID}@{MODEL_REVISION}"
+    assert status.warmup_latency_ms is None
     assert phrase.sample_rate_hz == KOKORO_SAMPLE_RATE_HZ
     assert phrase.channels == 1
     assert phrase.duration_ms == 100
@@ -136,6 +138,9 @@ async def test_multi_voice_synthesis_returns_validated_pcm_and_timings(tmp_path:
         ("word", 0, 100),
     ]
     assert backend.calls == 1
+    warmup_latency_ms = provider.status.warmup_latency_ms
+    assert warmup_latency_ms is not None
+    assert warmup_latency_ms >= 0
 
     await provider.synthesize_phrase(
         text="Witness response.",
@@ -143,6 +148,7 @@ async def test_multi_voice_synthesis_returns_validated_pcm_and_timings(tmp_path:
         cancel_event=asyncio.Event(),
     )
     assert backend.calls == 2
+    assert provider.status.warmup_latency_ms == warmup_latency_ms
 
 
 async def test_active_cancel_waits_for_executor_to_physically_exit(tmp_path: Path) -> None:
@@ -247,6 +253,46 @@ async def test_invalid_backend_timing_is_rejected_without_raw_content(
             cancel_event=asyncio.Event(),
         )
     assert "private" not in str(captured.value)
+    assert provider.status.warmup_latency_ms is None
+
+
+def test_missing_english_model_fails_before_misaki_download_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    downloads: list[str] = []
+    imports: list[str] = []
+    spacy_module = SimpleNamespace(
+        util=SimpleNamespace(is_package=lambda name: False),
+        cli=SimpleNamespace(download=downloads.append),
+    )
+
+    def import_module(name: str) -> object:
+        imports.append(name)
+        if name == "spacy":
+            return spacy_module
+        if name == "kokoro":
+            spacy_module.cli.download("en_core_web_sm")
+            raise AssertionError("Kokoro must not be imported after a failed offline preflight")
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(kokoro_provider.importlib, "import_module", import_module)
+    artifacts = KokoroLocalArtifacts.from_snapshot(
+        snapshot_dir=_snapshot(tmp_path),
+        voice_ids=VOICES,
+    )
+
+    with pytest.raises(KokoroDependencyError, match="en_core_web_sm") as captured:
+        kokoro_provider._load_official_backend(
+            artifacts=artifacts,
+            model_id=MODEL_ID,
+            voice_ids=VOICES,
+            device="cpu",
+        )
+
+    assert downloads == []
+    assert imports == ["spacy"]
+    assert str(tmp_path) not in str(captured.value)
 
 
 def test_dependency_content_logging_is_disabled_before_inference(

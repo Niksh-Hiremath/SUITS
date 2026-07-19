@@ -22,12 +22,16 @@ dev = [
   "websockets>=14,<17",
 ]
 local-cpu = [
+  "en-core-web-sm==3.8.0",
   "kokoro==0.9.4",
+  "librosa>=0.11,<0.12",
   "torch==2.11.0",
   "transformers>=5.13,<5.14",
 ]
 local-cuda = [
+  "en-core-web-sm==3.8.0",
   "kokoro==0.9.4",
+  "librosa>=0.11,<0.12",
   "torch==2.11.0",
   "transformers>=5.13,<5.14",
 ]
@@ -41,6 +45,7 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 torch = [
   { index = "pytorch-cpu", extra = "local-cpu" },
   { index = "pytorch-cu130", extra = "local-cuda" },

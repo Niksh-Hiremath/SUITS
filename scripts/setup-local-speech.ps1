@@ -4,10 +4,11 @@ Installs and diagnoses one pinned SUITS local-speech runtime on Windows.
 
 .DESCRIPTION
 The selected profile is synchronized from the checked-in uv lock. Package sync may contact the
-configured Python/PyTorch indexes. Model artifacts are never requested from Hugging Face unless
--DownloadModels is present. The two pinned allowlists total about 2.9 GB before transient/cache
-overhead; keep at least 6 GB free on the cache drive. The read-only speech doctor runs last and
-returns a failing exit when dependencies, artifacts, or the selected CUDA runtime are not ready.
+configured Python/PyTorch indexes and installs the pinned offline English language wheel. The two
+large Hugging Face model snapshots are never requested unless -DownloadModels is present. Their
+allowlists total about 2.9 GB before transient/cache overhead; keep at least 6 GB free on the cache
+drive. The read-only speech doctor runs last and returns a failing exit when dependencies,
+artifacts, or the selected CUDA runtime are not ready.
 
 .EXAMPLE
 .\scripts\setup-local-speech.ps1 -Runtime local-cuda -DownloadModels
