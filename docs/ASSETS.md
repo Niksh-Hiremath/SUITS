@@ -20,4 +20,3 @@ The local speech companion synthesizes PCM in memory. Its canonical “Objection
 ## Courtroom visual and animation assets
 
 No production courtroom models, textures, character rigs, animations, or sound effects are approved or recorded yet. Add each asset's creator, canonical source URL, exact version/file, license, required attribution, and any modifications before introducing it into the product.
-
