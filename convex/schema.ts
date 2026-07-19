@@ -657,6 +657,32 @@ export default defineSchema({
     schemaVersion: v.string(),
   }).index("by_call_attempt", ["callId", "attempt"]),
 
+  // Full jury/debrief outputs remain server-only because a Terra debrief may
+  // cite hidden, excluded, or unadmitted audit strata. Rows are append-only
+  // and atomically bound to their canonical event and redacted model trace.
+  courtroomGeneratedArtifacts: defineTable({
+    artifactId: v.string(),
+    artifactKind: v.union(
+      v.literal("jury_deliberation"),
+      v.literal("final_debrief"),
+    ),
+    ownerId: v.string(),
+    trialId: v.string(),
+    callId: v.string(),
+    actionId: v.string(),
+    eventId: v.string(),
+    stateVersion: v.number(),
+    artifactJson: v.string(),
+    artifactSchemaVersion: v.string(),
+    promptVersion: v.string(),
+    model: runtimeOpenAiModel,
+    createdAt: v.number(),
+  })
+    .index("by_artifact_id", ["artifactId"])
+    .index("by_call_id", ["callId"])
+    .index("by_owner_trial_kind", ["ownerId", "trialId", "artifactKind"])
+    .index("by_trial_event", ["trialId", "eventId"]),
+
   actionReceipts: defineTable({
     receiptId: v.string(),
     actionId: v.string(),
