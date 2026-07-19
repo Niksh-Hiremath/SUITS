@@ -162,7 +162,10 @@ class FakeTtsProvider:
             ready=self._loaded,
             device="fake",
             model_id=None,
-            supports_streaming=False,
+            # The fake adapter is consumed through the real TTS lane, which
+            # emits bounded PCM frames with ACK backpressure just like the
+            # production browser protocol.
+            supports_streaming=True,
             supports_timings=True,
             warmup_latency_ms=0 if self._loaded else None,
             diagnostic="deterministic phrase synthesis for CI",

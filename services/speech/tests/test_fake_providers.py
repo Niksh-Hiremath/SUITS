@@ -88,6 +88,7 @@ def test_fake_stt_rejects_unknown_scenario() -> None:
 async def test_fake_tts_is_deterministic_and_voice_specific() -> None:
     provider = FakeTtsProvider()
     await provider.load()
+    assert provider.status.supports_streaming is True
     first = await provider.synthesize_phrase(
         text="Objection sustained.",
         voice_id="judge",
