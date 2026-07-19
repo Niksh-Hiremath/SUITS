@@ -8,6 +8,7 @@ import {
 import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
@@ -16,6 +17,7 @@ import {
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingNegotiationPrecommitSchema,
   HearingObjectionRulingPrecommitSchema,
@@ -25,6 +27,7 @@ import {
   HearingWitnessGenerationPrecommitSchema,
   isHearingCounselResponseModelRequiredPreparation,
   isHearingDebriefGeneratorModelRequiredPreparation,
+  isHearingJudgeResponseModelRequiredPreparation,
   isHearingJuryResponseModelRequiredPreparation,
   isHearingNegotiationModelRequiredPreparation,
   isHearingObjectionRulingModelRequiredPreparation,
@@ -34,6 +37,7 @@ import {
   type HearingCounselResponsePrecommit,
   type HearingDebriefGeneratorPrecommit,
   type HearingDebriefTranscriptEventBinding,
+  type HearingJudgeResponsePrecommit,
   type HearingJuryResponsePrecommit,
   type HearingNegotiationPrecommit,
   type HearingObjectionRulingPrecommit,
@@ -45,6 +49,7 @@ import {
 import {
   CounselResponseGenerationError,
   DebriefGenerationError,
+  JudgeResponseGenerationError,
   JuryResponseGenerationError,
   NegotiationAgentGenerationError,
   ObjectionRulingGenerationError,
@@ -52,6 +57,7 @@ import {
   WitnessAnswerGenerationError,
   generateCounselResponse,
   generateDebrief,
+  generateJudgeResponse,
   generateJuryResponse,
   generateNegotiationDecision,
   generateObjectionRuling,
@@ -60,7 +66,7 @@ import {
   type CourtroomModelProvider,
 } from "@/server/courtroom-ai";
 
-export const MAX_HEARING_MODEL_STEPS = 12;
+export const MAX_HEARING_MODEL_STEPS = 16;
 
 export type CourtroomCommandDurableService = Readonly<{
   prepare: (
@@ -77,6 +83,10 @@ export type CourtroomCommandDurableService = Readonly<{
   ) => Promise<HearingCommandPreparation>;
   commitCounselResponse: (
     precommit: HearingCounselResponsePrecommit,
+    signal?: AbortSignal,
+  ) => Promise<HearingCommandPreparation>;
+  commitJudgeResponse: (
+    precommit: HearingJudgeResponsePrecommit,
     signal?: AbortSignal,
   ) => Promise<HearingCommandPreparation>;
   commitObjectionRuling: (
@@ -105,6 +115,7 @@ export type HearingModelTask =
   | "witness_answer"
   | "opponent_plan"
   | "counsel_response"
+  | "judge_response"
   | "objection_ruling"
   | "negotiation_decision"
   | "jury_response"
@@ -125,11 +136,13 @@ export class CourtroomCommandOrchestrationError extends Error {
   readonly task: HearingModelTask | null;
   readonly terminalTracePersistence: CourtroomTerminalTracePersistence | null;
 
-  constructor(input: Readonly<{
-    code: CourtroomCommandOrchestrationErrorCode;
-    task: HearingModelTask | null;
-    terminalTracePersistence: CourtroomTerminalTracePersistence | null;
-  }>) {
+  constructor(
+    input: Readonly<{
+      code: CourtroomCommandOrchestrationErrorCode;
+      task: HearingModelTask | null;
+      terminalTracePersistence: CourtroomTerminalTracePersistence | null;
+    }>,
+  ) {
     super(
       input.code === "HEARING_MODEL_GENERATION_CANCELLED"
         ? "Courtroom response generation was cancelled."
@@ -155,6 +168,7 @@ type CourtroomGenerationError =
   | WitnessAnswerGenerationError
   | OpponentPlannerGenerationError
   | CounselResponseGenerationError
+  | JudgeResponseGenerationError
   | ObjectionRulingGenerationError
   | NegotiationAgentGenerationError
   | JuryResponseGenerationError
@@ -184,6 +198,13 @@ function generationFailure(error: unknown): Readonly<{
       error,
       task: "counsel_response",
       cancelled: error.code === "counsel_response_cancelled",
+    };
+  }
+  if (error instanceof JudgeResponseGenerationError) {
+    return {
+      error,
+      task: "judge_response",
+      cancelled: error.code === "judge_response_cancelled",
     };
   }
   if (error instanceof ObjectionRulingGenerationError) {
@@ -315,7 +336,11 @@ export type PreparedCourtroomCommandResult = Readonly<{
 
 function modelStepLimit(value: number | undefined): number {
   const limit = value ?? MAX_HEARING_MODEL_STEPS;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HEARING_MODEL_STEPS) {
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_HEARING_MODEL_STEPS
+  ) {
     throw new Error(
       `maxModelSteps must be between 1 and ${MAX_HEARING_MODEL_STEPS}`,
     );
@@ -354,7 +379,9 @@ export async function orchestratePreparedCourtroomCommand(
 export async function orchestratePreparedCourtroomCommandResult(
   options: OrchestratePreparedCourtroomCommandOptions,
 ): Promise<PreparedCourtroomCommandResult> {
-  const preparation = HearingCommandPreparationSchema.parse(options.preparation);
+  const preparation = HearingCommandPreparationSchema.parse(
+    options.preparation,
+  );
   const limit = modelStepLimit(options.maxModelSteps);
 
   return runPreparedCourtroomCommand(preparation, options, limit);
@@ -400,10 +427,7 @@ async function runPreparedCourtroomCommand(
           trace: generated.trace,
         });
         preparation = HearingCommandPreparationSchema.parse(
-          await options.durableService.commitWitness(
-            precommit,
-            options.signal,
-          ),
+          await options.durableService.commitWitness(precommit, options.signal),
         );
         continue;
       }
@@ -454,6 +478,33 @@ async function runPreparedCourtroomCommand(
         });
         preparation = HearingCommandPreparationSchema.parse(
           await options.durableService.commitCounselResponse(
+            precommit,
+            options.signal,
+          ),
+        );
+        continue;
+      }
+
+      if (isHearingJudgeResponseModelRequiredPreparation(preparation)) {
+        const request = preparation.request;
+        const generated = await generateJudgeResponse({
+          provider: options.provider,
+          request,
+          signal: options.signal,
+        });
+        const precommit = HearingJudgeResponsePrecommitSchema.parse({
+          schemaVersion: HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+          trialId: request.trialId,
+          callId: request.callId,
+          decisionId: request.decisionId,
+          expectedStateVersion: request.expectedStateVersion,
+          expectedLastEventId: request.expectedLastEventId,
+          output: generated.output,
+          modelMetadata: generated.modelMetadata,
+          trace: generated.trace,
+        });
+        preparation = HearingCommandPreparationSchema.parse(
+          await options.durableService.commitJudgeResponse(
             precommit,
             options.signal,
           ),
@@ -582,10 +633,7 @@ async function runPreparedCourtroomCommand(
           trace: generated.trace,
         });
         preparation = HearingCommandPreparationSchema.parse(
-          await options.durableService.commitDebrief(
-            precommit,
-            options.signal,
-          ),
+          await options.durableService.commitDebrief(precommit, options.signal),
         );
         continue;
       }

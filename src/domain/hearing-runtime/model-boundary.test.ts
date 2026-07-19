@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+  JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
@@ -21,6 +22,10 @@ import {
   createJuryResponseRequestFixture,
 } from "../courtroom-ai/jury-response.test-fixtures";
 import {
+  createJudgeResponseOutputFixture,
+  createJudgeResponseRequestFixture,
+} from "../../server/courtroom-ai/judicial-response.test-fixtures";
+import {
   createCounselQuestionOutputFixture,
   createCounselResponseRequestFixture,
 } from "../../server/courtroom-ai/counsel-response.test-fixtures";
@@ -36,12 +41,14 @@ import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
@@ -49,19 +56,23 @@ import {
   debriefGeneratorOutputCitations,
   hashCounselResponseModelOutput,
   hashDebriefGeneratorModelOutput,
+  hashJudgeResponseModelOutput,
   hashJuryResponseModelOutput,
   hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
   isHearingCounselResponseModelRequiredPreparation,
   isHearingDebriefGeneratorModelRequiredPreparation,
+  isHearingJudgeResponseModelRequiredPreparation,
   isHearingJuryResponseModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   opponentPlannerOutputCitations,
   juryResponseOutputCitations,
+  judgeResponseOutputCitations,
   witnessAnswerOutputCitations,
   type HearingCounselResponsePrecommit,
   type HearingDebriefGeneratorPrecommit,
+  type HearingJudgeResponsePrecommit,
   type HearingJuryResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingWitnessGenerationPrecommit,
@@ -75,6 +86,7 @@ const PROVIDER_RESPONSE_ID = "response:openai:001";
 const PROMPT_VERSION = "role-responder.witness-answer.prompt.v1";
 const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v2";
 const COUNSEL_PROMPT_VERSION = "role-responder.counsel.prompt.v2";
+const JUDGE_PROMPT_VERSION = "role-responder.judge.prompt.v1";
 const JURY_PROMPT_VERSION = "role-responder.jury.prompt.v1";
 const DEBRIEF_PROMPT_VERSION = "debrief-generator.prompt.v1";
 const HASH_A = "a".repeat(64);
@@ -647,6 +659,20 @@ function citationCount(
   );
 }
 
+function judgeProposedCitationCount(
+  output: ReturnType<typeof createJudgeResponseOutputFixture>,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      Object.values(segment.citations).reduce(
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
 function juryProposedCitationCount(
   output: ReturnType<typeof createJuryResponseOutputFixture>,
 ): number {
@@ -657,8 +683,7 @@ function juryProposedCitationCount(
     (total, citations) =>
       total +
       Object.values(citations).reduce(
-        (citationTotal, identifiers) =>
-          citationTotal + identifiers.length,
+        (citationTotal, identifiers) => citationTotal + identifiers.length,
         0,
       ),
     0,
@@ -694,8 +719,7 @@ function debriefProposedCitationCount(
     (total, citations) =>
       total +
       Object.values(citations).reduce(
-        (citationTotal, identifiers) =>
-          citationTotal + identifiers.length,
+        (citationTotal, identifiers) => citationTotal + identifiers.length,
         0,
       ),
     0,
@@ -706,9 +730,9 @@ function acceptedFinalTrace(input: {
   callId: string;
   trialId: string;
   actorId: string;
-  actorRole: "jury" | "debrief";
+  actorRole: "judge" | "jury" | "debrief";
   callClass: "role_responder" | "debrief_generator";
-  task: "jury_deliberation" | "generate_debrief";
+  task: "judge_response" | "jury_deliberation" | "generate_debrief";
   expectedStateVersion: number;
   expectedLastEventId: string;
   model: "gpt-5.6-luna" | "gpt-5.6-terra";
@@ -823,6 +847,43 @@ function acceptedFinalTrace(input: {
   };
 }
 
+function validJudgeResponsePrecommit(): HearingJudgeResponsePrecommit {
+  const request = createJudgeResponseRequestFixture();
+  const output = createJudgeResponseOutputFixture();
+  const outputHash = hashJudgeResponseModelOutput(output);
+  const citations = judgeResponseOutputCitations(output);
+  const proposedCitationCount = judgeProposedCitationCount(output);
+  const generated = acceptedFinalTrace({
+    callId: request.callId,
+    trialId: request.trialId,
+    actorId: request.actorId,
+    actorRole: "judge",
+    callClass: "role_responder",
+    task: "judge_response",
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    model: "gpt-5.6-luna",
+    promptVersion: JUDGE_PROMPT_VERSION,
+    outputSchemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    outputHash,
+    outputCharacterCount: JSON.stringify(output).length,
+    proposedCitationCount,
+    citations,
+    providerRequestId: "request:openai:judge:001",
+    providerResponseId: "response:openai:judge:001",
+  });
+  return HearingJudgeResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    output,
+    ...generated,
+  });
+}
+
 function validJuryResponsePrecommit(): HearingJuryResponsePrecommit {
   const request = createJuryResponseRequestFixture();
   const output = createJuryResponseOutputFixture();
@@ -924,6 +985,11 @@ describe("hearing command model boundary", () => {
       status: "model_required" as const,
       request: createCounselResponseRequestFixture(),
     };
+    const judgeModelRequired = {
+      schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+      status: "model_required" as const,
+      request: createJudgeResponseRequestFixture(),
+    };
     const juryModelRequired = {
       schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
       status: "model_required" as const,
@@ -945,12 +1011,15 @@ describe("hearing command model boundary", () => {
     expect(HearingCommandPreparationSchema.parse(counselModelRequired)).toEqual(
       counselModelRequired,
     );
+    expect(HearingCommandPreparationSchema.parse(judgeModelRequired)).toEqual(
+      judgeModelRequired,
+    );
     expect(HearingCommandPreparationSchema.parse(juryModelRequired)).toEqual(
       juryModelRequired,
     );
-    expect(
-      HearingCommandPreparationSchema.parse(debriefModelRequired),
-    ).toEqual(debriefModelRequired);
+    expect(HearingCommandPreparationSchema.parse(debriefModelRequired)).toEqual(
+      debriefModelRequired,
+    );
     expect(
       isHearingWitnessModelRequiredPreparation(
         HearingCommandPreparationSchema.parse(modelRequired),
@@ -964,6 +1033,11 @@ describe("hearing command model boundary", () => {
     expect(
       isHearingCounselResponseModelRequiredPreparation(
         HearingCommandPreparationSchema.parse(counselModelRequired),
+      ),
+    ).toBe(true);
+    expect(
+      isHearingJudgeResponseModelRequiredPreparation(
+        HearingCommandPreparationSchema.parse(judgeModelRequired),
       ),
     ).toBe(true);
     expect(
@@ -1735,8 +1809,7 @@ describe("hearing command model boundary", () => {
     wrongModel.modelMetadata.model = "gpt-5.6-terra";
     const wrongPrompt = validJuryResponsePrecommit();
     wrongPrompt.trace.promptVersion = "role-responder.jury.prompt.v2";
-    wrongPrompt.modelMetadata.promptVersion =
-      "role-responder.jury.prompt.v2";
+    wrongPrompt.modelMetadata.promptVersion = "role-responder.jury.prompt.v2";
     const wrongKnowledge = validJuryResponsePrecommit();
     wrongKnowledge.trace.knowledgeScope.stateVersion = 41;
 
@@ -1804,9 +1877,72 @@ describe("hearing command model boundary", () => {
     expect(
       HearingJuryResponsePrecommitSchema.safeParse(missingResponse).success,
     ).toBe(false);
-    expect(HearingJuryResponsePrecommitSchema.safeParse(committed).success).toBe(
-      false,
+    expect(
+      HearingJuryResponsePrecommitSchema.safeParse(committed).success,
+    ).toBe(false);
+  });
+
+  it("accepts an exact uncommitted Luna judge response", () => {
+    const envelope = validJudgeResponsePrecommit();
+
+    expect(HearingJudgeResponsePrecommitSchema.parse(envelope)).toEqual(
+      envelope,
     );
+    expect(envelope.trace.outputHash).toBe(
+      hashJudgeResponseModelOutput(envelope.output),
+    );
+    expect(envelope.trace.acceptedCitations).toEqual(
+      judgeResponseOutputCitations(envelope.output),
+    );
+  });
+
+  it("rejects judge head, task, role, model, output, and commit tampering", () => {
+    const wrongHead = validJudgeResponsePrecommit();
+    wrongHead.trace.inputEventIds = ["event:other"];
+    const wrongTask = validJudgeResponsePrecommit();
+    wrongTask.trace.task = "counsel_response";
+    const wrongRole = validJudgeResponsePrecommit();
+    wrongRole.trace.actorRole = "counsel";
+    const wrongModel = validJudgeResponsePrecommit();
+    wrongModel.trace.model = "gpt-5.6-terra";
+    wrongModel.modelMetadata.model = "gpt-5.6-terra";
+    const wrongHash = validJudgeResponsePrecommit();
+    wrongHash.trace.outputHash = "f".repeat(64);
+    wrongHash.trace.attempts[0].outputHash = "f".repeat(64);
+    const committed = validJudgeResponsePrecommit();
+    committed.trace.committedEventId = "event:already-committed";
+
+    for (const envelope of [
+      wrongHead,
+      wrongTask,
+      wrongRole,
+      wrongModel,
+      wrongHash,
+      committed,
+    ]) {
+      expect(
+        HearingJudgeResponsePrecommitSchema.safeParse(envelope).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects judge citations absent from the durable generic audit", () => {
+    const envelope = validJudgeResponsePrecommit();
+    envelope.output.speechSegments[0].citations.instructionIds = [
+      "instruction_burden",
+    ];
+    const outputHash = hashJudgeResponseModelOutput(envelope.output);
+    envelope.trace.outputHash = outputHash;
+    envelope.trace.attempts[0].outputHash = outputHash;
+    envelope.trace.outputCharacterCount = JSON.stringify(
+      envelope.output,
+    ).length;
+    envelope.trace.attempts[0].proposedCitationCount =
+      judgeProposedCitationCount(envelope.output);
+
+    expect(
+      HearingJudgeResponsePrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
   });
 
   it("accepts a Terra debrief with exact cited turn-to-event bindings", () => {
@@ -1881,8 +2017,7 @@ describe("hearing command model boundary", () => {
     wrongPrompt.modelMetadata.promptVersion = "debrief-generator.prompt.v2";
     const wrongSchema = validDebriefGeneratorPrecommit();
     wrongSchema.trace.outputSchemaVersion = "debrief-generator.output.v2";
-    wrongSchema.modelMetadata.schemaVersion =
-      "debrief-generator.output.v2";
+    wrongSchema.modelMetadata.schemaVersion = "debrief-generator.output.v2";
 
     for (const envelope of [
       wrongHead,
@@ -1912,8 +2047,7 @@ describe("hearing command model boundary", () => {
     }
     wrongUsage.trace.usage.inputTokens += 1;
     wrongUsage.trace.usage.totalTokens += 1;
-    wrongUsage.modelMetadata.inputTokens =
-      wrongUsage.trace.usage.inputTokens;
+    wrongUsage.modelMetadata.inputTokens = wrongUsage.trace.usage.inputTokens;
     const committed = validDebriefGeneratorPrecommit();
     committed.trace.committedEventId = "event:already-committed";
 

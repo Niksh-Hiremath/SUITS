@@ -48,6 +48,13 @@ export function createCourtroomCommandDurableService(input: Readonly<{
         responseSchema: HearingCommandPreparationSchema,
         signal,
       }),
+    commitJudgeResponse: async (generation, signal) =>
+      await callConvexCaseService({
+        path: "/service/hearings/judge-response/commit",
+        body: { ownerId, trialId, generation },
+        responseSchema: HearingCommandPreparationSchema,
+        signal,
+      }),
     commitObjectionRuling: async (generation, signal) =>
       await callConvexCaseService({
         path: "/service/hearings/objection-ruling/commit",

@@ -21,6 +21,7 @@ import {
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingNegotiationPrecommitSchema,
   HearingObjectionRulingPrecommitSchema,
@@ -41,6 +42,8 @@ import {
   createOpponentPlannerRequestFixture,
 } from "@/server/courtroom-ai/opponent-planner.test-fixtures";
 import {
+  createJudgeResponseOutputFixture,
+  createJudgeResponseRequestFixture,
   createObjectionRulingOutputFixture,
   createObjectionRulingRequestFixture,
 } from "@/server/courtroom-ai/judicial-response.test-fixtures";
@@ -142,6 +145,7 @@ function modelPreparation(
   request: ReturnType<
     | typeof createOpponentPlannerRequestFixture
     | typeof createCounselResponseRequestFixture
+    | typeof createJudgeResponseRequestFixture
     | typeof createObjectionRulingRequestFixture
     | typeof createNegotiationAgentRequestFixture
     | typeof createJuryResponseRequestFixture
@@ -336,6 +340,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(async () => plannerPreparation),
       commitOpponentPlan,
       commitCounselResponse,
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling,
       commitWitness,
       commitNegotiationDecision,
@@ -403,6 +408,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare,
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling,
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),
@@ -442,6 +448,56 @@ describe("orchestrateCourtroomCommand", () => {
     });
   });
 
+  it("runs a generic judge response and commits its strict precommit", async () => {
+    const request = createJudgeResponseRequestFixture();
+    const prepare = vi.fn<CourtroomCommandDurableService["prepare"]>();
+    const commitJudgeResponse = vi.fn(async (precommit) => {
+      expect(HearingJudgeResponsePrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      expect(precommit).toMatchObject({
+        trialId: request.trialId,
+        callId: request.callId,
+        decisionId: request.decisionId,
+        expectedStateVersion: request.expectedStateVersion,
+        expectedLastEventId: request.expectedLastEventId,
+      });
+      return completedPreparation();
+    });
+    const durableService: CourtroomCommandDurableService = {
+      prepare,
+      commitOpponentPlan: vi.fn(),
+      commitCounselResponse: vi.fn(),
+      commitJudgeResponse,
+      commitObjectionRuling: vi.fn(),
+      commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
+      recordTerminalTrace: vi.fn(async () => undefined),
+    };
+    const provider = new ScriptedCourtroomModelProvider(
+      [{ type: "output", output: createJudgeResponseOutputFixture() }],
+      { repeatLastStep: false },
+    );
+
+    await expect(
+      orchestratePreparedCourtroomCommand({
+        preparation: modelPreparation(request),
+        provider,
+        durableService,
+      }),
+    ).resolves.toEqual(completedView());
+
+    expect(prepare).not.toHaveBeenCalled();
+    expect(commitJudgeResponse).toHaveBeenCalledTimes(1);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]).toMatchObject({
+      callClass: "role_responder",
+      task: "judge_response",
+    });
+  });
+
   it("records terminal failures while resuming a committed preparation", async () => {
     const recordTerminalTrace = vi.fn<
       CourtroomCommandDurableService["recordTerminalTrace"]
@@ -450,6 +506,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(),
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),
@@ -492,6 +549,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(),
       commitOpponentPlan: vi.fn(async () => plannerPreparation),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),
@@ -527,6 +585,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(),
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),
@@ -565,6 +624,7 @@ describe("orchestrateCourtroomCommand", () => {
       ),
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),
@@ -640,6 +700,7 @@ describe("orchestrateCourtroomCommand", () => {
         prepare: vi.fn(async () => modelPreparation(createRequest())),
         commitOpponentPlan: vi.fn(),
         commitCounselResponse: vi.fn(),
+        commitJudgeResponse: vi.fn(),
         commitObjectionRuling: vi.fn(),
         commitWitness: vi.fn(),
         commitNegotiationDecision: vi.fn(),
@@ -688,6 +749,7 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(async () => plannerPreparation),
       commitOpponentPlan: vi.fn(async () => plannerPreparation),
       commitCounselResponse: vi.fn(),
+      commitJudgeResponse: vi.fn(),
       commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
       commitNegotiationDecision: vi.fn(),

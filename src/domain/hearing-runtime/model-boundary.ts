@@ -10,15 +10,18 @@ import {
 import {
   COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
+  JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   CounselRoleResponseModelOutputSchema,
   DebriefGeneratorModelOutputSchema,
+  JudgeRoleResponseModelOutputSchema,
   JuryRoleResponseModelOutputSchema,
   OpponentPlannerModelOutputSchema,
   type CounselRoleResponseModelOutput,
   type DebriefCitationSet,
   type DebriefGeneratorModelOutput,
+  type JudgeRoleResponseModelOutput,
   type JuryRoleResponseModelOutput,
   type OpponentPlannerModelOutput,
 } from "../courtroom-ai/call-contracts";
@@ -32,6 +35,11 @@ import {
   DebriefGeneratorRequestSchema,
   type DebriefGeneratorRequest,
 } from "../courtroom-ai/debrief-generator";
+import {
+  JUDGE_RESPONSE_REQUEST_SCHEMA_VERSION,
+  JudgeResponseRequestSchema,
+  type JudgeResponseRequest,
+} from "../courtroom-ai/judge-response";
 import {
   JURY_RESPONSE_REQUEST_SCHEMA_VERSION,
   JuryResponseRequestSchema,
@@ -75,6 +83,8 @@ export const HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION =
   "hearing-opponent-plan-precommit.v1" as const;
 export const HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
   "hearing-counsel-response-precommit.v1" as const;
+export const HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
+  "hearing-judge-response-precommit.v1" as const;
 export const HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
   "hearing-jury-response-precommit.v1" as const;
 export const HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION =
@@ -83,6 +93,8 @@ const HEARING_OPPONENT_PLANNER_PROMPT_VERSION =
   "opponent-planner.prompt.v2" as const;
 const HEARING_COUNSEL_RESPONSE_PROMPT_VERSION =
   "role-responder.counsel.prompt.v2" as const;
+const HEARING_JUDGE_RESPONSE_PROMPT_VERSION =
+  "role-responder.judge.prompt.v1" as const;
 const HEARING_JURY_RESPONSE_PROMPT_VERSION =
   "role-responder.jury.prompt.v1" as const;
 const HEARING_DEBRIEF_GENERATOR_PROMPT_VERSION =
@@ -93,6 +105,7 @@ export const HearingModelRequestSchema = z.union([
   WitnessAnswerRequestSchema,
   OpponentPlannerRequestSchema,
   CounselResponseRequestSchema,
+  JudgeResponseRequestSchema,
   ObjectionRulingRequestSchema,
   NegotiationAgentRequestSchema,
   JuryResponseRequestSchema,
@@ -155,6 +168,12 @@ export type HearingCounselResponseModelRequiredPreparation = Omit<
 > &
   Readonly<{ request: CounselResponseRequest }>;
 
+export type HearingJudgeResponseModelRequiredPreparation = Omit<
+  HearingModelRequiredPreparation,
+  "request"
+> &
+  Readonly<{ request: JudgeResponseRequest }>;
+
 export type HearingObjectionRulingModelRequiredPreparation = Omit<
   HearingModelRequiredPreparation,
   "request"
@@ -208,6 +227,16 @@ export function isHearingCounselResponseModelRequiredPreparation(
     preparation.status === "model_required" &&
     preparation.request.schemaVersion ===
       COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
+  );
+}
+
+/** Narrow a model-required preparation before entering generic judge code. */
+export function isHearingJudgeResponseModelRequiredPreparation(
+  preparation: HearingCommandPreparation,
+): preparation is HearingJudgeResponseModelRequiredPreparation {
+  return (
+    preparation.status === "model_required" &&
+    preparation.request.schemaVersion === JUDGE_RESPONSE_REQUEST_SCHEMA_VERSION
   );
 }
 
@@ -344,6 +373,43 @@ export function counselResponseOutputCitations(
 /** Runtime-neutral counsel-response digest shared by server and Convex. */
 export function hashCounselResponseModelOutput(outputInput: unknown): string {
   const output = CounselRoleResponseModelOutputSchema.parse(outputInput);
+  return sha256Utf8(JSON.stringify(output));
+}
+
+/** Canonical public-record citations represented by a generic judge response. */
+export function judgeResponseOutputCitations(
+  outputInput: unknown,
+): CourtroomModelCallCitationSet {
+  const output = JudgeRoleResponseModelOutputSchema.parse(outputInput);
+  return CourtroomModelCallCitationSetSchema.parse({
+    factIds: stableUnique(
+      output.speechSegments.flatMap((segment) => segment.citations.factIds),
+    ),
+    evidenceIds: stableUnique(
+      output.speechSegments.flatMap((segment) => segment.citations.evidenceIds),
+    ),
+    testimonyIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.testimonyIds,
+      ),
+    ),
+    eventIds: [],
+    sourceSegmentIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.sourceSegmentIds,
+      ),
+    ),
+    priorStatementIds: stableUnique(
+      output.speechSegments.flatMap(
+        (segment) => segment.citations.priorStatementIds,
+      ),
+    ),
+  });
+}
+
+/** Runtime-neutral judge-response digest shared by server and Convex. */
+export function hashJudgeResponseModelOutput(outputInput: unknown): string {
+  const output = JudgeRoleResponseModelOutputSchema.parse(outputInput);
   return sha256Utf8(JSON.stringify(output));
 }
 
@@ -593,6 +659,35 @@ function counselResponseUnsupportedCitationCount(
   );
 }
 
+function judgeResponseProposedCitationCount(
+  output: JudgeRoleResponseModelOutput,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      Object.values(segment.citations).reduce(
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
+function judgeResponseUnsupportedCitationCount(
+  output: JudgeRoleResponseModelOutput,
+): number {
+  return output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      segment.citations.transcriptTurnIds.length +
+      segment.citations.issueIds.length +
+      segment.citations.instructionIds.length +
+      segment.citations.ruleIds.length +
+      segment.citations.settlementOfferIds.length,
+    0,
+  );
+}
+
 function juryResponseProposedCitationCount(
   output: JuryRoleResponseModelOutput,
 ): number {
@@ -600,8 +695,7 @@ function juryResponseProposedCitationCount(
     (total, citations) =>
       total +
       Object.values(citations).reduce(
-        (citationTotal, identifiers) =>
-          citationTotal + identifiers.length,
+        (citationTotal, identifiers) => citationTotal + identifiers.length,
         0,
       ),
     0,
@@ -631,8 +725,7 @@ function debriefGeneratorProposedCitationCount(
     (total, citations) =>
       total +
       Object.values(citations).reduce(
-        (citationTotal, identifiers) =>
-          citationTotal + identifiers.length,
+        (citationTotal, identifiers) => citationTotal + identifiers.length,
         0,
       ),
     0,
@@ -906,8 +999,7 @@ function validateFinalTrialPrecommitTrace(
   }
   if (
     !sameCitations(trace.acceptedCitations, expected.citations) ||
-    acceptedAttempt?.proposedCitationCount !==
-      expected.proposedCitationCount
+    acceptedAttempt?.proposedCitationCount !== expected.proposedCitationCount
   ) {
     addMismatch(
       context,
@@ -1500,6 +1592,56 @@ export const HearingCounselResponsePrecommitSchema = z
 
 export type HearingCounselResponsePrecommit = z.infer<
   typeof HearingCounselResponsePrecommitSchema
+>;
+
+/**
+ * Strict server-to-Convex handoff for one accepted generic judge response.
+ * The durable commit reconstructs the exact pending directive and derives
+ * canonical ruling effects; model output cannot supply engine identities.
+ */
+export const HearingJudgeResponsePrecommitSchema = z
+  .object({
+    schemaVersion: z.literal(HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION),
+    trialId: CaseGraphEntityIdSchema,
+    callId: CaseGraphEntityIdSchema,
+    decisionId: CaseGraphEntityIdSchema,
+    expectedStateVersion: z.number().int().nonnegative(),
+    expectedLastEventId: CaseGraphEntityIdSchema,
+    output: JudgeRoleResponseModelOutputSchema,
+    modelMetadata: ModelMetadataSchema,
+    trace: CourtroomModelCallTraceSchema,
+  })
+  .strict()
+  .superRefine((envelope, context) => {
+    validateFinalTrialPrecommitTrace(
+      envelope,
+      {
+        callClass: "role_responder",
+        task: "judge_response",
+        actorRole: "judge",
+        model: "gpt-5.6-luna",
+        promptVersion: HEARING_JUDGE_RESPONSE_PROMPT_VERSION,
+        outputSchemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+        outputHash: hashJudgeResponseModelOutput(envelope.output),
+        outputCharacterCount: JSON.stringify(envelope.output).length,
+        citations: judgeResponseOutputCitations(envelope.output),
+        proposedCitationCount: judgeResponseProposedCitationCount(
+          envelope.output,
+        ),
+      },
+      context,
+    );
+    if (judgeResponseUnsupportedCitationCount(envelope.output) !== 0) {
+      addMismatch(
+        context,
+        ["output", "speechSegments"],
+        "Judge output cannot contain citation classes absent from the durable generic audit",
+      );
+    }
+  });
+
+export type HearingJudgeResponsePrecommit = z.infer<
+  typeof HearingJudgeResponsePrecommitSchema
 >;
 
 /**
