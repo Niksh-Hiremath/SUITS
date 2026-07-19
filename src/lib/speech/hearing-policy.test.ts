@@ -156,6 +156,29 @@ describe("hearing voice context policy", () => {
     expect(Object.isFrozen(context)).toBe(true);
   });
 
+  it("freezes and revalidates the first question on an available leg", () => {
+    const base = viewFixture();
+    const view = HearingRuntimeViewV1Schema.parse({
+      ...base,
+      activeAppearance: {
+        ...base.activeAppearance,
+        examinationLeg: {
+          ...base.activeAppearance?.examinationLeg,
+          status: "available",
+        },
+      },
+      capabilities: {
+        ...base.capabilities,
+        canFinishExamination: false,
+      },
+    });
+    const context = freezeHearingVoiceContext("question", view);
+
+    expect(validateHearingVoiceContext(context, view, { busy: false, pending: false })).toEqual({
+      valid: true,
+    });
+  });
+
   it("freezes closing only when the deterministic view permits it", () => {
     expect(freezeHearingVoiceContext("closing", closingViewFixture())).toEqual({
       mode: "closing",

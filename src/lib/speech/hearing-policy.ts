@@ -95,7 +95,7 @@ function playerOwnsQuestionLeg(view: HearingRuntimeViewV1): boolean {
     leg !== null &&
     leg !== undefined &&
     leg.ownerSide === view.trial.userSide &&
-    leg.status === "in_progress" &&
+    (leg.status === "available" || leg.status === "in_progress") &&
     appearance.stage === leg.kind &&
     view.capabilities.canAskQuestion &&
     view.activeQuestion === null
