@@ -7,7 +7,9 @@ import {
   HearingCommandPreparationSchema,
   HearingRuntimeViewV1Schema,
   isHearingWitnessModelRequiredPreparation,
+  type HearingCounselResponsePrecommit,
   type HearingCommandPreparation,
+  type HearingOpponentPlanPrecommit,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
   type HearingWitnessGenerationPrecommit,
@@ -17,9 +19,9 @@ import {
   readConvexCaseServiceConfig,
 } from "@/server/case-api";
 import {
-  orchestrateHearingCommand,
-  type HearingCommandDurableService,
-} from "@/server/hearing-api/witness-command";
+  orchestrateCourtroomCommand,
+  type CourtroomCommandDurableService,
+} from "@/server/hearing-api/courtroom-command";
 
 import { EnvironmentCourtroomModelProvider } from "./environment-provider";
 
@@ -48,9 +50,9 @@ function commandFor(
   } as const;
 }
 
-liveDescribe("live Luna witness runtime", () => {
+liveDescribe("live Luna courtroom runtime", () => {
   it(
-    "commits two role-isolated witness answers through protected Convex boundaries",
+    "commits two role-isolated witnesses and opposing-counsel turns through protected Convex boundaries",
     async () => {
       const config = readConvexCaseServiceConfig();
       const ownerId = `owner:${crypto.randomUUID()}`;
@@ -76,12 +78,21 @@ liveDescribe("live Luna witness runtime", () => {
       const captures: {
         preparation: HearingCommandPreparation | null;
         generation: HearingWitnessGenerationPrecommit | null;
-      } = { preparation: null, generation: null };
+        witnessCalls: HearingWitnessGenerationPrecommit[];
+        opponentPlans: HearingOpponentPlanPrecommit[];
+        counselResponses: HearingCounselResponsePrecommit[];
+      } = {
+        preparation: null,
+        generation: null,
+        witnessCalls: [],
+        opponentPlans: [],
+        counselResponses: [],
+      };
       const capturedPreparation = (): HearingCommandPreparation | null =>
         captures.preparation;
       const capturedGeneration =
         (): HearingWitnessGenerationPrecommit | null => captures.generation;
-      const durableService: HearingCommandDurableService = {
+      const durableService: CourtroomCommandDurableService = {
         prepare: async (command, signal) => {
           const preparation = await callConvexCaseService({
             path: "/service/hearings/command/prepare",
@@ -94,12 +105,35 @@ liveDescribe("live Luna witness runtime", () => {
           captures.preparation = preparation;
           return preparation;
         },
-        commit: async (generation, signal) => {
+        commitWitness: async (generation, signal) => {
           captures.generation = generation;
+          captures.witnessCalls.push(generation);
           return await callConvexCaseService({
             path: "/service/hearings/command/commit",
             body: { ownerId, trialId, generation },
-            responseSchema: HearingRuntimeViewV1Schema,
+            responseSchema: HearingCommandPreparationSchema,
+            config,
+            timeoutMs: 120_000,
+            signal,
+          });
+        },
+        commitOpponentPlan: async (generation, signal) => {
+          captures.opponentPlans.push(generation);
+          return await callConvexCaseService({
+            path: "/service/hearings/opponent-plan/commit",
+            body: { ownerId, trialId, generation },
+            responseSchema: HearingCommandPreparationSchema,
+            config,
+            timeoutMs: 120_000,
+            signal,
+          });
+        },
+        commitCounselResponse: async (generation, signal) => {
+          captures.counselResponses.push(generation);
+          return await callConvexCaseService({
+            path: "/service/hearings/counsel-response/commit",
+            body: { ownerId, trialId, generation },
+            responseSchema: HearingCommandPreparationSchema,
             config,
             timeoutMs: 120_000,
             signal,
@@ -119,7 +153,7 @@ liveDescribe("live Luna witness runtime", () => {
 
       const execute = async (intent: HearingPlayerIntent) => {
         const command = commandFor(view, intent);
-        view = await orchestrateHearingCommand({
+        view = await orchestrateCourtroomCommand({
           command,
           provider,
           durableService,
@@ -207,13 +241,33 @@ liveDescribe("live Luna witness runtime", () => {
       });
       expect(reloaded).toEqual(view);
       expect(
-        reloaded.transcript
-          .filter((turn) => turn.actor.role === "witness")
-          .map((turn) => turn.actor.witnessId),
-      ).toEqual(witnessIds);
+        new Set(
+          reloaded.transcript
+            .filter((turn) => turn.actor.role === "witness")
+            .map((turn) => turn.actor.witnessId),
+        ),
+      ).toEqual(new Set(witnessIds));
       expect(new Set(acceptedCalls.map((call) => call.callId)).size).toBe(2);
+      expect(captures.opponentPlans.length).toBeGreaterThanOrEqual(2);
+      expect(captures.counselResponses.length).toBeGreaterThanOrEqual(2);
+      expect(
+        captures.opponentPlans.every(
+          (generation) =>
+            generation.trace.status === "accepted" &&
+            generation.trace.model === "gpt-5.6-luna" &&
+            generation.trace.task === "plan_opponent",
+        ),
+      ).toBe(true);
+      expect(
+        captures.counselResponses.every(
+          (generation) =>
+            generation.trace.status === "accepted" &&
+            generation.trace.model === "gpt-5.6-luna" &&
+            generation.trace.task === "counsel_response",
+        ),
+      ).toBe(true);
 
-      console.info("live_courtroom_witness_smoke", {
+      console.info("live_courtroom_multi_actor_smoke", {
         trialId,
         witnessIds,
         calls: acceptedCalls.map((call) => ({
@@ -224,6 +278,10 @@ liveDescribe("live Luna witness runtime", () => {
           outputTokens: call.trace.usage?.outputTokens ?? null,
           retries: call.trace.retryCount,
         })),
+        opponentPlanCalls: captures.opponentPlans.map((call) => call.callId),
+        counselResponseCalls: captures.counselResponses.map(
+          (call) => call.callId,
+        ),
       });
     },
     300_000,
