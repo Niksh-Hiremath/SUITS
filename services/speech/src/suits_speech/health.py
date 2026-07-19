@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -31,6 +32,9 @@ from .providers.base import (
     TtsProvider,
 )
 from .tts_lane import TtsLaneSnapshot, TtsProviderLane
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def detect_cuda(*, fake_mode: bool) -> CudaCapability:
@@ -230,6 +234,8 @@ class SpeechRuntime:
         )
         self._connection_pool = BoundedLeasePool(limit=settings.max_connections)
         self._stt_session_pool = BoundedLeasePool(limit=settings.max_stt_sessions)
+        self._stt_creation_tasks: set[asyncio.Task[StreamingSttSession]] = set()
+        self._stt_cleanup_tasks: set[asyncio.Task[None]] = set()
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
         self.cached_clip_ids: tuple[str, ...] = ()
         self._load_lock = asyncio.Lock()
@@ -260,12 +266,64 @@ class SpeechRuntime:
         lease = self._stt_session_pool.try_acquire()
         if lease is None:
             raise SttSessionCapacityError("local STT recognizer capacity is exhausted")
+        provider_task = asyncio.create_task(
+            self.stt_provider.create_session(sample_rate_hz=sample_rate_hz),
+            name="speech:stt:create",
+        )
+        self._stt_creation_tasks.add(provider_task)
+        provider_task.add_done_callback(self._stt_creation_done)
         try:
-            session = await self.stt_provider.create_session(sample_rate_hz=sample_rate_hz)
+            session = await asyncio.shield(provider_task)
+        except asyncio.CancelledError:
+            cleanup = asyncio.create_task(
+                self._dispose_abandoned_stt_creation(provider_task, lease),
+                name="speech:stt:dispose-abandoned-create",
+            )
+            self._stt_cleanup_tasks.add(cleanup)
+            cleanup.add_done_callback(self._stt_cleanup_done)
+            raise
         except BaseException:
             lease.release()
             raise
         return _LeasedStreamingSttSession(session=session, lease=lease)
+
+    async def _dispose_abandoned_stt_creation(
+        self,
+        provider_task: asyncio.Task[StreamingSttSession],
+        lease: CapacityLease,
+    ) -> None:
+        try:
+            session = await provider_task
+        except BaseException as error:
+            lease.release()
+            _LOGGER.warning(
+                "abandoned STT creation ended with error errorType=%s",
+                type(error).__name__,
+            )
+            return
+        try:
+            await session.cancel()
+        except BaseException as error:
+            _LOGGER.error(
+                "abandoned STT session could not be disposed errorType=%s",
+                type(error).__name__,
+            )
+            return
+        lease.release()
+
+    def _stt_creation_done(self, task: asyncio.Task[StreamingSttSession]) -> None:
+        self._stt_creation_tasks.discard(task)
+
+    def _stt_cleanup_done(self, task: asyncio.Task[None]) -> None:
+        self._stt_cleanup_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _LOGGER.error(
+                "abandoned STT cleanup failed errorType=%s",
+                type(error).__name__,
+            )
 
     async def synthesize_phrase(
         self,

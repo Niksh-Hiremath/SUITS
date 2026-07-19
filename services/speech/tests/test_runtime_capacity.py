@@ -254,3 +254,53 @@ async def test_active_push_holds_global_recognizer_capacity_after_cancel(
 
     recovered = await runtime.create_stt_session(sample_rate_hz=16_000)
     await recovered.cancel()
+
+
+class _ExecutorCreateProvider(FakeSttProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_entered = asyncio.Event()
+        self.release_create = threading.Event()
+
+    async def create_session(self, *, sample_rate_hz: int) -> FakeSttSession:
+        if sample_rate_hz != 16_000:
+            raise ValueError("expected 16 kHz")
+        loop = asyncio.get_running_loop()
+
+        def physical_create() -> None:
+            loop.call_soon_threadsafe(self.create_entered.set)
+            self.release_create.wait(timeout=1)
+
+        await asyncio.to_thread(physical_create)
+        return FakeSttSession(partials=(), final_text="finished")
+
+
+async def test_cancelled_native_session_creation_holds_capacity_until_disposed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _ExecutorCreateProvider()
+    runtime = _runtime(
+        monkeypatch,
+        max_connections=4,
+        max_stt_sessions=1,
+        stt_provider=provider,
+    )
+    await runtime.load_models()
+    creation = asyncio.create_task(runtime.create_stt_session(sample_rate_hz=16_000))
+    await provider.create_entered.wait()
+
+    creation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await creation
+    with pytest.raises(SttSessionCapacityError):
+        await runtime.create_stt_session(sample_rate_hz=16_000)
+
+    provider.release_create.set()
+    for _ in range(100):
+        if runtime.capacity_snapshot.stt_sessions.active == 0:
+            break
+        await asyncio.sleep(0.005)
+    assert runtime.capacity_snapshot.stt_sessions.active == 0
+
+    recovered = await runtime.create_stt_session(sample_rate_hz=16_000)
+    await recovered.cancel()
