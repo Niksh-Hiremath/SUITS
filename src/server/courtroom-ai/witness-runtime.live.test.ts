@@ -139,6 +139,24 @@ liveDescribe("live Luna courtroom runtime", () => {
             signal,
           });
         },
+        commitJuryResponse: async (generation, signal) =>
+          await callConvexCaseService({
+            path: "/service/hearings/jury-response/commit",
+            body: { ownerId, trialId, generation },
+            responseSchema: HearingCommandPreparationSchema,
+            config,
+            timeoutMs: 120_000,
+            signal,
+          }),
+        commitDebrief: async (generation, signal) =>
+          await callConvexCaseService({
+            path: "/service/hearings/debrief/commit",
+            body: { ownerId, trialId, generation },
+            responseSchema: HearingCommandPreparationSchema,
+            config,
+            timeoutMs: 120_000,
+            signal,
+          }),
         recordTerminalTrace: async (trace, signal) => {
           await callConvexCaseService({
             path: "/service/hearings/model-call/terminal",

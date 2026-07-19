@@ -121,6 +121,20 @@ export async function POST(
           responseSchema: HearingCommandPreparationSchema,
           signal,
         }),
+      commitJuryResponse: async (generation, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/jury-response/commit",
+          body: { ownerId, trialId, generation },
+          responseSchema: HearingCommandPreparationSchema,
+          signal,
+        }),
+      commitDebrief: async (generation, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/debrief/commit",
+          body: { ownerId, trialId, generation },
+          responseSchema: HearingCommandPreparationSchema,
+          signal,
+        }),
       recordTerminalTrace: async (trace, signal) => {
         await callConvexCaseService({
           path: "/service/hearings/model-call/terminal",

@@ -1,16 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DebriefGeneratorRequestSchema,
   WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_REQUEST_SCHEMA_VERSION,
   WitnessAnswerRequestSchema,
 } from "@/domain/courtroom-ai";
+import {
+  createDebriefGeneratorOutputFixture,
+  createDebriefGeneratorRequestFixture,
+} from "@/domain/courtroom-ai/debrief-generator.test-fixtures";
+import {
+  createJuryResponseOutputFixture,
+  createJuryResponseRequestFixture,
+} from "@/domain/courtroom-ai/jury-response.test-fixtures";
 import {
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
@@ -18,9 +29,7 @@ import {
   type HearingCommandPreparation,
   type HearingRuntimeViewV1,
 } from "@/domain/hearing-runtime";
-import {
-  ScriptedCourtroomModelProvider,
-} from "@/server/courtroom-ai";
+import { ScriptedCourtroomModelProvider } from "@/server/courtroom-ai";
 import {
   createCounselQuestionOutputFixture,
   createCounselResponseRequestFixture,
@@ -114,6 +123,8 @@ function modelPreparation(
   request: ReturnType<
     | typeof createOpponentPlannerRequestFixture
     | typeof createCounselResponseRequestFixture
+    | typeof createJuryResponseRequestFixture
+    | typeof createDebriefGeneratorRequestFixture
     | typeof witnessRequest
   >,
 ): HearingCommandPreparation {
@@ -202,7 +213,7 @@ function witnessBoundaryOutput() {
 }
 
 describe("orchestrateCourtroomCommand", () => {
-  it("privately dispatches planner, counsel, and witness work until completion", async () => {
+  it("privately dispatches every final-trial model task until completion", async () => {
     const plannerPreparation = modelPreparation(
       createOpponentPlannerRequestFixture(),
     );
@@ -210,6 +221,32 @@ describe("orchestrateCourtroomCommand", () => {
       createCounselResponseRequestFixture(),
     );
     const witnessPreparation = modelPreparation(witnessRequest());
+    const juryPreparation = modelPreparation(createJuryResponseRequestFixture());
+    const debriefRequest = createDebriefGeneratorRequestFixture();
+    const debriefPreparation = modelPreparation(
+      DebriefGeneratorRequestSchema.parse({
+        ...debriefRequest,
+        transcript: [
+          ...debriefRequest.transcript,
+          {
+            turnId: "turn_uncited",
+            actorId: "actor_system",
+            actorRole: "system",
+            text: "The court recessed before deliberations.",
+            testimonyId: null,
+            status: "active",
+            sourceEventId: "event:uncited",
+            citations: {
+              factIds: [],
+              evidenceIds: [],
+              testimonyIds: [],
+              eventIds: [],
+              sourceSegmentIds: [],
+            },
+          },
+        ],
+      }),
+    );
     const commitOpponentPlan = vi.fn(async (precommit) => {
       expect(HearingOpponentPlanPrecommitSchema.parse(precommit)).toEqual(
         precommit,
@@ -226,6 +263,22 @@ describe("orchestrateCourtroomCommand", () => {
       expect(HearingWitnessGenerationPrecommitSchema.parse(precommit)).toEqual(
         precommit,
       );
+      return juryPreparation;
+    });
+    const commitJuryResponse = vi.fn(async (precommit) => {
+      expect(HearingJuryResponsePrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      return debriefPreparation;
+    });
+    const commitDebrief = vi.fn(async (precommit) => {
+      expect(HearingDebriefGeneratorPrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      expect(precommit.transcriptEventBindings).toEqual([
+        { turnId: "turn_answer", sourceEventId: "event:answer" },
+        { turnId: "turn_question", sourceEventId: "event:question" },
+      ]);
       return completedPreparation();
     });
     const durableService: CourtroomCommandDurableService = {
@@ -233,6 +286,8 @@ describe("orchestrateCourtroomCommand", () => {
       commitOpponentPlan,
       commitCounselResponse,
       commitWitness,
+      commitJuryResponse,
+      commitDebrief,
       recordTerminalTrace: vi.fn(async () => undefined),
     };
     const provider = new ScriptedCourtroomModelProvider(
@@ -240,6 +295,8 @@ describe("orchestrateCourtroomCommand", () => {
         { type: "output", output: createOpponentPlannerOutputFixture() },
         { type: "output", output: createCounselQuestionOutputFixture() },
         { type: "output", output: witnessBoundaryOutput() },
+        { type: "output", output: createJuryResponseOutputFixture() },
+        { type: "output", output: createDebriefGeneratorOutputFixture() },
       ],
       { repeatLastStep: false },
     );
@@ -257,10 +314,14 @@ describe("orchestrateCourtroomCommand", () => {
         { callClass: "opponent_planner", task: "plan_opponent" },
         { callClass: "role_responder", task: "counsel_response" },
         { callClass: "role_responder", task: "witness_answer" },
+        { callClass: "role_responder", task: "jury_deliberation" },
+        { callClass: "debrief_generator", task: "generate_debrief" },
       ]);
     expect(commitOpponentPlan).toHaveBeenCalledTimes(1);
     expect(commitCounselResponse).toHaveBeenCalledTimes(1);
     expect(commitWitness).toHaveBeenCalledTimes(1);
+    expect(commitJuryResponse).toHaveBeenCalledTimes(1);
+    expect(commitDebrief).toHaveBeenCalledTimes(1);
   });
 
   it("durably records a failed private planner trace with a fresh signal", async () => {
@@ -274,6 +335,8 @@ describe("orchestrateCourtroomCommand", () => {
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
       commitWitness: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
       recordTerminalTrace,
     };
     const provider = new ScriptedCourtroomModelProvider(
@@ -309,6 +372,67 @@ describe("orchestrateCourtroomCommand", () => {
     expect(recordTerminalTrace.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
   });
 
+  it.each([
+    [
+      "jury response",
+      createJuryResponseRequestFixture,
+      "jury_response",
+      "jury_deliberation",
+    ],
+    [
+      "debrief generation",
+      createDebriefGeneratorRequestFixture,
+      "debrief_generation",
+      "generate_debrief",
+    ],
+  ] as const)(
+    "maps a failed %s to its bounded orchestration task",
+    async (_label, createRequest, task, traceTask) => {
+      const recordTerminalTrace = vi.fn<
+        CourtroomCommandDurableService["recordTerminalTrace"]
+      >(async () => undefined);
+      const durableService: CourtroomCommandDurableService = {
+        prepare: vi.fn(async () => modelPreparation(createRequest())),
+        commitOpponentPlan: vi.fn(),
+        commitCounselResponse: vi.fn(),
+        commitWitness: vi.fn(),
+        commitJuryResponse: vi.fn(),
+        commitDebrief: vi.fn(),
+        recordTerminalTrace,
+      };
+      const provider = new ScriptedCourtroomModelProvider(
+        [
+          {
+            type: "error",
+            code: "service_unavailable",
+            message: "raw provider detail",
+            retryable: true,
+          },
+        ],
+        { repeatLastStep: false },
+      );
+
+      await expect(
+        orchestrateCourtroomCommand({
+          command: command(),
+          provider,
+          durableService,
+        }),
+      ).rejects.toMatchObject({
+        code: "HEARING_MODEL_GENERATION_FAILED",
+        category: "generation_failed",
+        task,
+        terminalTracePersistence: "recorded",
+      });
+      expect(recordTerminalTrace).toHaveBeenCalledTimes(1);
+      expect(recordTerminalTrace.mock.calls[0]?.[0]).toMatchObject({
+        status: "failed",
+        task: traceTask,
+        safeFailureCode: "service_unavailable",
+      });
+    },
+  );
+
   it("stops a valid but nonterminating model loop at the configured bound", async () => {
     const plannerPreparation = modelPreparation(
       createOpponentPlannerRequestFixture(),
@@ -318,6 +442,8 @@ describe("orchestrateCourtroomCommand", () => {
       commitOpponentPlan: vi.fn(async () => plannerPreparation),
       commitCounselResponse: vi.fn(),
       commitWitness: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
       recordTerminalTrace: vi.fn(async () => undefined),
     };
     const provider = new ScriptedCourtroomModelProvider(

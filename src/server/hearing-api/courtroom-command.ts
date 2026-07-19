@@ -1,22 +1,33 @@
 import {
   CourtroomModelCallTraceSchema,
+  type DebriefGeneratorModelOutput,
+  type DebriefGeneratorRequest,
   type CourtroomModelCallTrace,
 } from "@/domain/courtroom-ai";
 import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
+  HearingDebriefGeneratorPrecommitSchema,
+  HearingJuryResponsePrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
   isHearingCounselResponseModelRequiredPreparation,
+  isHearingDebriefGeneratorModelRequiredPreparation,
+  isHearingJuryResponseModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   type HearingCommandPreparation,
   type HearingCounselResponsePrecommit,
+  type HearingDebriefGeneratorPrecommit,
+  type HearingDebriefTranscriptEventBinding,
+  type HearingJuryResponsePrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerCommand,
   type HearingRuntimeViewV1,
@@ -24,9 +35,13 @@ import {
 } from "@/domain/hearing-runtime";
 import {
   CounselResponseGenerationError,
+  DebriefGenerationError,
+  JuryResponseGenerationError,
   OpponentPlannerGenerationError,
   WitnessAnswerGenerationError,
   generateCounselResponse,
+  generateDebrief,
+  generateJuryResponse,
   generateOpponentPlan,
   generateWitnessAnswer,
   type CourtroomModelProvider,
@@ -51,6 +66,14 @@ export type CourtroomCommandDurableService = Readonly<{
     precommit: HearingCounselResponsePrecommit,
     signal?: AbortSignal,
   ) => Promise<HearingCommandPreparation>;
+  commitJuryResponse: (
+    precommit: HearingJuryResponsePrecommit,
+    signal?: AbortSignal,
+  ) => Promise<HearingCommandPreparation>;
+  commitDebrief: (
+    precommit: HearingDebriefGeneratorPrecommit,
+    signal?: AbortSignal,
+  ) => Promise<HearingCommandPreparation>;
   recordTerminalTrace: (
     trace: CourtroomModelCallTrace,
     signal?: AbortSignal,
@@ -60,7 +83,9 @@ export type CourtroomCommandDurableService = Readonly<{
 export type HearingModelTask =
   | "witness_answer"
   | "opponent_plan"
-  | "counsel_response";
+  | "counsel_response"
+  | "jury_response"
+  | "debrief_generation";
 
 export type CourtroomCommandOrchestrationErrorCode =
   | "HEARING_MODEL_GENERATION_CANCELLED"
@@ -106,7 +131,9 @@ export class CourtroomCommandOrchestrationError extends Error {
 type CourtroomGenerationError =
   | WitnessAnswerGenerationError
   | OpponentPlannerGenerationError
-  | CounselResponseGenerationError;
+  | CounselResponseGenerationError
+  | JuryResponseGenerationError
+  | DebriefGenerationError;
 
 function generationFailure(error: unknown): Readonly<{
   error: CourtroomGenerationError;
@@ -134,7 +161,63 @@ function generationFailure(error: unknown): Readonly<{
       cancelled: error.code === "counsel_response_cancelled",
     };
   }
+  if (error instanceof JuryResponseGenerationError) {
+    return {
+      error,
+      task: "jury_response",
+      cancelled: error.code === "jury_response_cancelled",
+    };
+  }
+  if (error instanceof DebriefGenerationError) {
+    return {
+      error,
+      task: "debrief_generation",
+      cancelled: error.code === "debrief_generation_cancelled",
+    };
+  }
   return null;
+}
+
+function debriefCitationSets(output: DebriefGeneratorModelOutput) {
+  return [
+    output.overallAssessment.citations,
+    ...output.strengths.map(({ citations }) => citations),
+    ...output.weakQuestions.map(({ citations }) => citations),
+    ...output.missedEvidence.map(({ citations }) => citations),
+    ...output.contradictions.map(({ citations }) => citations),
+    ...output.objectionAccuracy.map(({ citations }) => citations),
+    ...output.witnessStrategy.map(({ citations }) => citations),
+    ...output.settlementChoices.map(({ citations }) => citations),
+    ...output.juryMovement.map(({ citations }) => citations),
+    ...output.improvedClosing.segments.map(({ citations }) => citations),
+  ];
+}
+
+function debriefTranscriptEventBindings(
+  request: DebriefGeneratorRequest,
+  output: DebriefGeneratorModelOutput,
+): HearingDebriefTranscriptEventBinding[] {
+  const sourceEventIdByTurnId = new Map(
+    request.transcript.map(({ turnId, sourceEventId }) => [
+      turnId,
+      sourceEventId,
+    ]),
+  );
+  const citedTurnIds = [
+    ...new Set(
+      debriefCitationSets(output).flatMap(
+        ({ transcriptTurnIds }) => transcriptTurnIds,
+      ),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+
+  return citedTurnIds.map((turnId) => {
+    const sourceEventId = sourceEventIdByTurnId.get(turnId);
+    if (sourceEventId === undefined) {
+      throw new Error("Generated debrief cited an unknown transcript turn");
+    }
+    return { turnId, sourceEventId };
+  });
 }
 
 async function recordTerminalTraceBestEffort(
@@ -265,6 +348,63 @@ export async function orchestrateCourtroomCommand(
         });
         preparation = HearingCommandPreparationSchema.parse(
           await options.durableService.commitCounselResponse(
+            precommit,
+            options.signal,
+          ),
+        );
+        continue;
+      }
+
+      if (isHearingJuryResponseModelRequiredPreparation(preparation)) {
+        const request = preparation.request;
+        const generated = await generateJuryResponse({
+          provider: options.provider,
+          request,
+          signal: options.signal,
+        });
+        const precommit = HearingJuryResponsePrecommitSchema.parse({
+          schemaVersion: HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+          trialId: request.trialId,
+          callId: request.callId,
+          decisionId: request.decisionId,
+          expectedStateVersion: request.expectedStateVersion,
+          expectedLastEventId: request.expectedLastEventId,
+          output: generated.output,
+          modelMetadata: generated.modelMetadata,
+          trace: generated.trace,
+        });
+        preparation = HearingCommandPreparationSchema.parse(
+          await options.durableService.commitJuryResponse(
+            precommit,
+            options.signal,
+          ),
+        );
+        continue;
+      }
+
+      if (isHearingDebriefGeneratorModelRequiredPreparation(preparation)) {
+        const request = preparation.request;
+        const generated = await generateDebrief({
+          provider: options.provider,
+          request,
+          signal: options.signal,
+        });
+        const precommit = HearingDebriefGeneratorPrecommitSchema.parse({
+          schemaVersion: HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+          trialId: request.trialId,
+          callId: request.callId,
+          expectedStateVersion: request.expectedStateVersion,
+          expectedLastEventId: request.expectedLastEventId,
+          transcriptEventBindings: debriefTranscriptEventBindings(
+            request,
+            generated.output,
+          ),
+          output: generated.output,
+          modelMetadata: generated.modelMetadata,
+          trace: generated.trace,
+        });
+        preparation = HearingCommandPreparationSchema.parse(
+          await options.durableService.commitDebrief(
             precommit,
             options.signal,
           ),
