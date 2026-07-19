@@ -1,4 +1,5 @@
 export * from "./constants";
+export * from "./counsel-response-prompt";
 export * from "./environment-provider";
 export * from "./fake-provider";
 export * from "./openai-errors";
