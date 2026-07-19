@@ -109,8 +109,14 @@ describe("V3 hearing page boundary", () => {
       'path: "/service/hearings/debrief/commit"',
     );
     expect(sources.commandRoute).toContain("orchestrateCourtroomCommand");
+    expect(sources.commandRoute).toContain(
+      "resolveE2EPrimaryTrialProvider",
+    );
     expect(sources.continuationRecoveryRoute).toContain(
       "orchestratePreparedCourtroomCommand",
+    );
+    expect(sources.continuationRecoveryRoute).toContain(
+      "resolveE2EPrimaryTrialProvider",
     );
     expect(sources.continuationRecoveryRoute).toContain(
       "prepareCourtroomContinuationForOwner",

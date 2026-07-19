@@ -14,6 +14,7 @@ import {
   createCourtroomCommandDurableService,
   prepareCourtroomContinuationForOwner,
 } from "@/server/hearing-api/durable-service";
+import { resolveE2EPrimaryTrialProvider } from "@/server/hearing-api/e2e-primary-trial-provider";
 import {
   HearingTrialIdSchema,
   hearingJsonError,
@@ -82,9 +83,14 @@ export async function POST(
       ownerId,
       trialId,
     });
+    const e2eProvider = resolveE2EPrimaryTrialProvider({
+      nodeEnv: process.env.NODE_ENV,
+      hostname: request.nextUrl.hostname,
+      scenario: process.env.SUITS_E2E_PRIMARY_TRIAL_SCENARIO,
+    });
     const view = await orchestratePreparedCourtroomCommand({
       preparation,
-      provider: new EnvironmentCourtroomModelProvider(),
+      provider: e2eProvider ?? new EnvironmentCourtroomModelProvider(),
       durableService,
       signal: request.signal,
     });

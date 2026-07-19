@@ -56,6 +56,7 @@ export default defineConfig({
               "ws://127.0.0.1:18765/v1/speech",
             SUITS_ENABLE_VISUAL_ATLAS: "1",
             SUITS_E2E_FINAL_BOUND_SCENARIO: "overruled-resume",
+            SUITS_E2E_PRIMARY_TRIAL_SCENARIO: "complete-two-witness",
           },
           reuseExistingServer: false,
           timeout: 120_000,
