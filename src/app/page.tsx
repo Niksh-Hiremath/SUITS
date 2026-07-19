@@ -31,8 +31,8 @@ export default function Home() {
           <Link className="primary-button" href="/cases/">
             Choose a case & start
           </Link>
-          <Link className="text-link" href="/records/">
-            View Court Records →
+          <Link className="text-link" href="/cases/new/">
+            Upload a case →
           </Link>
         </div>
       </section>
