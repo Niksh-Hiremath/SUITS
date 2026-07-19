@@ -523,18 +523,18 @@ Gate:
 
 Deliverables:
 
-- [ ] Python service and versioned WebSocket protocol;
+- [x] Python service and versioned WebSocket protocol;
 - [ ] GPU STT adapter, VAD, partial/final revisions;
 - [ ] local multi-voice TTS adapter;
 - [ ] phrase queue, timing, cancellation, barge-in;
-- [ ] cached fixed courtroom clips;
+- [x] cached fixed courtroom clips;
 - [ ] preflight/health/capability UI;
 - [ ] setup scripts and documentation;
-- [ ] deterministic fake providers for CI.
+- [x] deterministic fake providers for CI.
 
 Gate:
 
-- [ ] Protocol and cancellation tests pass without GPU.
+- [x] Protocol and cancellation tests pass without GPU.
 - [ ] On target hardware when available, microphone speech produces partial/final transcripts and local spoken responses with measured timings.
 - [ ] Raw audio is absent from OpenAI requests and Convex records.
 
@@ -833,6 +833,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. The live command loaded the existing development service secret into one PowerShell process without printing, rotating, or persisting it; Convex CLI authentication remained valid.
   - Commits: `e622142`, `ea27f4e`; live-gate harness and this PLAN evidence are committed separately.
 
+- 2026-07-19 13:26 IST — Milestone 5 bounded local speech and fixed-reaction checkpoint
+  - Changed: added the local Python/FastAPI companion foundation, a strict versioned loopback WebSocket protocol, bounded connection/STT/TTS ownership, revisioned partial/final transcript events, energy VAD, phrase-sized PCM streaming with browser acknowledgements and backpressure, cancellation and stale-result fencing, deterministic fake providers, and an atomic immutable cache for the canonical “Objection!”, “Sustained.”, and “Overruled.” reactions. Cached reactions are synthesized once during explicit provider load, advertised by ID through capabilities, and replayed without another provider call or filesystem persistence.
+  - Verified: `uv sync --extra dev`, Ruff format/check, strict mypy over all 16 speech modules, and the complete 126-test speech suite passed. Focused cache/application/session coverage passed 23 tests; concurrency regressions cover shared provider serialization, cancelled recognizer creation, executor-backed provider termination, response cancellation, acknowledgement ordering, bounded resource admission, atomic cache prewarm/retry, and cached playback without a runtime provider call. The completed session-actor re-audit reported no remaining high- or medium-severity finding.
+  - Remaining: implement and verify the optional NVIDIA Nemotron streaming STT and Kokoro TTS adapters without implicit downloads; add explicit setup/doctor commands and local-speech documentation; build the browser AudioWorklet/playback/WebSocket client and preflight UI; remove the production composer; and record a real RTX 5070 microphone-to-partial/final-to-audio run. Milestone 6 still owns material partial-transcript objection detection and true audible mid-sentence interruption.
+  - Blocked: none for the CPU/fake protocol gate. No GPU/model/microphone result is claimed at this checkpoint.
+  - Commits: Milestone 5 series `76b93b9` through `75afb5d`; this PLAN checkpoint is committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -881,6 +888,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The M4 objection window is deliberately application-level: opposing dialogue is prepared and paused before witness generation so the user can object or continue. It proves validated judge reasoning and coherent deterministic resume/cancel behavior, but it is not the partial-STT, cached-audio, or mid-utterance barge-in path reserved for Milestone 6.
 - The first live judge-and-settlement complete trial accepted 30 calls. The single Terra debrief used 10,941 input and 7,065 output tokens at an estimated $0.13540375, nearly half of the $0.2775385 run, reinforcing the single terminal coaching-call decision.
 
+- Python and uv were already installed and visible to the user’s PowerShell PATH; the prior inability to invoke them came from the earlier Codex sandbox profile. With full access enabled, the speech service resolves Python 3.12 and uv normally without repository-specific PATH mutation.
+- Local speech inference needs process-wide ownership, not only per-WebSocket cancellation. An asyncio task can report cancellation while executor-backed provider work is still physically running, so STT leases remain held through real cleanup and the serialized TTS lane quarantines itself if termination cannot be proven. Cached fixed reactions remain available from immutable memory without re-entering that provider lane.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -926,6 +936,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep negotiation reasoning private and derive every material party, offer, parent, expiry, action, and event identity server-side. The model may recommend only a request-allowed counter, accept, or reject with strict citations and terms; the deterministic engine and atomic mutation decide whether it commits.
 - Treat M4 revision handling as immutable response/call identity plus stale-head rejection and cancellation. Do not conflate that gate with revisioned partial STT, which remains an explicit Milestone 5/6 deliverable.
 - Pause an AI question response at the protected application boundary until the player chooses object or continue. This provides deterministic user agency now without claiming audible mid-sentence interruption before the local speech companion exists.
+
+- Keep the local speech transport loopback-only with a strict `suits.speech.v1` subprotocol, bounded JSON/binary frames, hello timeout, connection/session/utterance/queue limits, revision and response identities, and explicit client acknowledgements. Raw microphone PCM stays inside this browser-to-local-service boundary and is neither persisted nor forwarded to Convex or OpenAI.
+- Prewarm the three canonical courtroom reactions atomically from configured local voices during explicit model loading. Publish no partial cache, persist no generated audio, expose only stable clip IDs in capabilities, and allow cached playback without a new synthesis call; failure leaves the full cache unready and retryable.
 
 ## 16. Verification Evidence
 
@@ -1075,6 +1088,16 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run test:live:courtroom-witness` without the opt-in flag — exit 0 with one explicit skip. The first flagged preflight then failed in 4 ms before any model call because the local service secret was absent/short; no product state changed. Loading the already-configured development value into one PowerShell process via `npx convex env get`, without printing or persisting it, and rerunning with `RUN_OPENAI_LIVE_COURTROOM=1` — exit 0; the real protected trial passed in 228,802 ms (`trial_c2e0b65b75fa478ebe4cde79476f4a28`).
   - The live test asserted exact role/model/task/usage bindings for the Luna judge (`resolve_objection`), Luna settlement counsel (`evaluate_settlement`), Luna jury, and Terra debrief; two scoped direct witnesses; bounded opposing examinations; no citation outside each request; durable completion; and exact owner reload. The canonical event stream contains one `OBJECT`, `BEGIN_INTERRUPTION`, AI `RULE_ON_OBJECTION`, deterministic `RESOLVE_INTERRUPTION`, deterministic `RESUME_INTERRUPTED_SPEECH`, user `PROPOSE_SETTLEMENT`, AI `COUNTER_SETTLEMENT`, user `REJECT_SETTLEMENT`, Luna `DELIBERATE`, and Terra `GENERATE_DEBRIEF`.
   - A read-only PowerShell aggregate over `npx convex data courtroomModelCalls --limit 250 --format json` and `trialEvents --limit 500 --format json`, filtered in memory without printing raw rows, found 30/30 accepted calls, 124,007 input and 16,791 output tokens, one accepted planner repair, and estimated cost $0.2775385. Task counts were eight witness answers, nine opponent plans, nine counsel responses, one objection ruling, one settlement evaluation, one jury deliberation, and one debrief.
+
+- 2026-07-19 10:16–13:26 IST — Milestone 5 bounded local speech and cached-reaction checkpoint
+  - `cd services/speech; uv sync --extra dev` — exit 0; 35 packages resolved and 34 checked in the local environment.
+  - `uv run ruff format --check src tests` and `uv run ruff check src tests` — exit 0; all 29 files were formatted and all lint checks passed.
+  - `uv run mypy --strict src/suits_speech` — exit 0; all 16 source files passed strict typing.
+  - `uv run pytest -q` — exit 0; 126 tests passed. The only warning is Starlette TestClient’s upstream `httpx` deprecation; it is not reported as a product pass or silently suppressed.
+  - `uv run pytest tests/test_clip_cache.py tests/test_app.py tests/test_session.py -q` — exit 0; 23 focused tests passed for atomic/idempotent cache prewarm, invalid-output rejection, cancelled-waiter isolation, capability publication, and binary cached playback with acknowledgements and no post-warm provider call.
+  - `git diff --check` — exit 0 before the scoped fixed-reaction commit.
+  - `git push origin main` — exit 0 through `75afb5d`; the bounded speech actor and fixed-cache implementation are on `origin/main`.
+  - Real Nemotron/Kokoro/CUDA and microphone/browser audio verification were not run and are not counted as passed.
 
 ## 17. Blocked external prerequisites
 
