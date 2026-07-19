@@ -449,20 +449,15 @@ function reconcileCamera(
   observedAtMs: number,
 ): CourtroomPresentationRuntimeState["camera"] {
   const transition = reducedMotion ? "cut" : "blend";
-  if (selection.sceneActor === camera.target) {
-    if (
-      camera.targetPriority === selection.priority &&
-      camera.targetOrder === selection.order &&
-      camera.pending === null &&
-      (!reducedMotion || camera.transition === "cut")
-    ) {
-      return camera;
-    }
+  const selectionMatchesCamera =
+    selection.sceneActor === camera.target &&
+    selection.priority === camera.targetPriority &&
+    selection.order === camera.targetOrder;
+  if (selectionMatchesCamera) {
+    if (camera.pending === null && camera.transition === transition) return camera;
     return CourtroomRuntimeCameraSchema.parse({
       ...camera,
-      targetPriority: selection.priority,
-      targetOrder: selection.order,
-      transition: reducedMotion ? "cut" : camera.transition,
+      transition,
       pending: null,
     });
   }
@@ -488,12 +483,12 @@ function reconcileCamera(
       pending: null,
     });
   }
-  if (pendingMatches && (!reducedMotion || camera.transition === "cut")) {
+  if (pendingMatches && camera.transition === transition) {
     return camera;
   }
   return CourtroomRuntimeCameraSchema.parse({
     ...camera,
-    transition: reducedMotion ? "cut" : camera.transition,
+    transition,
     pending: pendingMatches
       ? camera.pending
       : {

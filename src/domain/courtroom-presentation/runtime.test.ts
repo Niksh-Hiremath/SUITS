@@ -724,6 +724,54 @@ describe("courtroom presentation runtime", () => {
     });
   });
 
+  it("holds a same-actor close-up before returning to its base shot", () => {
+    const testimony = {
+      jobId: "job:witness-close",
+      responseId: "response:witness-close",
+      actor: "actor:witness",
+      sceneActor: "witness" as const,
+      purpose: "testimony" as const,
+    };
+    let state = createCourtroomPresentationRuntime({ baseFocus: "witness" });
+    state = reduceCourtroomPresentationRuntime(state, requested(testimony), 1);
+    expect(state.camera).toMatchObject({
+      target: "witness",
+      targetPriority: 2,
+      targetOrder: 1,
+      transition: "blend",
+      pending: null,
+    });
+
+    state = reduceCourtroomPresentationRuntime(state, terminal(testimony), 2);
+    expect(state.camera).toMatchObject({
+      target: "witness",
+      targetPriority: 2,
+      targetOrder: 1,
+      pending: {
+        target: "witness",
+        priority: 0,
+        order: 0,
+        sinceMs: 2,
+      },
+    });
+    state = advanceCourtroomPresentationRuntime(
+      state,
+      2 + COURTROOM_CAMERA_HYSTERESIS_MS - 1,
+    );
+    expect(state.camera.targetPriority).toBe(2);
+    state = advanceCourtroomPresentationRuntime(
+      state,
+      2 + COURTROOM_CAMERA_HYSTERESIS_MS,
+    );
+    expect(state.camera).toMatchObject({
+      target: "witness",
+      targetPriority: 0,
+      targetOrder: 0,
+      transition: "blend",
+      pending: null,
+    });
+  });
+
   it("lets higher-priority interruptions preempt the camera immediately", () => {
     const dialogue = {
       jobId: "job:dialogue",
