@@ -132,6 +132,7 @@ class SpeechSettings:
     tts_voices: tuple[str, ...]
     max_tts_queue_depth: int
     max_connections: int
+    max_stt_sessions: int
     stt_input_max_frames: int
     stt_input_max_bytes: int
     stt_idle_timeout_ms: int
@@ -226,6 +227,13 @@ class SpeechSettings:
                 minimum=1,
                 maximum=32,
                 name="SUITS_SPEECH_MAX_CONNECTIONS",
+            ),
+            max_stt_sessions=_parse_int(
+                source.get("SUITS_STT_MAX_SESSIONS"),
+                default=1,
+                minimum=1,
+                maximum=8,
+                name="SUITS_STT_MAX_SESSIONS",
             ),
             stt_input_max_frames=_parse_int(
                 source.get("SUITS_STT_INPUT_MAX_FRAMES"),

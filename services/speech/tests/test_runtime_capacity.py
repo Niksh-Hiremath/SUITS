@@ -13,11 +13,12 @@ from suits_speech.providers.fake import FakeSttProvider, FakeSttSession
 from suits_speech.providers.base import AudioChunk, TranscriptHypothesis
 
 
-def _settings(*, max_connections: int) -> SpeechSettings:
+def _settings(*, max_connections: int, max_stt_sessions: int = 1) -> SpeechSettings:
     return SpeechSettings.from_env(
         {
             "SUITS_SPEECH_MODE": "fake",
             "SUITS_SPEECH_MAX_CONNECTIONS": str(max_connections),
+            "SUITS_STT_MAX_SESSIONS": str(max_stt_sessions),
         }
     )
 
@@ -26,6 +27,7 @@ def _runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     max_connections: int,
+    max_stt_sessions: int = 1,
     stt_provider: FakeSttProvider | None = None,
 ) -> SpeechRuntime:
     monkeypatch.setattr(
@@ -37,7 +39,10 @@ def _runtime(
         ),
     )
     return SpeechRuntime(
-        settings=_settings(max_connections=max_connections),
+        settings=_settings(
+            max_connections=max_connections,
+            max_stt_sessions=max_stt_sessions,
+        ),
         stt_provider=stt_provider,
     )
 
@@ -182,3 +187,70 @@ async def test_cancelled_native_finalizer_quarantines_stt_capacity(
     with pytest.raises(SttSessionCapacityError):
         await runtime.create_stt_session(sample_rate_hz=16_000)
     provider.session.release_worker.set()
+    await session.cancel()
+    assert runtime.capacity_snapshot.stt_sessions.active == 1
+
+
+class _BlockingPushSession:
+    def __init__(self) -> None:
+        self.push_entered = asyncio.Event()
+        self.release_push = asyncio.Event()
+
+    async def push_audio(self, chunk: AudioChunk) -> tuple[TranscriptHypothesis, ...]:
+        del chunk
+        self.push_entered.set()
+        await self.release_push.wait()
+        return ()
+
+    async def finish(self) -> TranscriptHypothesis:
+        return TranscriptHypothesis(
+            text="finished",
+            is_final=True,
+            confidence=1.0,
+            audio_end_ms=0,
+        )
+
+    async def cancel(self) -> None:
+        return None
+
+
+class _BlockingPushProvider(FakeSttProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sessions: list[_BlockingPushSession] = []
+
+    async def create_session(self, *, sample_rate_hz: int) -> _BlockingPushSession:
+        if sample_rate_hz != 16_000:
+            raise ValueError("expected 16 kHz")
+        session = _BlockingPushSession()
+        self.sessions.append(session)
+        return session
+
+
+async def test_active_push_holds_global_recognizer_capacity_after_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _BlockingPushProvider()
+    runtime = _runtime(
+        monkeypatch,
+        max_connections=4,
+        max_stt_sessions=1,
+        stt_provider=provider,
+    )
+    await runtime.load_models()
+    session = await runtime.create_stt_session(sample_rate_hz=16_000)
+    push = asyncio.create_task(
+        session.push_audio(AudioChunk(sequence=0, pcm_s16le=b"\x00\x00", duration_ms=1))
+    )
+    await provider.sessions[0].push_entered.wait()
+
+    await session.cancel()
+    with pytest.raises(SttSessionCapacityError):
+        await runtime.create_stt_session(sample_rate_hz=16_000)
+
+    provider.sessions[0].release_push.set()
+    await push
+    assert runtime.capacity_snapshot.stt_sessions.active == 0
+
+    recovered = await runtime.create_stt_session(sample_rate_hz=16_000)
+    await recovered.cancel()

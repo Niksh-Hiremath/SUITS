@@ -118,45 +118,96 @@ class _LeasedStreamingSttSession:
     ) -> None:
         self._session = session
         self._lease = lease
-        self._terminal: Literal["finished", "cancelled", "quarantined"] | None = None
-        self._terminal_lock = asyncio.Lock()
+        self._terminal: (
+            Literal[
+                "finishing",
+                "cancelling",
+                "finished",
+                "cancelled",
+                "quarantined",
+            ]
+            | None
+        ) = None
+        self._state_lock = asyncio.Lock()
+        self._inflight_pushes = 0
+        self._finish_inflight = False
+        self._orphaned_call = False
 
     async def push_audio(self, chunk: AudioChunk) -> tuple[TranscriptHypothesis, ...]:
-        if self._terminal is not None:
-            raise RuntimeError("STT session is already terminal")
-        return await self._session.push_audio(chunk)
-
-    async def finish(self) -> TranscriptHypothesis:
-        async with self._terminal_lock:
+        async with self._state_lock:
             if self._terminal is not None:
                 raise RuntimeError("STT session is already terminal")
-            try:
-                result = await self._session.finish()
-            except asyncio.CancelledError:
-                self._terminal = "quarantined"
-                raise
-            except BaseException:
-                self._terminal = "finished"
-                self._lease.release()
-                raise
-            self._terminal = "finished"
-            self._lease.release()
-            return result
+            self._inflight_pushes += 1
+        orphaned = False
+        try:
+            return await self._session.push_audio(chunk)
+        except asyncio.CancelledError:
+            orphaned = True
+            raise
+        finally:
+            async with self._state_lock:
+                self._inflight_pushes -= 1
+                if orphaned:
+                    self._orphaned_call = True
+                    self._terminal = "quarantined"
+                self._release_if_safe_locked()
+
+    async def finish(self) -> TranscriptHypothesis:
+        async with self._state_lock:
+            if self._terminal is not None:
+                raise RuntimeError("STT session is already terminal")
+            if self._inflight_pushes != 0:
+                raise RuntimeError("STT session still has active audio work")
+            self._terminal = "finishing"
+            self._finish_inflight = True
+        orphaned = False
+        try:
+            result = await self._session.finish()
+        except asyncio.CancelledError:
+            orphaned = True
+            raise
+        finally:
+            async with self._state_lock:
+                self._finish_inflight = False
+                if orphaned:
+                    self._orphaned_call = True
+                    self._terminal = "quarantined"
+                elif self._terminal == "finishing":
+                    self._terminal = "finished"
+                self._release_if_safe_locked()
+        return result
 
     async def cancel(self) -> None:
-        async with self._terminal_lock:
-            if self._terminal is not None:
+        async with self._state_lock:
+            if self._terminal in {"finished", "cancelled"}:
                 return
-            try:
-                await self._session.cancel()
-            except asyncio.CancelledError:
+            if self._terminal == "cancelling":
+                raise RuntimeError("STT session cancellation is already active")
+            if self._terminal == "quarantined":
+                return
+            self._terminal = "cancelling"
+        try:
+            await self._session.cancel()
+        except asyncio.CancelledError:
+            async with self._state_lock:
+                self._orphaned_call = True
                 self._terminal = "quarantined"
-                raise
-            except BaseException:
-                self._terminal = "cancelled"
-                self._lease.release()
-                raise
+            raise
+        except BaseException:
+            async with self._state_lock:
+                self._terminal = "quarantined"
+            raise
+        async with self._state_lock:
             self._terminal = "cancelled"
+            self._release_if_safe_locked()
+
+    def _release_if_safe_locked(self) -> None:
+        if (
+            self._terminal in {"finished", "cancelled"}
+            and self._inflight_pushes == 0
+            and not self._finish_inflight
+            and not self._orphaned_call
+        ):
             self._lease.release()
 
 
@@ -178,7 +229,7 @@ class SpeechRuntime:
             call_timeout_seconds=settings.tts_max_phrase_duration_ms / 1_000,
         )
         self._connection_pool = BoundedLeasePool(limit=settings.max_connections)
-        self._stt_session_pool = BoundedLeasePool(limit=settings.max_connections)
+        self._stt_session_pool = BoundedLeasePool(limit=settings.max_stt_sessions)
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
         self.cached_clip_ids: tuple[str, ...] = ()
         self._load_lock = asyncio.Lock()

@@ -26,6 +26,7 @@ def test_defaults_are_pinned_local_providers_without_auto_download() -> None:
     assert "opposing_counsel=bm_george" in settings.tts_voices
     assert settings.stt_input_max_frames == 8
     assert settings.max_connections == 4
+    assert settings.max_stt_sessions == 1
     assert settings.stt_idle_timeout_ms == 10_000
     assert settings.stt_max_utterance_ms == 120_000
     assert settings.hello_timeout_ms == 5_000
@@ -58,6 +59,7 @@ def test_non_loopback_bind_is_always_rejected() -> None:
         {"SUITS_SPEECH_PORT": "0"},
         {"SUITS_STT_LOOKAHEAD_TOKENS": "14"},
         {"SUITS_SPEECH_MAX_CONNECTIONS": "0"},
+        {"SUITS_STT_MAX_SESSIONS": "0"},
         {"SUITS_STT_IDLE_TIMEOUT_MS": "999"},
         {"SUITS_STT_MAX_UTTERANCE_MS": "4999"},
         {"SUITS_SPEECH_HELLO_TIMEOUT_MS": "499"},
