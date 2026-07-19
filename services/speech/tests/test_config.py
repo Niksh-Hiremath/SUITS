@@ -25,7 +25,12 @@ def test_defaults_are_pinned_local_providers_without_auto_download() -> None:
     assert settings.tts_model_revision == DEFAULT_TTS_MODEL_REVISION
     assert "opposing_counsel=bm_george" in settings.tts_voices
     assert settings.stt_input_max_frames == 8
-    assert settings.tts_ack_window_bytes == 96_000
+    assert settings.max_connections == 4
+    assert settings.stt_idle_timeout_ms == 10_000
+    assert settings.stt_max_utterance_ms == 120_000
+    assert settings.hello_timeout_ms == 5_000
+    assert settings.tts_ack_window_bytes == 5_760
+    assert settings.tts_max_phrase_duration_ms == 15_000
     assert settings.auto_download_models is False
 
 
@@ -52,6 +57,10 @@ def test_non_loopback_bind_is_always_rejected() -> None:
         {"SUITS_SPEECH_MODE": "cloud"},
         {"SUITS_SPEECH_PORT": "0"},
         {"SUITS_STT_LOOKAHEAD_TOKENS": "14"},
+        {"SUITS_SPEECH_MAX_CONNECTIONS": "0"},
+        {"SUITS_STT_IDLE_TIMEOUT_MS": "999"},
+        {"SUITS_STT_MAX_UTTERANCE_MS": "4999"},
+        {"SUITS_SPEECH_HELLO_TIMEOUT_MS": "499"},
         {"SUITS_SPEECH_ALLOWED_ORIGINS": ""},
         {"SUITS_SPEECH_ALLOWED_ORIGINS": "*"},
         {"SUITS_SPEECH_ALLOWED_ORIGINS": "null"},

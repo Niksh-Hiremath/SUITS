@@ -131,10 +131,15 @@ class SpeechSettings:
     tts_model_revision: str
     tts_voices: tuple[str, ...]
     max_tts_queue_depth: int
+    max_connections: int
     stt_input_max_frames: int
     stt_input_max_bytes: int
+    stt_idle_timeout_ms: int
+    stt_max_utterance_ms: int
+    hello_timeout_ms: int
     tts_ack_window_bytes: int
     tts_audio_frame_ms: int
+    tts_max_phrase_duration_ms: int
     auto_download_models: Literal[False] = False
 
     @classmethod
@@ -215,6 +220,13 @@ class SpeechSettings:
                 maximum=256,
                 name="SUITS_TTS_MAX_QUEUE_DEPTH",
             ),
+            max_connections=_parse_int(
+                source.get("SUITS_SPEECH_MAX_CONNECTIONS"),
+                default=4,
+                minimum=1,
+                maximum=32,
+                name="SUITS_SPEECH_MAX_CONNECTIONS",
+            ),
             stt_input_max_frames=_parse_int(
                 source.get("SUITS_STT_INPUT_MAX_FRAMES"),
                 default=8,
@@ -229,9 +241,30 @@ class SpeechSettings:
                 maximum=16_777_216,
                 name="SUITS_STT_INPUT_MAX_BYTES",
             ),
+            stt_idle_timeout_ms=_parse_int(
+                source.get("SUITS_STT_IDLE_TIMEOUT_MS"),
+                default=10_000,
+                minimum=1_000,
+                maximum=60_000,
+                name="SUITS_STT_IDLE_TIMEOUT_MS",
+            ),
+            stt_max_utterance_ms=_parse_int(
+                source.get("SUITS_STT_MAX_UTTERANCE_MS"),
+                default=120_000,
+                minimum=5_000,
+                maximum=600_000,
+                name="SUITS_STT_MAX_UTTERANCE_MS",
+            ),
+            hello_timeout_ms=_parse_int(
+                source.get("SUITS_SPEECH_HELLO_TIMEOUT_MS"),
+                default=5_000,
+                minimum=500,
+                maximum=30_000,
+                name="SUITS_SPEECH_HELLO_TIMEOUT_MS",
+            ),
             tts_ack_window_bytes=_parse_int(
                 source.get("SUITS_TTS_ACK_WINDOW_BYTES"),
-                default=96_000,
+                default=5_760,
                 minimum=640,
                 maximum=16_777_216,
                 name="SUITS_TTS_ACK_WINDOW_BYTES",
@@ -242,5 +275,12 @@ class SpeechSettings:
                 minimum=20,
                 maximum=200,
                 name="SUITS_TTS_AUDIO_FRAME_MS",
+            ),
+            tts_max_phrase_duration_ms=_parse_int(
+                source.get("SUITS_TTS_MAX_PHRASE_DURATION_MS"),
+                default=15_000,
+                minimum=1_000,
+                maximum=30_000,
+                name="SUITS_TTS_MAX_PHRASE_DURATION_MS",
             ),
         )
