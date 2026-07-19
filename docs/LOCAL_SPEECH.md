@@ -2,7 +2,7 @@
 
 SUITS uses a local FastAPI companion for speech-to-text (STT), voice activity detection (VAD), and text-to-speech (TTS). The service accepts microphone PCM from the browser over a loopback WebSocket and returns transcripts, synthesized PCM, and timing metadata. It has no Convex or OpenAI integration, so raw microphone audio stays inside the browser-to-local-service boundary.
 
-The current companion, real Nemotron/Kokoro adapters, exact-loopback browser client, and bounded AudioWorklet capture/playback modules are implemented and covered by deterministic tests. A synthetic in-memory CUDA provider smoke has passed on the target RTX 5070. Production hearing-page integration and a real browser microphone/audible-playback run have not been verified. The provider smoke and module tests are therefore not proof of live microphone capture, audible browser playback, or a full voice-first hearing.
+The current companion, real Nemotron/Kokoro adapters, exact-loopback browser client, bounded AudioWorklet capture/playback modules, production hearing controller, and `/preflight` readiness UI are implemented and covered by deterministic tests. A synthetic in-memory CUDA provider smoke has passed on the target RTX 5070. A real browser microphone/audible-playback run has not been verified. The provider smoke, fake-service browser work, and module tests are therefore not proof of live microphone capture, audible browser playback, or a full real-audio hearing.
 
 ## Runtime choices
 
@@ -179,6 +179,15 @@ Invoke-RestMethod http://127.0.0.1:8765/v1/capabilities |
 ```
 
 `healthz` does not mean models are ready. Model construction and fixed-clip prewarming happen only after an accepted WebSocket client sends `load_models`. The resulting `capabilities` event reports each provider's configured/loaded/ready state, device, exact model ID and commit, streaming/timing support, measured load latency, CUDA facts, and the all-or-nothing cached clip IDs.
+
+## Browser readiness page
+
+With the Next.js app and speech companion running, open `http://localhost:3000/preflight`.
+
+- **Run server checks** sends strict `{}` to the same-origin Next.js preflight route. The server refreshes the signed owner session, checks the secret-protected Convex health route, and sends one tiny fixed Responses API probe to each pinned GPT-5.6 model. It sends no case, transcript, user text, or audio. Ready results are reused for five minutes, degraded results for fifteen seconds, and a durable Convex permit limits cold-instance live probes to five in a rolling ten-minute window.
+- **Prepare local audio** connects only to the configured loopback WebSocket, loads and warms the providers, reports CUDA/device/provider/timing readiness, and briefly opens then releases capture. This action can trigger the browser microphone prompt and is never automatic.
+- **Test speakers** plays a fixed local courtroom clip only after preparation. It does not call OpenAI or Convex.
+- A disconnect or service error revokes the local ready badge and presents a safe recovery action; previously reported provider capabilities are not treated as current readiness.
 
 ## Loopback and origin security
 
@@ -373,12 +382,12 @@ Verified now:
 - real cache-only Nemotron and Kokoro provider construction through automated/injected tests;
 - one explicit real CUDA Kokoro-to-Nemotron in-memory smoke on the target RTX 5070;
 - exact-loopback browser transport, cumulative microphone-credit reconciliation, explicitly armed 16 kHz AudioWorklet capture, bounded playback, output-latency drain, and cleanup/cancellation races through automated tests.
+- production hearing-controller and voice-only UI integration, including the double-gated development-only typed control, through focused browser/controller tests and a deterministic fake-service browser flow;
+- the responsive `/preflight` readiness surface, strict server/Convex contracts, live Luna/Terra server probe, bounded caches, durable cross-instance permit, and disconnect readiness revocation. The local prepare/speaker actions remain permission-dependent and were not clicked during this verification.
 
 Not yet verified:
 
-- production hearing-page integration of the browser transport, AudioWorklet capture, and playback modules;
 - browser microphone permission, real human speech, acoustic transcription quality, and audible speaker output in an E2E run;
-- browser reconnect/preflight UX;
 - automatic high-confidence partial-transcript objection detection and true audible mid-sentence interruption;
 - STT/TTS percentile latency targets or sustained-load GPU performance;
 - a network/audit capture proving the complete browser hearing keeps raw audio out of Convex/OpenAI, although the local service itself has no such integration and never emits raw STT input through its JSON protocol.

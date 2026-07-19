@@ -526,10 +526,10 @@ Deliverables:
 - [x] Python service and versioned WebSocket protocol;
 - [x] GPU STT adapter, VAD, partial/final revisions;
 - [x] local multi-voice TTS adapter;
-- [ ] phrase queue, timing, cancellation, barge-in;
+- [x] phrase queue, timing, cancellation, barge-in;
 - [x] cached fixed courtroom clips;
-- [ ] preflight/health/capability UI;
-- [ ] setup scripts and documentation;
+- [x] preflight/health/capability UI;
+- [x] setup scripts and documentation;
 - [x] deterministic fake providers for CI.
 
 Gate:
@@ -854,6 +854,19 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: integrate the framework-independent hearing speech controller and preflight UI; remove the production composer; exercise the production browser against the fake service; then record a real microphone utterance, audible playback, and a raw-audio boundary audit. No browser microphone, speaker, or visual proof is claimed by this checkpoint.
   - Commits: `fc1f785`, `b35da01`, `08a3029`, and `59e46f3`.
 
+- 2026-07-19 16:20–17:30 IST — Milestone 5 voice-first hearing integration checkpoint
+  - Changed: added the framework-independent hearing voice policy and controller orchestration; exact utterance/revision/head fencing; final-transcript-to-high-level-command submission; phrase-safe local synthesis; cancellation, barge-in, and response lifecycle reconciliation; the production voice-first question/closing controls; a developer-only typed control double-gated by non-production mode and `NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT=1`; explicit local-audio recovery states; and a contained responsive case rail. Raw microphone PCM remains on the direct browser-to-loopback WebSocket path.
+  - Verified: the browser/controller/hearing slice passed 12 files and 97 tests with scoped ESLint, strict root TypeScript, and `git diff --check`. The production build retained no typed input under the default environment. In-app browser review covered the live hearing at desktop and responsive widths, found no horizontal overflow, and reported no console warning/error; an independent page/layout audit found no remaining high- or medium-severity defect.
+  - Remaining: a real microphone utterance, human partial/final transcript, audible speaker response, and network/record raw-audio audit are still required for the Milestone 5 gate. No microphone permission or audible-output result is claimed.
+  - Commits: `b31135a`, `6d45e9e`, `4b0f684`, `d5110ba`, and `77ecf0c`.
+
+- 2026-07-19 18:36–18:48 IST — Milestone 5 bounded system-preflight checkpoint
+  - Changed: added strict versioned server and durable-health contracts; secret-protected read-only Convex health; two fixed, server-only, `store:false` Luna/Terra Responses probes; hard per-check timeouts; a five-minute ready/fifteen-second degraded single-flight cache; a serializable global Convex permit limiting cold-instance probes to five per rolling ten minutes; safe rate-limit and failure responses; and an accessible `/preflight` workspace for session, Convex, model, CUDA/provider, microphone, capture, playback, and fixed speaker-clip status. Local readiness and provider badges are revoked on speech-service disconnect. The home and hearing navigation link to preflight.
+  - Verified: the final focused preflight command passed seven files and 22 tests; the independent server/UI audit gate passed eight files and 25 tests, scoped ESLint, root and Convex strict TypeScript, `git diff --check`, and an independent P0–P2 re-audit. `npx convex dev --once` synchronized the protected routes in 8.02 seconds without a login prompt. A fresh local Next process returned a real safe `suits.server-preflight.v1` ready response in 5,161 ms: Convex 982 ms, Luna 4,500 ms, and Terra 2,576 ms. `npm run build` compiled all 19 pages/routes, including `/preflight` and `/api/preflight`, in 13.9 seconds.
+  - Browser boundary: the in-app browser rendered the preflight surface and showed no console warning/error, but its local click control focused without dispatching and later timed out even after a fresh tab/process. The direct production endpoint and static UI contracts passed; the failed browser-control interaction is not reported as an interactive E2E pass. “Prepare local audio” and “Test speakers” were not clicked because microphone/audio permission was not authorized.
+  - Remaining: the two Milestone 5 hardware/privacy gate items remain open. Milestone 6 still owns automatic partial-transcript objection orchestration.
+  - Commits: `5e0307c` and `d52864c`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -911,6 +924,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Concurrent Kokoro and Nemotron CUDA initialization failed nondeterministically on Windows even though their steady-state allocation was about 1.5 GiB and both fit the 12,227 MiB GPU. Loading TTS and then STT sequentially was stable; the runtime preserves shared-call coalescing while serializing physical initialization.
 - An absolute STT availability snapshot is unsafe when unrelated TTS activity can publish flow control between a browser send and service admission. Monotonic flow revisions plus utterance identity and a cumulative accepted-through sequence let the browser subtract locally sent-but-unacknowledged PCM without double-crediting or guessing from event timing.
 - AudioWorklet messages can outpace main-thread consumption even when the speech WebSocket is bounded. The microphone processor therefore needs its own fixed in-flight frame credits and must remain unarmed until the controller has adopted every cleanup resource; otherwise startup sequence zero can be dropped on an already-running `AudioContext`.
+- A model metadata lookup is insufficient for readiness because it does not prove the Responses endpoint, quota, or model invocation path used by hearings. The preflight therefore uses two minimal fixed Responses probes, but a process-local cache alone cannot cap cold-instance spend; the protected Convex permit serializes a global five-attempt rolling window before either model call.
+- A sticky UI phase is not a valid health signal after an asynchronous speech disconnect. Preflight readiness must also reflect the controller lifecycle, and stale capability facts must remain informational rather than rendering as current provider readiness.
+- The long-running Next development process stopped serving and hydrating reliably after repeated hot updates: both static pages and the preflight request timed out. Stopping only the exact workspace-owned listener/parent and starting a fresh process restored a 73 ms page response and a 5,161 ms live preflight. The failed browser-control click after restart remains unverified tooling behavior, not evidence of a passing interactive flow.
 
 ## 15. Decisions
 
@@ -966,6 +982,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Count the 2026-07-19 real-model closed loop as provider/STT/TTS evidence only. It is not microphone, browser playback, mid-sentence objection, or end-to-end courtroom proof; those gates remain open until exercised through the production browser path.
 - Reconcile browser microphone capacity from cumulative service watermarks, never by replacing locally debited credits with a later absolute snapshot. Reject impossible watermark identities or sequences and ignore stale revisions.
 - Keep capture and playback bounded independently of the WebSocket: arm the worklet only after browser resources are owned, allow at most eight unacknowledged worklet frames, acknowledge TTS only after playback accepts a frame, and use the browser output-latency estimate before reporting audible completion.
+- Make local microphone preparation and speaker playback separate explicit preflight actions. Never request microphone access on mount or as a side effect of server/model readiness checks; revoke local ready state immediately when the controller reports a recoverable/fatal disconnect.
+- Probe the two pinned GPT-5.6 models with fixed server-owned content only, `store:false`, low reasoning, and no case/transcript/audio data. Share successful results for five minutes, degraded results for fifteen seconds, and require a serializable protected Convex permit so parallel server instances cannot amplify billable calls beyond five preflight snapshots per rolling ten minutes.
 
 ## 16. Verification Evidence
 
@@ -1140,6 +1158,16 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npx eslint src/lib/speech public/worklets/suits-mic-processor.js` and `npx tsc --noEmit --pretty false` — exit 0.
   - `git push origin main` — exit 0 through `59e46f3`; the cumulative service protocol, browser client, browser audio pipeline, and environment defaults are on `origin/main`.
   - Browser microphone permission, real audible speaker output, visual preflight, and the production-path raw-audio audit were not exercised and remain open.
+
+- 2026-07-19 16:20–18:48 IST — Milestone 5 voice-first hearing and bounded-preflight verification
+  - `npx vitest run src/lib/speech src/app/hearing` plus the focused controller/source suites — exit 0; 12 files and 97 tests passed for voice-policy invariants, controller lifecycle/cancellation, phrase playback, stale response fencing, developer-control gating, and hearing integration.
+  - `npx vitest run src/domain/preflight.test.ts src/server/preflight src/app/api/preflight src/app/preflight convex/preflightHttp.integration.test.ts` — exit 0; seven files and 22 tests passed after the final accessibility/error-guidance additions. The independent final audit reran a slightly broader eight-file/25-test slice with no remaining P0–P2 finding.
+  - Scoped ESLint, `npx tsc --noEmit --pretty false`, `npx tsc -p convex/tsconfig.json --noEmit --pretty false`, and `git diff --check` — exit 0. The only scoped CSS lint invocation reported that CSS is outside the ESLint configuration; it was not counted as a CSS lint pass.
+  - `npx convex dev --once` — exit 0; linked deployment `cheery-bandicoot-36` reported functions ready in 8.02 seconds without a login prompt. Executable Convex HTTP tests proved authorized strict no-store health, unauthorized/malformed rejection, and durable quota exhaustion.
+  - A PowerShell POST to `http://127.0.0.1:3000/api/preflight` with strict `{}` and same-origin headers — exit 0; HTTP 200 and `suits.server-preflight.v1` overall `ready` in 5,161 ms, with Convex ready in 982 ms, Luna ready in 4,500 ms, Terra ready in 2,576 ms, and `Cache-Control: no-store`. Only safe status/latency fields were printed.
+  - `npm run build` — exit 0 in 13.9 seconds; Next.js compiled, typechecked, prerendered 19/19 pages, and registered `/preflight` plus `/api/preflight`.
+  - In-app browser static review — the preflight page rendered at the normal 1,265×711 viewport with no warning/error console entries and no visible desktop layout defect. The automation click focused but did not dispatch; a later visible/fresh-tab attempt timed out and reset the browser-control session. This is recorded as an unverified interactive browser action, not a pass. No microphone permission or speaker playback was requested.
+  - `git push origin main` — exit 0 for `5e0307c` (`feat: bound system preflight checks`) and `d52864c` (`feat: add system preflight workspace`).
 
 ## 17. Blocked external prerequisites
 

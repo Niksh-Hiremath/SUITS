@@ -23,11 +23,13 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Keep API keys and `SUITS_CONVEX_SERVICE_SECRET` server-side; never expose them through `NEXT_PUBLIC_*` variables.
 
-The current hearing page still has an interim typed development surface. The production voice-only browser control, animated courtroom, migrated Court Records, and final verification/demo gates remain in progress and must not be represented as complete.
+The production hearing surface is voice-first. Typed courtroom input is absent unless both a development build and `NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT=1` explicitly enable the developer control. The animated courtroom, migrated Court Records, and final verification/demo gates remain in progress and must not be represented as complete.
+
+Before a hearing, open [http://localhost:3000/preflight](http://localhost:3000/preflight). “Run server checks” validates the signed session, the protected Convex service boundary, and both pinned GPT-5.6 models with two tiny fixed Responses API probes. Those probes contain no case, transcript, or microphone content; successful results are cached for five minutes, and a durable global five-attempt/ten-minute permit caps billable probes across server instances. “Prepare local audio” is separate and may request browser microphone permission; it is never run implicitly.
 
 ## Local speech quick start
 
-The local companion keeps raw microphone PCM out of OpenAI and Convex. It provides a strict loopback WebSocket, local energy VAD, revisioned streaming STT, phrase-queued TTS with timing metadata, cancellation/barge-in, playback backpressure, and cached courtroom reactions.
+The local companion keeps raw microphone PCM out of OpenAI and Convex. It provides a strict loopback WebSocket, local energy VAD, revisioned streaming STT, phrase-queued TTS with timing metadata, cancellation/barge-in, playback backpressure, and cached courtroom reactions. The hearing controller and preflight readiness UI consume this local path directly and revoke ready state if the companion disconnects.
 
 Inspect the target CUDA setup without changing the machine:
 
