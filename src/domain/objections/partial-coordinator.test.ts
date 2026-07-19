@@ -380,6 +380,25 @@ describe("PartialObjectionCoordinator", () => {
     });
   });
 
+  it("releases trigger-only text after a sealed result is delivered", async () => {
+    const triggerText =
+      "Isn't it true that you ignored the private safety alert that morning?";
+    const coordinator = new PartialObjectionCoordinator<string>({
+      modelDispatch: "after_final_seal",
+      onCachedReaction: () => undefined,
+      requestModelCandidate: async () => "durable result",
+      onModelResult: () => undefined,
+      onError: vi.fn(),
+    });
+    coordinator.openUtterance(open());
+    coordinator.acceptPartial(partial(2, triggerText));
+    coordinator.sealFinalCandidate(partial(3, triggerText));
+    await coordinator.waitForIdle();
+
+    expect(coordinator.getMetrics().resultsDelivered).toBe(1);
+    expect(JSON.stringify(coordinator)).not.toContain(triggerText);
+  });
+
   it("can defer all model work until the final candidate is sealed", async () => {
     const requestModelCandidate = vi.fn(async () => "proposal");
     const onModelResult = vi.fn();

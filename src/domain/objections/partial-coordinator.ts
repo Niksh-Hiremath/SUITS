@@ -970,6 +970,11 @@ export class PartialObjectionCoordinator<ModelResult> {
       }
       active.inFlight = null;
       active.sealedCandidateRecovery = null;
+      if (active.final) {
+        active.currentCandidateKey = null;
+        active.submittedCandidateKeys.clear();
+        active.retainCandidateAfterFinal = false;
+      }
       this.metrics.resultsDelivered += 1;
     } catch (cause) {
       if (
