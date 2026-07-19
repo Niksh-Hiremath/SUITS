@@ -11,6 +11,8 @@ import {
   type HearingCommandPreparation,
   type HearingDebriefGeneratorPrecommit,
   type HearingJuryResponsePrecommit,
+  type HearingNegotiationPrecommit,
+  type HearingObjectionRulingPrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
@@ -83,6 +85,8 @@ liveDescribe("live Luna courtroom runtime", () => {
         witnessCalls: HearingWitnessGenerationPrecommit[];
         opponentPlans: HearingOpponentPlanPrecommit[];
         counselResponses: HearingCounselResponsePrecommit[];
+        objectionRulings: HearingObjectionRulingPrecommit[];
+        negotiationDecisions: HearingNegotiationPrecommit[];
         juryResponses: HearingJuryResponsePrecommit[];
         debriefs: HearingDebriefGeneratorPrecommit[];
       } = {
@@ -91,6 +95,8 @@ liveDescribe("live Luna courtroom runtime", () => {
         witnessCalls: [],
         opponentPlans: [],
         counselResponses: [],
+        objectionRulings: [],
+        negotiationDecisions: [],
         juryResponses: [],
         debriefs: [],
       };
@@ -146,6 +152,7 @@ liveDescribe("live Luna courtroom runtime", () => {
           });
         },
         commitObjectionRuling: async (generation, signal) => {
+          captures.objectionRulings.push(generation);
           return await callConvexCaseService({
             path: "/service/hearings/objection-ruling/commit",
             body: { ownerId, trialId, generation },
@@ -156,6 +163,7 @@ liveDescribe("live Luna courtroom runtime", () => {
           });
         },
         commitNegotiationDecision: async (generation, signal) => {
+          captures.negotiationDecisions.push(generation);
           return await callConvexCaseService({
             path: "/service/hearings/negotiation/commit",
             body: { ownerId, trialId, generation },
@@ -210,6 +218,7 @@ liveDescribe("live Luna courtroom runtime", () => {
 
       const witnessIds = ["witness_rina_shah", "witness_theo_morgan"];
       const acceptedCalls: HearingWitnessGenerationPrecommit[] = [];
+      let objectedToOpponent = false;
       for (const witnessId of witnessIds) {
         await execute({ type: "call_witness", witnessId });
         expect(view.activeAppearance).toMatchObject({ witnessId });
@@ -278,6 +287,29 @@ liveDescribe("live Luna courtroom runtime", () => {
           witnessId,
           examinationKind: "direct",
         });
+        for (let responseWindow = 0; view.capabilities.canContinueResponse; responseWindow += 1) {
+          if (responseWindow >= 4) {
+            throw new Error("Live opposing examination exceeded four response windows");
+          }
+          const activeQuestion = view.activeQuestion;
+          if (!activeQuestion?.pendingResponseId) {
+            throw new Error("Live response window omitted its pending response");
+          }
+          if (!objectedToOpponent && view.capabilities.canObject) {
+            await execute({
+              type: "object",
+              questionId: activeQuestion.questionId,
+              responseId: activeQuestion.pendingResponseId,
+              ground: "relevance",
+            });
+            objectedToOpponent = true;
+          } else {
+            await execute({
+              type: "continue_response",
+              responseId: activeQuestion.pendingResponseId,
+            });
+          }
+        }
         expect(view.activeAppearance).toMatchObject({
           witnessId,
           stage: "redirect",
@@ -289,6 +321,44 @@ liveDescribe("live Luna courtroom runtime", () => {
         });
         expect(view.activeAppearance).toBeNull();
       }
+
+      expect(objectedToOpponent).toBe(true);
+      expect(captures.objectionRulings).toHaveLength(1);
+      expect(captures.objectionRulings[0]?.trace).toMatchObject({
+        status: "accepted",
+        model: "gpt-5.6-luna",
+        task: "resolve_objection",
+        actorRole: "judge",
+      });
+      expect(
+        captures.objectionRulings[0]?.trace.usage?.totalTokens,
+      ).toBeGreaterThan(0);
+
+      await execute({
+        type: "propose_settlement",
+        terms: {
+          amount: 100_000,
+          nonMonetaryTerms: ["Neutral reference"],
+          summary:
+            "Resolve the fictional matter without an admission of liability.",
+        },
+      });
+      expect(captures.negotiationDecisions).toHaveLength(1);
+      expect(captures.negotiationDecisions[0]?.trace).toMatchObject({
+        status: "accepted",
+        model: "gpt-5.6-luna",
+        task: "evaluate_settlement",
+        actorRole: "counsel",
+      });
+      expect(
+        captures.negotiationDecisions[0]?.trace.usage?.totalTokens,
+      ).toBeGreaterThan(0);
+      const counterOfferId =
+        view.capabilities.rejectableSettlementOfferIds[0] ?? null;
+      if (counterOfferId !== null) {
+        await execute({ type: "reject_settlement", offerId: counterOfferId });
+      }
+      expect(view.trial.status).toBe("active");
 
       await execute({
         type: "finish_trial",
