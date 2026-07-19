@@ -22,6 +22,7 @@ import {
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   PERSISTED_OPPONENT_DIRECTIVE_SCHEMA_VERSION,
   HearingCounselResponsePrecommitSchema,
+  HearingCommittedPerformanceSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
   PersistedOpponentDirectiveSchema,
@@ -188,6 +189,17 @@ const appendCounselTurnForOwnerReference = makeFunctionReference<
   }>,
   Receipt
 >("trialEvents:appendCounselTurnForOwner");
+
+const readCommittedPerformanceForOwnerHeadReference = makeFunctionReference<
+  "query",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    stateVersion: number;
+    lastEventId: string;
+  }>,
+  string | null
+>("trialEvents:readCommittedPerformanceForOwnerHead");
 
 const recordTerminalForOwnerReference = makeFunctionReference<
   "mutation",
@@ -1156,6 +1168,12 @@ describe("atomic generated trial-event append", () => {
         .query("courtroomModelCallAttempts")
         .withIndex("by_call_attempt", (index) => index.eq("callId", CALL_ID))
         .collect(),
+      performances: await ctx.db
+        .query("courtroomCommittedPerformances")
+        .withIndex("by_performance_id", (index) =>
+          index.eq("performanceId", first.eventIds[0] ?? "missing"),
+        )
+        .collect(),
       snapshots: await ctx.db
         .query("trialSnapshots")
         .withIndex("by_trial_version", (index) => index.eq("trialId", TRIAL_ID))
@@ -1165,6 +1183,7 @@ describe("atomic generated trial-event append", () => {
     expect(persisted.receipts).toHaveLength(7);
     expect(persisted.calls).toHaveLength(1);
     expect(persisted.attempts).toHaveLength(1);
+    expect(persisted.performances).toHaveLength(1);
     expect(persisted.snapshots).toHaveLength(2);
     expect(persisted.snapshots.at(-1)).toMatchObject({ stateVersion: 7 });
     const answerEvent = persisted.events.at(-1);
@@ -1187,6 +1206,95 @@ describe("atomic generated trial-event append", () => {
       committedActionId: trialAction.actionId,
       committedEventId: first.eventIds[0],
     });
+    expect(
+      HearingCommittedPerformanceSchema.parse(
+        JSON.parse(persisted.performances[0]?.performanceJson ?? "null"),
+      ),
+    ).toMatchObject({
+      kind: "witness_answer",
+      context: "courtroom",
+      head: {
+        trialId: TRIAL_ID,
+        stateVersion: 7,
+        lastEventId: first.eventIds[0],
+      },
+      source: {
+        callId: CALL_ID,
+        actionId: trialAction.actionId,
+        eventId: first.eventIds[0],
+        turnId: trialAction.payload.turnId,
+        responseId: RESPONSE_ID,
+      },
+      actor: ACTORS.rina,
+      evidenceIds: ["evidence_complaint_email"],
+      semantic: {
+        activity: "speaking",
+        emotion: "confident",
+        intensity: 0.4,
+        gazeTarget: "questioning_counsel",
+        gesture: "indicate_evidence",
+        speakingStyle: "measured",
+      },
+    });
+  });
+
+  it("returns a cue only at its exact owner-bound head", async () => {
+    const backend = await setupPendingWitnessResponse();
+    const generationInput = generation();
+    const trialAction = generatedAction(generationInput);
+    const receipt = await appendGenerated(backend, trialAction, generationInput);
+    const cueJson = await backend.query(
+      readCommittedPerformanceForOwnerHeadReference,
+      {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        stateVersion: receipt.committedStateVersion,
+        lastEventId: receipt.eventIds[0] ?? "missing",
+      },
+    );
+    expect(
+      HearingCommittedPerformanceSchema.parse(JSON.parse(cueJson ?? "null"))
+        .source.turnId,
+    ).toBe(trialAction.payload.turnId);
+    await expect(
+      backend.query(readCommittedPerformanceForOwnerHeadReference, {
+        ownerId: "owner:123e4567-e89b-42d3-a456-426614174099",
+        trialId: TRIAL_ID,
+        stateVersion: receipt.committedStateVersion,
+        lastEventId: receipt.eventIds[0] ?? "missing",
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+
+    const nextAction = action({
+      actionId: "action:generated:end-after-answer",
+      expectedStateVersion: receipt.committedStateVersion,
+      actor: ACTORS.userCounsel,
+      source: "user",
+      causationId: receipt.eventIds[0] ?? "missing",
+      type: "END_EXAMINATION",
+      payload: {
+        witnessId: ACTORS.rina.witnessId,
+        examinationKind: "direct",
+        disposition: "completed",
+      },
+    });
+    const nextReceipt = await appendTrusted(backend, nextAction);
+    expect(
+      await backend.query(readCommittedPerformanceForOwnerHeadReference, {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        stateVersion: nextReceipt.committedStateVersion,
+        lastEventId: nextReceipt.eventIds[0] ?? "missing",
+      }),
+    ).toBeNull();
+    await expect(
+      backend.query(readCommittedPerformanceForOwnerHeadReference, {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        stateVersion: receipt.committedStateVersion,
+        lastEventId: receipt.eventIds[0] ?? "missing",
+      }),
+    ).rejects.toThrow("COURTROOM_COMMITTED_PERFORMANCE_HEAD_STALE");
   });
 
   it("rejects non-strict, cross-boundary, stale-head, model, and citation mismatches", async () => {
@@ -1265,12 +1373,20 @@ describe("atomic generated trial-event append", () => {
       events: (await ctx.db.query("trialEvents").collect()).length,
       receipts: (await ctx.db.query("actionReceipts").collect()).length,
       calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      performances: (
+        await ctx.db.query("courtroomCommittedPerformances").collect()
+      ).length,
       projection: await ctx.db
         .query("trialProjections")
         .withIndex("by_trial", (index) => index.eq("trialId", TRIAL_ID))
         .unique(),
     }));
-    expect(counts).toMatchObject({ events: 6, receipts: 6, calls: 0 });
+    expect(counts).toMatchObject({
+      events: 6,
+      receipts: 6,
+      calls: 0,
+      performances: 0,
+    });
     expect(counts.projection).toMatchObject({
       stateVersion: 6,
       lastSequence: 6,

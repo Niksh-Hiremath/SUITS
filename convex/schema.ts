@@ -657,6 +657,42 @@ export default defineSchema({
     schemaVersion: v.string(),
   }).index("by_call_attempt", ["callId", "attempt"]),
 
+  // Presentation-only metadata is stored separately from material trial
+  // events. Rows are append-only, owner-bound, and valid only at one exact
+  // canonical projection head; raw model output and reasoning are never kept.
+  courtroomCommittedPerformances: defineTable({
+    performanceId: v.string(),
+    ownerId: v.string(),
+    trialId: v.string(),
+    callId: v.string(),
+    actionId: v.string(),
+    eventId: v.string(),
+    headStateVersion: v.number(),
+    headLastEventId: v.string(),
+    actorId: v.string(),
+    kind: v.union(
+      v.literal("witness_answer"),
+      v.literal("counsel_response"),
+      v.literal("judge_response"),
+      v.literal("objection_ruling"),
+      v.literal("negotiation_decision"),
+      v.literal("jury_deliberation"),
+    ),
+    context: v.union(
+      v.literal("courtroom"),
+      v.literal("private_settlement"),
+    ),
+    performanceJson: v.string(),
+    schemaVersion: v.string(),
+    committedAt: v.number(),
+  })
+    .index("by_performance_id", ["performanceId"])
+    .index("by_owner_trial_head", [
+      "ownerId",
+      "trialId",
+      "headLastEventId",
+    ]),
+
   // Full jury/debrief outputs remain server-only because a Terra debrief may
   // cite hidden, excluded, or unadmitted audit strata. Rows are append-only
   // and atomically bound to their canonical event and redacted model trace.

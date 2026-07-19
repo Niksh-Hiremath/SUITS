@@ -36,6 +36,14 @@ import {
   type HearingWitnessGenerationPrecommit,
 } from "../src/domain/hearing-runtime/model-boundary";
 import {
+  HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION,
+  HearingCommittedPerformanceSchema,
+  normalizeWitnessSemanticPerformance,
+  type HearingCommittedPerformance,
+  type HearingPerformanceKind,
+  type HearingSemanticPerformance,
+} from "../src/domain/hearing-runtime/performance";
+import {
   HearingObjectionRulingPrecommitSchema,
   type HearingObjectionRulingPrecommit,
 } from "../src/domain/hearing-runtime/objection-boundary";
@@ -309,6 +317,103 @@ async function sha256Hex(value: string): Promise<string> {
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
+}
+
+type PersistCommittedPerformanceInput = Readonly<{
+  ownerId: string;
+  action: TrialActionV3;
+  eventId: string;
+  callId: string;
+  kind: HearingPerformanceKind;
+  context: HearingCommittedPerformance["context"];
+  turnId: string | null;
+  outputSchemaVersion: string;
+  evidenceIds: readonly string[];
+  semantic: HearingSemanticPerformance;
+}>;
+
+/**
+ * Atomically records one presentation-only proposal at the exact post-bundle
+ * head. Callers invoke this only when the primary AI action was newly
+ * committed, so an old idempotent replay cannot resurrect historical motion.
+ */
+async function persistCommittedPerformance(
+  ctx: MutationCtx,
+  input: PersistCommittedPerformanceInput,
+): Promise<void> {
+  const projection = requireOwnedProjection(
+    await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", input.action.trialId))
+      .unique(),
+    input.ownerId,
+  );
+  const state = await loadActiveHead(ctx, projection);
+  const headLastEventId = state.eventIds.at(-1);
+  if (
+    headLastEventId === undefined ||
+    !state.eventIds.includes(input.eventId) ||
+    input.eventId !== `event:${input.action.actionId}` ||
+    input.action.modelMetadata?.model !== "gpt-5.6-luna"
+  ) {
+    throw new Error("COURTROOM_COMMITTED_PERFORMANCE_BINDING_INVALID");
+  }
+  const performance = HearingCommittedPerformanceSchema.parse({
+    schemaVersion: HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION,
+    kind: input.kind,
+    context: input.context,
+    head: {
+      trialId: state.trialId,
+      stateVersion: state.version,
+      lastEventId: headLastEventId,
+    },
+    source: {
+      callId: input.callId,
+      actionId: input.action.actionId,
+      eventId: input.eventId,
+      turnId: input.turnId,
+      responseId: input.action.responseId,
+      interruptId: input.action.interruptId,
+      model: input.action.modelMetadata.model,
+      outputSchemaVersion: input.outputSchemaVersion,
+    },
+    actor: input.action.actor,
+    evidenceIds: [...new Set(input.evidenceIds)],
+    semantic: input.semantic,
+  });
+  const performanceJson = canonicalJson(performance);
+  const existing = await ctx.db
+    .query("courtroomCommittedPerformances")
+    .withIndex("by_performance_id", (index) =>
+      index.eq("performanceId", input.eventId),
+    )
+    .unique();
+  if (existing !== null) {
+    if (
+      existing.ownerId !== input.ownerId ||
+      existing.trialId !== state.trialId ||
+      existing.performanceJson !== performanceJson
+    ) {
+      throw new Error("COURTROOM_COMMITTED_PERFORMANCE_CONFLICT");
+    }
+    return;
+  }
+  await ctx.db.insert("courtroomCommittedPerformances", {
+    performanceId: input.eventId,
+    ownerId: input.ownerId,
+    trialId: state.trialId,
+    callId: input.callId,
+    actionId: input.action.actionId,
+    eventId: input.eventId,
+    headStateVersion: state.version,
+    headLastEventId,
+    actorId: input.action.actor.actorId,
+    kind: input.kind,
+    context: input.context,
+    performanceJson,
+    schemaVersion: performance.schemaVersion,
+    committedAt: projection.updatedAt,
+  });
 }
 
 function sameCanonicalJson(left: unknown, right: unknown): boolean {
@@ -3891,6 +3996,23 @@ export const appendGeneratedForOwner = internalMutation({
       trace: generation.trace,
     });
 
+    if (!receipt.replayed) {
+      await persistCommittedPerformance(ctx, {
+        ownerId: args.ownerId,
+        action,
+        eventId: committedEventId,
+        callId: generation.callId,
+        kind: "witness_answer",
+        context: "courtroom",
+        turnId: action.payload.turnId,
+        outputSchemaVersion: generation.output.schemaVersion,
+        evidenceIds: generation.trace.acceptedCitations.evidenceIds,
+        semantic: normalizeWitnessSemanticPerformance(
+          generation.output.performance,
+        ),
+      });
+    }
+
     const committedTrace = CourtroomModelCallTraceSchema.parse({
       ...generation.trace,
       committedActionId: action.actionId,
@@ -4701,6 +4823,82 @@ async function reloadForOwner(
     nextAfterSequence: hasMore ? lastReturnedSequence : null,
   };
 }
+
+/**
+ * Returns only the presentation cue bound to the owner's exact current head.
+ * Historical rows remain auditable but are intentionally not replayed as
+ * current animation after another material event commits.
+ */
+export const readCommittedPerformanceForOwnerHead = internalQuery({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    stateVersion: v.number(),
+    lastEventId: v.string(),
+  },
+  handler: async (ctx, args): Promise<string | null> => {
+    assertIdentifier(args.ownerId, "ownerId");
+    assertIdentifier(args.trialId, "trialId");
+    assertIdentifier(args.lastEventId, "lastEventId");
+    assertNonNegativeInteger(args.stateVersion, "stateVersion");
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+        .unique(),
+      args.ownerId,
+    );
+    const state = await loadActiveHead(ctx, projection);
+    if (
+      state.version !== args.stateVersion ||
+      state.eventIds.at(-1) !== args.lastEventId
+    ) {
+      throw new Error("COURTROOM_COMMITTED_PERFORMANCE_HEAD_STALE");
+    }
+    const rows = await ctx.db
+      .query("courtroomCommittedPerformances")
+      .withIndex("by_owner_trial_head", (index) =>
+        index
+          .eq("ownerId", args.ownerId)
+          .eq("trialId", args.trialId)
+          .eq("headLastEventId", args.lastEventId),
+      )
+      .collect();
+    if (rows.length === 0) return null;
+    if (rows.length !== 1) {
+      throw new Error("COURTROOM_COMMITTED_PERFORMANCE_HEAD_CONFLICT");
+    }
+    const row = rows[0];
+    if (row === undefined) return null;
+    const performance = HearingCommittedPerformanceSchema.parse(
+      parseJsonObject(row.performanceJson, "performanceJson"),
+    );
+    const sourceEvent = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", performance.source.eventId),
+      )
+      .unique();
+    if (
+      performance.head.trialId !== args.trialId ||
+      performance.head.stateVersion !== args.stateVersion ||
+      performance.head.lastEventId !== args.lastEventId ||
+      row.performanceId !== performance.source.eventId ||
+      row.actionId !== performance.source.actionId ||
+      row.callId !== performance.source.callId ||
+      row.actorId !== performance.actor.actorId ||
+      row.kind !== performance.kind ||
+      row.context !== performance.context ||
+      row.schemaVersion !== performance.schemaVersion ||
+      sourceEvent === null ||
+      sourceEvent.trialId !== args.trialId ||
+      sourceEvent.actionId !== performance.source.actionId
+    ) {
+      throw new Error("COURTROOM_COMMITTED_PERFORMANCE_RECORD_INVALID");
+    }
+    return row.performanceJson;
+  },
+});
 
 /** Trusted server read for an owner session verified outside Convex auth. */
 export const reloadForOwnerSession = internalQuery({
