@@ -4,6 +4,7 @@ export * from "./model-boundary";
 export * from "./mock-role-adapter";
 export * from "./objection-boundary";
 export * from "./opponent-directive";
+export * from "./outstanding-rephrase";
 export * from "./projection";
 export * from "./schema";
 export * from "./settlement-boundary";
