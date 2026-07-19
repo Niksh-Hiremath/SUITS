@@ -53,6 +53,7 @@ import {
   CourtroomCommandOrchestrationError,
   orchestrateCourtroomCommand,
   orchestratePreparedCourtroomCommand,
+  orchestratePreparedCourtroomCommandResult,
   type CourtroomCommandDurableService,
 } from "./courtroom-command";
 
@@ -415,12 +416,20 @@ describe("orchestrateCourtroomCommand", () => {
     );
 
     await expect(
-      orchestratePreparedCourtroomCommand({
+      orchestratePreparedCourtroomCommandResult({
         preparation: modelPreparation(objectionRequest),
         provider,
         durableService,
       }),
-    ).resolves.toEqual(completedView());
+    ).resolves.toEqual({
+      view: completedView(),
+      objectionRulings: [
+        {
+          ruling: createObjectionRulingOutputFixture().ruling,
+          remedy: createObjectionRulingOutputFixture().remedy,
+        },
+      ],
+    });
 
     expect(prepare).not.toHaveBeenCalled();
     expect(commitObjectionRuling).toHaveBeenCalledTimes(1);

@@ -1,5 +1,6 @@
 import {
   CourtroomModelCallTraceSchema,
+  type ObjectionRulingModelOutput,
   type DebriefGeneratorModelOutput,
   type DebriefGeneratorRequest,
   type CourtroomModelCallTrace,
@@ -294,6 +295,15 @@ export type OrchestratePreparedCourtroomCommandOptions = Readonly<{
   maxModelSteps?: number;
 }>;
 
+export type CommittedObjectionRulingOutcome = Readonly<
+  Pick<ObjectionRulingModelOutput, "ruling" | "remedy">
+>;
+
+export type PreparedCourtroomCommandResult = Readonly<{
+  view: HearingRuntimeViewV1;
+  objectionRulings: readonly CommittedObjectionRulingOutcome[];
+}>;
+
 function modelStepLimit(value: number | undefined): number {
   const limit = value ?? MAX_HEARING_MODEL_STEPS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HEARING_MODEL_STEPS) {
@@ -317,7 +327,7 @@ export async function orchestrateCourtroomCommand(
     await options.durableService.prepare(command, options.signal),
   );
 
-  return runPreparedCourtroomCommand(preparation, options, limit);
+  return (await runPreparedCourtroomCommand(preparation, options, limit)).view;
 }
 
 /**
@@ -328,6 +338,13 @@ export async function orchestrateCourtroomCommand(
 export async function orchestratePreparedCourtroomCommand(
   options: OrchestratePreparedCourtroomCommandOptions,
 ): Promise<HearingRuntimeViewV1> {
+  return (await orchestratePreparedCourtroomCommandResult(options)).view;
+}
+
+/** Return committed ruling outcomes as server-local orchestration metadata. */
+export async function orchestratePreparedCourtroomCommandResult(
+  options: OrchestratePreparedCourtroomCommandOptions,
+): Promise<PreparedCourtroomCommandResult> {
   const preparation = HearingCommandPreparationSchema.parse(options.preparation);
   const limit = modelStepLimit(options.maxModelSteps);
 
@@ -342,12 +359,16 @@ async function runPreparedCourtroomCommand(
     signal?: AbortSignal;
   }>,
   limit: number,
-): Promise<HearingRuntimeViewV1> {
+): Promise<PreparedCourtroomCommandResult> {
   let preparation = initialPreparation;
+  const objectionRulings: CommittedObjectionRulingOutcome[] = [];
 
   for (let step = 0; step < limit; step += 1) {
     if (preparation.status === "completed") {
-      return HearingRuntimeViewV1Schema.parse(preparation.view);
+      return {
+        view: HearingRuntimeViewV1Schema.parse(preparation.view),
+        objectionRulings,
+      };
     }
 
     try {
@@ -458,12 +479,17 @@ async function runPreparedCourtroomCommand(
           modelMetadata: generated.modelMetadata,
           trace: generated.trace,
         });
-        preparation = HearingCommandPreparationSchema.parse(
+        const committedPreparation = HearingCommandPreparationSchema.parse(
           await options.durableService.commitObjectionRuling(
             precommit,
             options.signal,
           ),
         );
+        objectionRulings.push({
+          ruling: generated.output.ruling,
+          remedy: generated.output.remedy,
+        });
+        preparation = committedPreparation;
         continue;
       }
 
