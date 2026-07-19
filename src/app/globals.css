@@ -664,12 +664,16 @@ footer {
 
 .case-rail {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 12px;
+  min-width: 0;
 }
 
 .rail-card {
+  min-width: 0;
   padding: 22px;
+  overflow-wrap: anywhere;
   background: rgba(255, 253, 247, 0.72);
   border: 1px solid var(--line);
 }
@@ -989,7 +993,7 @@ footer {
   }
 
   .case-rail {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .run-list {
@@ -1007,7 +1011,7 @@ footer {
   }
 }
 
-@media (max-width: 650px) {
+@media (max-width: 650.98px) {
   .hearing-shell,
   .records-shell {
     width: calc(100% - 24px);

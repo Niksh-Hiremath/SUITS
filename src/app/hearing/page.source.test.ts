@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const SOURCE_PATHS = {
   page: fileURLToPath(new URL("./page.tsx", import.meta.url)),
+  globals: fileURLToPath(new URL("../globals.css", import.meta.url)),
   developerInput: fileURLToPath(
     new URL("./developer-typed-input.tsx", import.meta.url),
   ),
@@ -138,6 +139,16 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).not.toContain("<textarea");
     expect(sources.page).not.toContain("sendPcmFrame");
     expect(sources.page).not.toContain("frame.pcm");
+    expect(sources.globals).toMatch(
+      /\.case-rail\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/u,
+    );
+    expect(sources.globals).toMatch(
+      /\.rail-card\s*\{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/u,
+    );
+    expect(sources.globals).toContain(
+      "grid-template-columns: repeat(3, minmax(0, 1fr));",
+    );
+    expect(sources.globals).toContain("@media (max-width: 650.98px)");
 
     for (const gate of [
       'process.env.NODE_ENV !== "production"',
