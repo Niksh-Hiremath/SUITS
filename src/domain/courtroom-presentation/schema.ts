@@ -46,6 +46,24 @@ export const CourtroomCameraShotSchema = z.enum([
 const IdentifierSchema = z.string().trim().min(1).max(256);
 const LabelSchema = z.string().trim().min(1).max(160);
 
+export const CourtroomEvidenceDisplayStatusSchema = z.enum([
+  "uploaded",
+  "indexed",
+  "offered",
+  "admitted",
+  "excluded",
+  "withdrawn",
+]);
+
+export const CourtroomSettlementDisplayStatusSchema = z.enum([
+  "open",
+  "countered",
+  "accepted",
+  "rejected",
+  "withdrawn",
+  "expired",
+]);
+
 export const CourtroomCharacterStateSchema = z
   .object({
     slot: SceneActorKeySchema,
@@ -66,25 +84,53 @@ export const CourtroomCameraStateSchema = z
   })
   .strict();
 
-export const CourtroomDisplayStateSchema = z
+export const CourtroomDisplayDescriptorSchema = z
+  .discriminatedUnion("mode", [
+    z
+      .object({
+        mode: z.literal("idle"),
+        itemId: z.null(),
+        label: z.null(),
+        status: z.null(),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("evidence"),
+        itemId: IdentifierSchema,
+        label: LabelSchema,
+        status: CourtroomEvidenceDisplayStatusSchema,
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("settlement"),
+        itemId: IdentifierSchema,
+        label: LabelSchema.refine(
+          (label) => label === "Private settlement conference",
+          "Settlement display labels must remain private and generic",
+        ),
+        status: CourtroomSettlementDisplayStatusSchema,
+      })
+      .strict(),
+  ])
+  .readonly();
+
+export const CourtroomDisplayStateSchema = CourtroomDisplayDescriptorSchema;
+
+export const CourtroomPresentationHeadSchema = z
   .object({
-    mode: z.enum(["idle", "evidence", "settlement"]),
-    itemId: IdentifierSchema.nullable(),
-    label: LabelSchema.nullable(),
-    status: IdentifierSchema.nullable(),
+    trialId: IdentifierSchema,
+    stateVersion: z.number().int().nonnegative(),
+    lastEventId: IdentifierSchema,
   })
-  .strict();
+  .strict()
+  .readonly();
 
 export const CourtroomPresentationFrameSchema = z
   .object({
     schemaVersion: z.literal(COURTROOM_PRESENTATION_FRAME_SCHEMA_VERSION),
-    head: z
-      .object({
-        trialId: IdentifierSchema,
-        stateVersion: z.number().int().nonnegative(),
-        lastEventId: IdentifierSchema,
-      })
-      .strict(),
+    head: CourtroomPresentationHeadSchema,
     quality: CourtroomQualitySchema,
     reducedMotion: z.boolean(),
     camera: CourtroomCameraStateSchema,
@@ -107,6 +153,13 @@ export const CourtroomPresentationFrameSchema = z
 export type SceneActorKey = z.infer<typeof SceneActorKeySchema>;
 export type CourtroomAnimation = z.infer<typeof CourtroomAnimationSchema>;
 export type CourtroomQuality = z.infer<typeof CourtroomQualitySchema>;
+export type CourtroomDisplayDescriptor = z.infer<
+  typeof CourtroomDisplayDescriptorSchema
+>;
+export type CourtroomDisplayState = CourtroomDisplayDescriptor;
+export type CourtroomPresentationHead = z.infer<
+  typeof CourtroomPresentationHeadSchema
+>;
 export type CourtroomPresentationFrame = z.infer<
   typeof CourtroomPresentationFrameSchema
 >;

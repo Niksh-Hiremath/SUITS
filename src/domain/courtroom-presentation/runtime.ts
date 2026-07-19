@@ -5,15 +5,22 @@ import type { HearingPerformanceEvent } from "@/lib/speech/hearing-performance";
 import {
   CourtroomAnimationSchema,
   CourtroomCameraShotSchema,
+  CourtroomDisplayDescriptorSchema,
+  CourtroomEvidenceDisplayStatusSchema,
   CourtroomPostureSchema,
+  CourtroomPresentationHeadSchema,
   SceneActorKeySchema,
   type CourtroomAnimation,
+  type CourtroomDisplayDescriptor,
+  type CourtroomPresentationHead,
   type SceneActorKey,
 } from "./schema";
 
 export const COURTROOM_PRESENTATION_RUNTIME_SCHEMA_VERSION =
-  "courtroom-presentation-runtime.v1" as const;
+  "courtroom-presentation-runtime.v2" as const;
 export const COURTROOM_CAMERA_HYSTERESIS_MS = 180;
+export const COURTROOM_DISPLAY_TRANSITION_MS = 240;
+export const COURTROOM_GAVEL_PHASE_MS = 360;
 export const COURTROOM_MAX_ACTIVE_PLAYBACK_CUES = 32;
 export const COURTROOM_MAX_RETIRED_PLAYBACK_IDENTITIES = 256;
 export const COURTROOM_MAX_RETIRED_USER_SPEECH_IDENTITIES = 64;
@@ -27,6 +34,14 @@ export const CourtroomMouthShapeSchema = z.enum([
   "round",
   "narrow",
 ]);
+
+export const COURTROOM_IDLE_DISPLAY =
+  CourtroomDisplayDescriptorSchema.parse({
+    mode: "idle",
+    itemId: null,
+    label: null,
+    status: null,
+  });
 
 const SpeechIdentifierSchema = z
   .string()
@@ -134,6 +149,140 @@ const CourtroomRuntimeCameraSchema = z
   .strict()
   .readonly();
 
+export const CourtroomDisplayPhaseSchema = z.enum([
+  "steady",
+  "entering",
+  "updating",
+  "switching",
+  "exiting",
+]);
+
+export const CourtroomRulingPhaseSchema = z.enum([
+  "idle",
+  "ready",
+  "gavel",
+  "holding",
+]);
+
+export const CourtroomRuntimeDisplayTransitionSchema = z
+  .object({
+    from: CourtroomDisplayDescriptorSchema,
+    to: CourtroomDisplayDescriptorSchema,
+    phase: z.enum(["entering", "updating", "switching", "exiting"]),
+    startedAtMs: z.number().finite().nonnegative(),
+    endsAtMs: z.number().finite().nonnegative(),
+  })
+  .strict()
+  .refine(({ startedAtMs, endsAtMs }) => endsAtMs > startedAtMs, {
+    message: "Display transitions must have a positive duration",
+    path: ["endsAtMs"],
+  })
+  .superRefine((transition, context) => {
+    if (sameDisplayDescriptor(transition.from, transition.to)) {
+      context.addIssue({
+        code: "custom",
+        message: "Display transitions must change the displayed descriptor",
+        path: ["to"],
+      });
+    } else if (
+      transition.phase !==
+      displayTransitionPhase(transition.from, transition.to)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Display transition phase does not match its descriptors",
+        path: ["phase"],
+      });
+    }
+    if (
+      transition.endsAtMs - transition.startedAtMs !==
+      COURTROOM_DISPLAY_TRANSITION_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Display transition duration is not allowlisted",
+        path: ["endsAtMs"],
+      });
+    }
+  })
+  .readonly();
+
+export const CourtroomRuntimeRulingTransitionSchema = z
+  .discriminatedUnion("phase", [
+    z
+      .object({
+        identity: CourtroomRuntimePlaybackIdentitySchema,
+        phase: z.literal("ready"),
+        startedAtMs: z.number().finite().nonnegative(),
+        endsAtMs: z.null(),
+      })
+      .strict(),
+    z
+      .object({
+        identity: CourtroomRuntimePlaybackIdentitySchema,
+        phase: z.literal("gavel"),
+        startedAtMs: z.number().finite().nonnegative(),
+        endsAtMs: z.number().finite().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        identity: CourtroomRuntimePlaybackIdentitySchema,
+        phase: z.literal("holding"),
+        startedAtMs: z.number().finite().nonnegative(),
+        endsAtMs: z.null(),
+      })
+      .strict(),
+  ])
+  .superRefine((transition, context) => {
+    if (
+      transition.phase === "gavel" &&
+      transition.endsAtMs <= transition.startedAtMs
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The gavel phase must have a positive duration",
+        path: ["endsAtMs"],
+      });
+    }
+    if (
+      transition.phase === "gavel" &&
+      transition.endsAtMs - transition.startedAtMs !== COURTROOM_GAVEL_PHASE_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Gavel phase duration is not allowlisted",
+        path: ["endsAtMs"],
+      });
+    }
+  })
+  .readonly();
+
+export const CourtroomRuntimeAnnouncementSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("evidence"),
+        change: z.enum(["opened", "updated", "switched", "closed"]),
+        label: z.string().trim().min(1).max(160),
+        status: CourtroomEvidenceDisplayStatusSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("settlement"),
+        change: z.enum(["opened", "updated", "closed"]),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("ruling"),
+        change: z.enum(["ready", "gavel", "holding", "complete"]),
+      })
+      .strict(),
+  ])
+  .readonly();
+
 export const CourtroomPresentationRuntimeStateSchema = z
   .object({
     schemaVersion: z.literal(COURTROOM_PRESENTATION_RUNTIME_SCHEMA_VERSION),
@@ -141,6 +290,11 @@ export const CourtroomPresentationRuntimeStateSchema = z
     reducedMotion: z.boolean(),
     baseFocus: SceneActorKeySchema.nullable(),
     baseCameraShot: CourtroomCameraShotSchema,
+    baseDisplay: CourtroomDisplayDescriptorSchema,
+    displayHead: CourtroomPresentationHeadSchema.nullable(),
+    displayTransition: CourtroomRuntimeDisplayTransitionSchema.nullable(),
+    rulingTransition: CourtroomRuntimeRulingTransitionSchema.nullable(),
+    announcement: CourtroomRuntimeAnnouncementSchema.nullable(),
     nextOrder: z.number().int().positive(),
     playbackHighWater: CourtroomRuntimePlaybackHighWaterSchema.nullable(),
     highestUserSpeechGeneration: z.number().int().nonnegative(),
@@ -224,6 +378,54 @@ export const CourtroomPresentationRuntimeStateSchema = z
         message: "Active user speech must match the current controller generation",
       });
     }
+    if (
+      state.displayTransition !== null &&
+      !sameDisplayDescriptor(state.displayTransition.to, state.baseDisplay)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["displayTransition", "to"],
+        message: "A display transition must target the durable base display",
+      });
+    }
+    if (state.reducedMotion && state.displayTransition !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["displayTransition"],
+        message: "Reduced motion cannot retain a timed display transition",
+      });
+    }
+    if (state.reducedMotion && state.rulingTransition?.phase === "gavel") {
+      context.addIssue({
+        code: "custom",
+        path: ["rulingTransition", "phase"],
+        message: "Reduced motion cannot retain a timed gavel phase",
+      });
+    }
+    if (state.rulingTransition !== null) {
+      const rulingIdentity = state.rulingTransition.identity;
+      const rulingCue = state.playbackCues.find(
+        (cue) =>
+          cue.identity.purpose === "ruling" &&
+          samePlaybackIdentity(cue.identity, rulingIdentity),
+      );
+      if (!rulingCue) {
+        context.addIssue({
+          code: "custom",
+          path: ["rulingTransition", "identity"],
+          message: "A ruling transition must belong to an active ruling cue",
+        });
+      } else if (
+        (state.rulingTransition.phase === "ready") !==
+        (rulingCue.phase === "requested")
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["rulingTransition", "phase"],
+          message: "Ruling phase must match the exact playback lifecycle",
+        });
+      }
+    }
   })
   .readonly();
 
@@ -249,6 +451,13 @@ export const CourtroomPresentationRuntimeSnapshotSchema = z
       .readonly(),
     playback: CourtroomRuntimeSnapshotPlaybackSchema.nullable(),
     camera: CourtroomRuntimeCameraSchema,
+    display: CourtroomDisplayDescriptorSchema,
+    displayPhase: CourtroomDisplayPhaseSchema,
+    displayTransition: CourtroomRuntimeDisplayTransitionSchema.nullable(),
+    rulingPhase: CourtroomRulingPhaseSchema,
+    rulingTransition: CourtroomRuntimeRulingTransitionSchema.nullable(),
+    transitionActive: z.boolean(),
+    announcement: CourtroomRuntimeAnnouncementSchema.nullable(),
   })
   .strict()
   .readonly();
@@ -267,6 +476,17 @@ export type CourtroomPresentationRuntimeState = z.infer<
 export type CourtroomPresentationRuntimeSnapshot = z.infer<
   typeof CourtroomPresentationRuntimeSnapshotSchema
 >;
+export type CourtroomDisplayPhase = z.infer<typeof CourtroomDisplayPhaseSchema>;
+export type CourtroomRulingPhase = z.infer<typeof CourtroomRulingPhaseSchema>;
+export type CourtroomRuntimeAnnouncement = z.infer<
+  typeof CourtroomRuntimeAnnouncementSchema
+>;
+export type CourtroomRuntimeDisplayTransition = z.infer<
+  typeof CourtroomRuntimeDisplayTransitionSchema
+>;
+export type CourtroomRuntimeRulingTransition = z.infer<
+  typeof CourtroomRuntimeRulingTransitionSchema
+>;
 
 type PlaybackEvent = Extract<
   HearingPerformanceEvent,
@@ -283,6 +503,12 @@ type TimingEvent = Extract<
   { type: "timing_scheduled" }
 >;
 type PlaybackCue = z.infer<typeof CourtroomRuntimePlaybackCueSchema>;
+type DisplayTransition = NonNullable<
+  CourtroomPresentationRuntimeState["displayTransition"]
+>;
+type RulingTransition = NonNullable<
+  CourtroomPresentationRuntimeState["rulingTransition"]
+>;
 
 type RuntimeSelection = Readonly<{
   source: "base" | "user_speech" | "playback";
@@ -361,6 +587,146 @@ function sameUserSpeechIdentity(
     left.sceneActor === right.sceneActor &&
     left.mode === right.mode
   );
+}
+
+function sameDisplayDescriptor(
+  left: CourtroomDisplayDescriptor,
+  right: CourtroomDisplayDescriptor,
+): boolean {
+  if (left.mode !== right.mode) return false;
+  if (left.mode === "idle" && right.mode === "idle") return true;
+  if (left.mode === "evidence" && right.mode === "evidence") {
+    return (
+      left.itemId === right.itemId &&
+      left.label === right.label &&
+      left.status === right.status
+    );
+  }
+  if (left.mode === "settlement" && right.mode === "settlement") {
+    return (
+      left.itemId === right.itemId &&
+      left.label === right.label &&
+      left.status === right.status
+    );
+  }
+  return false;
+}
+
+function samePresentationHead(
+  left: CourtroomPresentationHead,
+  right: CourtroomPresentationHead,
+): boolean {
+  return (
+    left.trialId === right.trialId &&
+    left.stateVersion === right.stateVersion &&
+    left.lastEventId === right.lastEventId
+  );
+}
+
+type DisplayHeadComparison =
+  | "baseline"
+  | "newer"
+  | "duplicate"
+  | "stale";
+
+function compareDisplayHead(
+  incoming: CourtroomPresentationHead,
+  current: CourtroomPresentationHead | null,
+): DisplayHeadComparison {
+  if (current === null || incoming.trialId !== current.trialId) {
+    return "baseline";
+  }
+  if (incoming.stateVersion > current.stateVersion) return "newer";
+  if (incoming.stateVersion < current.stateVersion) return "stale";
+  return samePresentationHead(incoming, current) ? "duplicate" : "stale";
+}
+
+function displayTransitionPhase(
+  from: CourtroomDisplayDescriptor,
+  to: CourtroomDisplayDescriptor,
+): Exclude<CourtroomDisplayPhase, "steady"> {
+  if (from.mode === "idle") return "entering";
+  if (to.mode === "idle") return "exiting";
+  if (from.mode === to.mode && from.itemId === to.itemId) return "updating";
+  return "switching";
+}
+
+function displayAnnouncement(
+  from: CourtroomDisplayDescriptor,
+  to: CourtroomDisplayDescriptor,
+): CourtroomRuntimeAnnouncement {
+  if (to.mode === "evidence") {
+    return CourtroomRuntimeAnnouncementSchema.parse({
+      kind: "evidence",
+      change:
+        from.mode !== "evidence"
+          ? "opened"
+          : from.itemId === to.itemId
+            ? "updated"
+            : "switched",
+      label: to.label,
+      status: to.status,
+    });
+  }
+  if (to.mode === "settlement") {
+    return CourtroomRuntimeAnnouncementSchema.parse({
+      kind: "settlement",
+      change:
+        from.mode === "settlement" && from.itemId === to.itemId
+          ? "updated"
+          : "opened",
+    });
+  }
+  if (from.mode === "evidence") {
+    return CourtroomRuntimeAnnouncementSchema.parse({
+      kind: "evidence",
+      change: "closed",
+      label: from.label,
+      status: from.status,
+    });
+  }
+  return CourtroomRuntimeAnnouncementSchema.parse({
+    kind: "settlement",
+    change: "closed",
+  });
+}
+
+export function courtroomRuntimeAnnouncementText(
+  announcement: CourtroomRuntimeAnnouncement | null,
+): string | null {
+  if (announcement === null) return null;
+  switch (announcement.kind) {
+    case "evidence":
+      switch (announcement.change) {
+        case "opened":
+        case "switched":
+          return `${announcement.label} displayed. Status: ${announcement.status}.`;
+        case "updated":
+          return `${announcement.label} updated. Status: ${announcement.status}.`;
+        case "closed":
+          return `${announcement.label} display closed.`;
+      }
+    case "settlement":
+      switch (announcement.change) {
+        case "opened":
+          return "Private settlement channel opened.";
+        case "updated":
+          return "Private settlement channel updated.";
+        case "closed":
+          return "Private settlement channel closed.";
+      }
+    case "ruling":
+      switch (announcement.change) {
+        case "ready":
+          return "Judge preparing a ruling.";
+        case "gavel":
+          return "Judge gaveled and is delivering the ruling.";
+        case "holding":
+          return "Judge is delivering the ruling.";
+        case "complete":
+          return "Judge completed the ruling.";
+      }
+  }
 }
 
 function comparePlaybackFence(
@@ -624,6 +990,80 @@ function mergeMouthCues(
     .slice(0, COURTROOM_MAX_MOUTH_CUES);
 }
 
+function resolvedDisplayTransition(
+  transition: DisplayTransition | null,
+  observedAtMs: number | undefined,
+): DisplayTransition | null {
+  if (
+    transition === null ||
+    observedAtMs === undefined ||
+    observedAtMs < transition.endsAtMs
+  ) {
+    return transition;
+  }
+  return null;
+}
+
+function resolvedRulingTransition(
+  transition: RulingTransition | null,
+  observedAtMs: number | undefined,
+): RulingTransition | null {
+  if (
+    transition === null ||
+    transition.phase !== "gavel" ||
+    observedAtMs === undefined ||
+    observedAtMs < transition.endsAtMs
+  ) {
+    return transition;
+  }
+  return CourtroomRuntimeRulingTransitionSchema.parse({
+    identity: transition.identity,
+    phase: "holding",
+    startedAtMs: transition.startedAtMs,
+    endsAtMs: null,
+  });
+}
+
+function displayedDescriptor(
+  baseDisplay: CourtroomDisplayDescriptor,
+  transition: DisplayTransition | null,
+): CourtroomDisplayDescriptor {
+  return transition?.phase === "exiting" ? transition.from : baseDisplay;
+}
+
+function presentationSnapshotFields(
+  state: CourtroomPresentationRuntimeState,
+  observedAtMs: number | undefined,
+): Pick<
+  CourtroomPresentationRuntimeSnapshot,
+  | "announcement"
+  | "display"
+  | "displayPhase"
+  | "displayTransition"
+  | "rulingPhase"
+  | "rulingTransition"
+  | "transitionActive"
+> {
+  const displayTransition = resolvedDisplayTransition(
+    state.displayTransition,
+    observedAtMs,
+  );
+  const rulingTransition = resolvedRulingTransition(
+    state.rulingTransition,
+    observedAtMs,
+  );
+  return {
+    announcement: state.announcement,
+    display: displayedDescriptor(state.baseDisplay, displayTransition),
+    displayPhase: displayTransition?.phase ?? "steady",
+    displayTransition,
+    rulingPhase: rulingTransition?.phase ?? "idle",
+    rulingTransition,
+    transitionActive:
+      displayTransition !== null || rulingTransition?.phase === "gavel",
+  };
+}
+
 function finishRuntimeChange(
   state: CourtroomPresentationRuntimeState,
   update: Omit<CourtroomPresentationRuntimeState, "revision" | "schemaVersion">,
@@ -650,6 +1090,8 @@ export type CreateCourtroomPresentationRuntimeInput = Readonly<{
   reducedMotion?: boolean;
   baseFocus?: SceneActorKey | null;
   baseCameraShot?: z.infer<typeof CourtroomCameraShotSchema>;
+  baseDisplay?: CourtroomDisplayDescriptor;
+  displayHead?: CourtroomPresentationHead | null;
   observedAtMs?: number;
 }>;
 
@@ -664,6 +1106,11 @@ export function createCourtroomPresentationRuntime(
     reducedMotion,
     baseFocus: input.baseFocus ?? null,
     baseCameraShot: input.baseCameraShot ?? "courtroom_wide",
+    baseDisplay: input.baseDisplay ?? COURTROOM_IDLE_DISPLAY,
+    displayHead: input.displayHead ?? null,
+    displayTransition: null,
+    rulingTransition: null,
+    announcement: null,
     nextOrder: 1,
     playbackHighWater: null,
     highestUserSpeechGeneration: 0,
@@ -698,6 +1145,8 @@ export function reduceCourtroomPresentationRuntime(
   let userSpeech = state.userSpeech;
   let retiredUserSpeechIdentities = state.retiredUserSpeechIdentities;
   let highestUserSpeechGeneration = state.highestUserSpeechGeneration;
+  let rulingTransition = state.rulingTransition;
+  let announcement = state.announcement;
   let nextOrder = state.nextOrder;
   let changed = false;
 
@@ -724,6 +1173,10 @@ export function reduceCourtroomPresentationRuntime(
         ...newlyRetired,
       ]);
       playbackCues = [];
+      if (rulingTransition !== null) {
+        rulingTransition = null;
+        if (announcement?.kind === "ruling") announcement = null;
+      }
       playbackHighWater = CourtroomRuntimePlaybackHighWaterSchema.parse({
         generation: identity.generation,
         playbackFence: identity.playbackFence,
@@ -771,6 +1224,18 @@ export function reduceCourtroomPresentationRuntime(
           ...playbackCues,
           { identity, phase: "requested", order: nextOrder, mouthCues: [] },
         ];
+        if (identity.purpose === "ruling") {
+          rulingTransition = CourtroomRuntimeRulingTransitionSchema.parse({
+            identity,
+            phase: "ready",
+            startedAtMs: atMs,
+            endsAtMs: null,
+          });
+          announcement = CourtroomRuntimeAnnouncementSchema.parse({
+            kind: "ruling",
+            change: "ready",
+          });
+        }
         nextOrder += 1;
         changed = true;
       }
@@ -788,6 +1253,24 @@ export function reduceCourtroomPresentationRuntime(
             ? { ...candidate, phase: "started" as const }
             : candidate,
         );
+        if (
+          identity.purpose === "ruling" &&
+          rulingTransition !== null &&
+          samePlaybackIdentity(rulingTransition.identity, identity)
+        ) {
+          rulingTransition = CourtroomRuntimeRulingTransitionSchema.parse({
+            identity,
+            phase: state.reducedMotion ? "holding" : "gavel",
+            startedAtMs: atMs,
+            endsAtMs: state.reducedMotion
+              ? null
+              : atMs + COURTROOM_GAVEL_PHASE_MS,
+          });
+          announcement = CourtroomRuntimeAnnouncementSchema.parse({
+            kind: "ruling",
+            change: state.reducedMotion ? "holding" : "gavel",
+          });
+        }
         changed = true;
       }
       break;
@@ -823,6 +1306,20 @@ export function reduceCourtroomPresentationRuntime(
       );
       if (remaining.length !== playbackCues.length) {
         playbackCues = remaining;
+        changed = true;
+      }
+      if (
+        rulingTransition !== null &&
+        samePlaybackIdentity(rulingTransition.identity, identity)
+      ) {
+        const completed = rulingTransition.phase !== "ready";
+        rulingTransition = null;
+        announcement = completed && event.status === "completed"
+          ? CourtroomRuntimeAnnouncementSchema.parse({
+              kind: "ruling",
+              change: "complete",
+            })
+          : null;
         changed = true;
       }
       if (
@@ -897,6 +1394,11 @@ export function reduceCourtroomPresentationRuntime(
       reducedMotion: state.reducedMotion,
       baseFocus: state.baseFocus,
       baseCameraShot: state.baseCameraShot,
+      baseDisplay: state.baseDisplay,
+      displayHead: state.displayHead,
+      displayTransition: state.displayTransition,
+      rulingTransition,
+      announcement,
       nextOrder,
       playbackHighWater,
       highestUserSpeechGeneration,
@@ -915,12 +1417,34 @@ export function advanceCourtroomPresentationRuntime(
   state: CourtroomPresentationRuntimeState,
   observedAtMs: number,
 ): CourtroomPresentationRuntimeState {
+  const atMs = checkedTime(observedAtMs);
+  const displayTransition = resolvedDisplayTransition(
+    state.displayTransition,
+    atMs,
+  );
+  const rulingTransition = resolvedRulingTransition(
+    state.rulingTransition,
+    atMs,
+  );
+  const announcement =
+    state.rulingTransition?.phase === "gavel" &&
+    rulingTransition?.phase === "holding"
+      ? CourtroomRuntimeAnnouncementSchema.parse({
+          kind: "ruling",
+          change: "holding",
+        })
+      : state.announcement;
   return finishRuntimeChange(
     state,
     {
       reducedMotion: state.reducedMotion,
       baseFocus: state.baseFocus,
       baseCameraShot: state.baseCameraShot,
+      baseDisplay: state.baseDisplay,
+      displayHead: state.displayHead,
+      displayTransition,
+      rulingTransition,
+      announcement,
       nextOrder: state.nextOrder,
       playbackHighWater: state.playbackHighWater,
       highestUserSpeechGeneration: state.highestUserSpeechGeneration,
@@ -930,14 +1454,35 @@ export function advanceCourtroomPresentationRuntime(
       retiredUserSpeechIdentities: state.retiredUserSpeechIdentities,
       camera: state.camera,
     },
-    checkedTime(observedAtMs),
-    false,
+    atMs,
+    displayTransition !== state.displayTransition ||
+      rulingTransition !== state.rulingTransition,
   );
+}
+
+export function nextCourtroomPresentationWakeAt(
+  state: CourtroomPresentationRuntimeState,
+): number | null {
+  const deadlines: number[] = [];
+  if (state.camera.pending !== null) {
+    deadlines.push(
+      state.camera.pending.sinceMs + COURTROOM_CAMERA_HYSTERESIS_MS,
+    );
+  }
+  if (state.displayTransition !== null) {
+    deadlines.push(state.displayTransition.endsAtMs);
+  }
+  if (state.rulingTransition?.phase === "gavel") {
+    deadlines.push(state.rulingTransition.endsAtMs);
+  }
+  return deadlines.length === 0 ? null : Math.min(...deadlines);
 }
 
 export type RebaseCourtroomPresentationRuntimeInput = Readonly<{
   baseFocus: SceneActorKey | null;
   baseCameraShot: z.infer<typeof CourtroomCameraShotSchema>;
+  baseDisplay?: CourtroomDisplayDescriptor;
+  displayHead?: CourtroomPresentationHead;
   reducedMotion: boolean;
   observedAtMs: number;
 }>;
@@ -947,16 +1492,99 @@ export function rebaseCourtroomPresentationRuntime(
   input: RebaseCourtroomPresentationRuntimeInput,
 ): CourtroomPresentationRuntimeState {
   const atMs = checkedTime(input.observedAtMs);
+  const hasDisplay = input.baseDisplay !== undefined;
+  const hasDisplayHead = input.displayHead !== undefined;
+  if (hasDisplay !== hasDisplayHead) {
+    throw new TypeError(
+      "A presentation display rebase requires both baseDisplay and displayHead",
+    );
+  }
+
+  let baseDisplay = state.baseDisplay;
+  let displayHead = state.displayHead;
+  let displayTransition = resolvedDisplayTransition(
+    state.displayTransition,
+    atMs,
+  );
+  let rulingTransition = resolvedRulingTransition(
+    state.rulingTransition,
+    atMs,
+  );
+  let announcement = state.announcement;
+
+  if (input.reducedMotion) {
+    displayTransition = null;
+    if (rulingTransition?.phase === "gavel") {
+      rulingTransition = CourtroomRuntimeRulingTransitionSchema.parse({
+        identity: rulingTransition.identity,
+        phase: "holding",
+        startedAtMs: rulingTransition.startedAtMs,
+        endsAtMs: null,
+      });
+      announcement = CourtroomRuntimeAnnouncementSchema.parse({
+        kind: "ruling",
+        change: "holding",
+      });
+    }
+  }
+
+  if (input.baseDisplay !== undefined && input.displayHead !== undefined) {
+    const incomingDisplay = CourtroomDisplayDescriptorSchema.parse(
+      input.baseDisplay,
+    );
+    const incomingHead = CourtroomPresentationHeadSchema.parse(
+      input.displayHead,
+    );
+    const headComparison = compareDisplayHead(incomingHead, displayHead);
+    if (headComparison === "baseline") {
+      baseDisplay = incomingDisplay;
+      displayHead = incomingHead;
+      displayTransition = null;
+      if (
+        announcement?.kind === "evidence" ||
+        announcement?.kind === "settlement"
+      ) {
+        announcement = null;
+      }
+    } else if (headComparison === "newer") {
+      const from = displayedDescriptor(baseDisplay, displayTransition);
+      displayHead = incomingHead;
+      if (!sameDisplayDescriptor(baseDisplay, incomingDisplay)) {
+        baseDisplay = incomingDisplay;
+        announcement = displayAnnouncement(from, incomingDisplay);
+        displayTransition = input.reducedMotion
+          ? null
+          : CourtroomRuntimeDisplayTransitionSchema.parse({
+              from,
+              to: incomingDisplay,
+              phase: displayTransitionPhase(from, incomingDisplay),
+              startedAtMs: atMs,
+              endsAtMs: atMs + COURTROOM_DISPLAY_TRANSITION_MS,
+            });
+      }
+    }
+  }
+
   const changed =
     state.baseFocus !== input.baseFocus ||
     state.baseCameraShot !== input.baseCameraShot ||
-    state.reducedMotion !== input.reducedMotion;
+    state.reducedMotion !== input.reducedMotion ||
+    baseDisplay !== state.baseDisplay ||
+    displayHead !== state.displayHead ||
+    displayTransition !== state.displayTransition ||
+    rulingTransition !== state.rulingTransition ||
+    announcement !== state.announcement;
   return finishRuntimeChange(
     state,
     {
       reducedMotion: input.reducedMotion,
       baseFocus: input.baseFocus,
       baseCameraShot: input.baseCameraShot,
+      baseDisplay,
+      displayHead,
+      displayTransition,
+      rulingTransition,
+      announcement,
       nextOrder: state.nextOrder,
       playbackHighWater: state.playbackHighWater,
       highestUserSpeechGeneration: state.highestUserSpeechGeneration,
@@ -971,10 +1599,13 @@ export function rebaseCourtroomPresentationRuntime(
   );
 }
 
-function playbackAnimation(cue: PlaybackCue): CourtroomAnimation {
+function playbackAnimation(
+  cue: PlaybackCue,
+  rulingPhase: CourtroomRulingPhase,
+): CourtroomAnimation {
   switch (cue.identity.purpose) {
     case "ruling":
-      return "ruling";
+      return rulingPhase === "gavel" ? "gavel" : "ruling";
     case "objection":
       return "objecting";
     case "correction":
@@ -1022,18 +1653,29 @@ export function selectCourtroomPresentationRuntime(
 ): CourtroomPresentationRuntimeSnapshot {
   if (observedAtMs !== undefined) checkedTime(observedAtMs);
   const selection = selectRuntimeCue(state);
+  const presentation = presentationSnapshotFields(state, observedAtMs);
   const cue = selection.playback;
   if (cue) {
+    const rulingPhase =
+      cue.identity.purpose === "ruling" &&
+      presentation.rulingTransition !== null &&
+      samePlaybackIdentity(
+        cue.identity,
+        presentation.rulingTransition.identity,
+      )
+        ? presentation.rulingPhase
+        : "idle";
     return CourtroomPresentationRuntimeSnapshotSchema.parse({
       source: "playback",
       sceneActor: cue.identity.sceneActor,
       priority: selection.priority,
-      animation: playbackAnimation(cue),
+      animation: playbackAnimation(cue, rulingPhase),
       posture: playbackPosture(cue),
       mouthShape: sampledMouthShape(cue, observedAtMs, state.reducedMotion),
       mouthCues: cue.mouthCues,
       playback: { identity: cue.identity, phase: cue.phase },
       camera: state.camera,
+      ...presentation,
     });
   }
   if (selection.source === "user_speech") {
@@ -1047,6 +1689,7 @@ export function selectCourtroomPresentationRuntime(
       mouthCues: [],
       playback: null,
       camera: state.camera,
+      ...presentation,
     });
   }
   return CourtroomPresentationRuntimeSnapshotSchema.parse({
@@ -1059,5 +1702,6 @@ export function selectCourtroomPresentationRuntime(
     mouthCues: [],
     playback: null,
     camera: state.camera,
+    ...presentation,
   });
 }

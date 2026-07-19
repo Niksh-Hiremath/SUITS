@@ -8,17 +8,26 @@ import {
 
 import {
   COURTROOM_CAMERA_HYSTERESIS_MS,
+  COURTROOM_DISPLAY_TRANSITION_MS,
+  COURTROOM_GAVEL_PHASE_MS,
   COURTROOM_MAX_ACTIVE_PLAYBACK_CUES,
   COURTROOM_MAX_RETIRED_PLAYBACK_IDENTITIES,
   COURTROOM_MAX_RETIRED_USER_SPEECH_IDENTITIES,
   CourtroomPresentationRuntimeStateSchema,
   advanceCourtroomPresentationRuntime,
+  courtroomRuntimeAnnouncementText,
   createCourtroomPresentationRuntime,
+  nextCourtroomPresentationWakeAt,
   rebaseCourtroomPresentationRuntime,
   reduceCourtroomPresentationRuntime,
   resetCourtroomPresentationRuntime,
   selectCourtroomPresentationRuntime,
 } from "./runtime";
+import {
+  CourtroomDisplayDescriptorSchema,
+  type CourtroomDisplayDescriptor,
+  type CourtroomPresentationHead,
+} from "./schema";
 
 type RequestedEvent = Extract<
   HearingPerformanceEvent,
@@ -122,6 +131,64 @@ function userEnded(
     observedAtMs: 20,
     timestampSource: "speech_service",
     reason: "vad_end",
+  });
+}
+
+const idleDisplay = CourtroomDisplayDescriptorSchema.parse({
+  mode: "idle",
+  itemId: null,
+  label: null,
+  status: null,
+});
+
+function evidenceDisplay(
+  status: "uploaded" | "indexed" | "offered" | "admitted" | "excluded" | "withdrawn" =
+    "offered",
+  itemId = "evidence:ledger",
+): CourtroomDisplayDescriptor {
+  return CourtroomDisplayDescriptorSchema.parse({
+    mode: "evidence",
+    itemId,
+    label: "Ledger excerpt",
+    status,
+  });
+}
+
+function settlementDisplay(
+  status: "open" | "countered" | "accepted" | "rejected" | "withdrawn" | "expired" =
+    "open",
+  itemId = "offer:private",
+): CourtroomDisplayDescriptor {
+  return CourtroomDisplayDescriptorSchema.parse({
+    mode: "settlement",
+    itemId,
+    label: "Private settlement conference",
+    status,
+  });
+}
+
+function presentationHead(
+  stateVersion: number,
+  lastEventId = `event:${stateVersion}`,
+  trialId = "trial:presentation",
+): CourtroomPresentationHead {
+  return { trialId, stateVersion, lastEventId };
+}
+
+function rebaseDisplay(
+  state: ReturnType<typeof createCourtroomPresentationRuntime>,
+  baseDisplay: CourtroomDisplayDescriptor,
+  displayHead: CourtroomPresentationHead,
+  observedAtMs: number,
+  reducedMotion = state.reducedMotion,
+) {
+  return rebaseCourtroomPresentationRuntime(state, {
+    baseFocus: state.baseFocus,
+    baseCameraShot: state.baseCameraShot,
+    baseDisplay,
+    displayHead,
+    reducedMotion,
+    observedAtMs,
   });
 }
 
@@ -1001,6 +1068,491 @@ describe("courtroom presentation runtime", () => {
     expect(speech.retiredUserSpeechIdentities).toHaveLength(
       COURTROOM_MAX_RETIRED_USER_SPEECH_IDENTITIES,
     );
+  });
+
+  it("enforces a strict, private-safe display descriptor union", () => {
+    const evidence = evidenceDisplay("admitted");
+    const settlement = settlementDisplay();
+
+    expect(evidence).toMatchObject({
+      mode: "evidence",
+      status: "admitted",
+    });
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(Object.isFrozen(settlement)).toBe(true);
+    expect(() =>
+      CourtroomDisplayDescriptorSchema.parse({
+        mode: "idle",
+        itemId: "evidence:leak",
+        label: null,
+        status: null,
+      }),
+    ).toThrow();
+    expect(() =>
+      CourtroomDisplayDescriptorSchema.parse({
+        mode: "evidence",
+        itemId: "evidence:ledger",
+        label: "Ledger excerpt",
+        status: "pending",
+      }),
+    ).toThrow();
+    expect(() =>
+      CourtroomDisplayDescriptorSchema.parse({
+        mode: "settlement",
+        itemId: "offer:private",
+        label: "Pay 5000 credits",
+        status: "open",
+      }),
+    ).toThrow();
+    expect(() =>
+      CourtroomDisplayDescriptorSchema.parse({
+        ...settlement,
+        privateTerms: "secret",
+      }),
+    ).toThrow();
+  });
+
+  it("establishes a reload display baseline without replay and fences stale heads", () => {
+    const baseline = evidenceDisplay("offered");
+    let state = createCourtroomPresentationRuntime();
+    state = rebaseDisplay(state, baseline, presentationHead(7), 100);
+
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      display: baseline,
+      displayPhase: "steady",
+      displayTransition: null,
+      announcement: null,
+    });
+    expect(state.displayHead).toEqual(presentationHead(7));
+
+    const duplicate = rebaseDisplay(
+      state,
+      baseline,
+      presentationHead(7),
+      101,
+    );
+    expect(duplicate).toBe(state);
+
+    const stale = rebaseDisplay(
+      state,
+      settlementDisplay(),
+      presentationHead(6),
+      102,
+    );
+    expect(stale).toBe(state);
+    expect(stale.baseDisplay).toEqual(baseline);
+
+    const conflictingSameVersion = rebaseDisplay(
+      state,
+      settlementDisplay(),
+      presentationHead(7, "event:conflict"),
+      103,
+    );
+    expect(conflictingSameVersion).toBe(state);
+
+    const nextTrial = rebaseDisplay(
+      state,
+      settlementDisplay(),
+      presentationHead(1, "event:new-trial", "trial:new"),
+      104,
+    );
+    expect(selectCourtroomPresentationRuntime(nextTrial)).toMatchObject({
+      display: { mode: "settlement" },
+      displayPhase: "steady",
+      displayTransition: null,
+      announcement: null,
+    });
+  });
+
+  it("classifies display enter, update, switch, and exit transitions", () => {
+    let state = createCourtroomPresentationRuntime({
+      baseDisplay: idleDisplay,
+      displayHead: presentationHead(1),
+    });
+    state = rebaseDisplay(
+      state,
+      evidenceDisplay("offered"),
+      presentationHead(2),
+      100,
+    );
+    expect(selectCourtroomPresentationRuntime(state, 100)).toMatchObject({
+      display: { mode: "evidence", status: "offered" },
+      displayPhase: "entering",
+      transitionActive: true,
+      announcement: {
+        kind: "evidence",
+        change: "opened",
+        label: "Ledger excerpt",
+        status: "offered",
+      },
+    });
+    expect(state.displayTransition).toMatchObject({
+      from: { mode: "idle" },
+      to: { mode: "evidence" },
+      startedAtMs: 100,
+      endsAtMs: 100 + COURTROOM_DISPLAY_TRANSITION_MS,
+    });
+    expect(Object.isFrozen(state.displayTransition)).toBe(true);
+    expect(Object.isFrozen(state.displayTransition?.from)).toBe(true);
+
+    state = rebaseDisplay(
+      state,
+      evidenceDisplay("admitted"),
+      presentationHead(3),
+      110,
+    );
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      displayPhase: "updating",
+      announcement: {
+        kind: "evidence",
+        change: "updated",
+        status: "admitted",
+      },
+    });
+
+    state = rebaseDisplay(
+      state,
+      settlementDisplay(),
+      presentationHead(4),
+      120,
+    );
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      display: { mode: "settlement" },
+      displayPhase: "switching",
+      announcement: { kind: "settlement", change: "opened" },
+    });
+    expect(JSON.stringify(state.announcement)).not.toContain("offer:private");
+    expect(courtroomRuntimeAnnouncementText(state.announcement)).toBe(
+      "Private settlement channel opened.",
+    );
+
+    state = rebaseDisplay(state, idleDisplay, presentationHead(5), 130);
+    expect(selectCourtroomPresentationRuntime(state, 369)).toMatchObject({
+      display: { mode: "settlement" },
+      displayPhase: "exiting",
+      announcement: { kind: "settlement", change: "closed" },
+    });
+    expect(selectCourtroomPresentationRuntime(state, 370)).toMatchObject({
+      display: { mode: "idle" },
+      displayPhase: "steady",
+      displayTransition: null,
+      transitionActive: false,
+    });
+
+    const beforeDeadline = advanceCourtroomPresentationRuntime(state, 369);
+    expect(beforeDeadline).toBe(state);
+    state = advanceCourtroomPresentationRuntime(state, 370);
+    expect(state.displayTransition).toBeNull();
+    expect(nextCourtroomPresentationWakeAt(state)).toBeNull();
+  });
+
+  it("collapses display and gavel timing under reduced motion", () => {
+    let state = createCourtroomPresentationRuntime({
+      baseDisplay: idleDisplay,
+      displayHead: presentationHead(1),
+      reducedMotion: true,
+    });
+    state = rebaseDisplay(
+      state,
+      settlementDisplay(),
+      presentationHead(2),
+      10,
+      true,
+    );
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      display: { mode: "settlement" },
+      displayPhase: "steady",
+      displayTransition: null,
+      announcement: { kind: "settlement", change: "opened" },
+    });
+    expect(nextCourtroomPresentationWakeAt(state)).toBeNull();
+
+    const ruling = {
+      jobId: "job:reduced-ruling",
+      responseId: "response:reduced-ruling",
+      actor: "actor:judge",
+      sceneActor: "judge" as const,
+      purpose: "ruling" as const,
+    };
+    state = reduceCourtroomPresentationRuntime(state, requested(ruling), 20);
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      animation: "ruling",
+      rulingPhase: "ready",
+    });
+    state = reduceCourtroomPresentationRuntime(state, started(ruling), 30);
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      animation: "ruling",
+      rulingPhase: "holding",
+      rulingTransition: { endsAtMs: null },
+      transitionActive: false,
+      announcement: { kind: "ruling", change: "holding" },
+    });
+    expect(nextCourtroomPresentationWakeAt(state)).toBeNull();
+
+    let toggled = createCourtroomPresentationRuntime({
+      baseDisplay: idleDisplay,
+      displayHead: presentationHead(1),
+    });
+    toggled = rebaseDisplay(
+      toggled,
+      settlementDisplay(),
+      presentationHead(2),
+      100,
+    );
+    toggled = reduceCourtroomPresentationRuntime(
+      toggled,
+      requested(ruling),
+      110,
+    );
+    toggled = reduceCourtroomPresentationRuntime(
+      toggled,
+      started(ruling),
+      120,
+    );
+    expect(nextCourtroomPresentationWakeAt(toggled)).not.toBeNull();
+    toggled = rebaseDisplay(
+      toggled,
+      settlementDisplay(),
+      presentationHead(2),
+      130,
+      true,
+    );
+    expect(selectCourtroomPresentationRuntime(toggled)).toMatchObject({
+      displayPhase: "steady",
+      displayTransition: null,
+      rulingPhase: "holding",
+      transitionActive: false,
+      announcement: { kind: "ruling", change: "holding" },
+    });
+    expect(nextCourtroomPresentationWakeAt(toggled)).toBeNull();
+  });
+
+  it("runs an exact, idempotent ruling ready-to-gavel lifecycle", () => {
+    const ruling = {
+      jobId: "job:gavel",
+      responseId: "response:gavel",
+      actor: "actor:judge",
+      sceneActor: "judge" as const,
+      purpose: "ruling" as const,
+    };
+    let state = createCourtroomPresentationRuntime();
+    state = reduceCourtroomPresentationRuntime(state, requested(ruling), 10);
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      animation: "ruling",
+      rulingPhase: "ready",
+      announcement: { kind: "ruling", change: "ready" },
+    });
+    expect(nextCourtroomPresentationWakeAt(state)).toBeNull();
+
+    const duplicateRequest = reduceCourtroomPresentationRuntime(
+      state,
+      requested(ruling),
+      11,
+    );
+    expect(duplicateRequest).toBe(state);
+    const ignoredTiming = reduceCourtroomPresentationRuntime(
+      state,
+      timing(ruling),
+      12,
+    );
+    expect(ignoredTiming).toBe(state);
+
+    state = reduceCourtroomPresentationRuntime(state, started(ruling), 20);
+    const gavelEndsAtMs = 20 + COURTROOM_GAVEL_PHASE_MS;
+    expect(selectCourtroomPresentationRuntime(state, 20)).toMatchObject({
+      animation: "gavel",
+      rulingPhase: "gavel",
+      rulingTransition: { startedAtMs: 20, endsAtMs: gavelEndsAtMs },
+      transitionActive: true,
+      announcement: { kind: "ruling", change: "gavel" },
+    });
+    expect(nextCourtroomPresentationWakeAt(state)).toBe(gavelEndsAtMs);
+
+    const duplicateStart = reduceCourtroomPresentationRuntime(
+      state,
+      started(ruling),
+      21,
+    );
+    expect(duplicateStart).toBe(state);
+    state = reduceCourtroomPresentationRuntime(state, timing(ruling), 22);
+    expect(state.rulingTransition?.endsAtMs).toBe(gavelEndsAtMs);
+    expect(selectCourtroomPresentationRuntime(state, gavelEndsAtMs)).toMatchObject(
+      {
+        animation: "ruling",
+        rulingPhase: "holding",
+        rulingTransition: { endsAtMs: null },
+        transitionActive: false,
+      },
+    );
+
+    state = advanceCourtroomPresentationRuntime(state, gavelEndsAtMs);
+    expect(state.rulingTransition).toMatchObject({
+      phase: "holding",
+      endsAtMs: null,
+    });
+    expect(state.announcement).toEqual({
+      kind: "ruling",
+      change: "holding",
+    });
+    expect(nextCourtroomPresentationWakeAt(state)).toBeNull();
+    const settled = advanceCourtroomPresentationRuntime(
+      state,
+      gavelEndsAtMs + 1,
+    );
+    expect(settled).toBe(state);
+
+    state = reduceCourtroomPresentationRuntime(
+      state,
+      terminal(ruling),
+      gavelEndsAtMs + 2,
+    );
+    expect(selectCourtroomPresentationRuntime(state)).toMatchObject({
+      rulingPhase: "idle",
+      rulingTransition: null,
+      announcement: { kind: "ruling", change: "complete" },
+    });
+  });
+
+  it("never gavels after cancellation before start or a newer playback fence", () => {
+    const ruling = {
+      jobId: "job:cancelled-ruling",
+      responseId: "response:cancelled-ruling",
+      actor: "actor:judge",
+      sceneActor: "judge" as const,
+      purpose: "ruling" as const,
+    };
+    let cancelled = createCourtroomPresentationRuntime();
+    cancelled = reduceCourtroomPresentationRuntime(
+      cancelled,
+      requested(ruling),
+      1,
+    );
+    cancelled = reduceCourtroomPresentationRuntime(
+      cancelled,
+      terminal(ruling),
+      2,
+    );
+    expect(selectCourtroomPresentationRuntime(cancelled)).toMatchObject({
+      rulingPhase: "idle",
+      rulingTransition: null,
+      announcement: null,
+    });
+    const afterLateStart = reduceCourtroomPresentationRuntime(
+      cancelled,
+      started(ruling),
+      3,
+    );
+    expect(afterLateStart).toBe(cancelled);
+
+    let fenced = createCourtroomPresentationRuntime();
+    fenced = reduceCourtroomPresentationRuntime(fenced, requested(ruling), 1);
+    fenced = reduceCourtroomPresentationRuntime(fenced, started(ruling), 2);
+    fenced = reduceCourtroomPresentationRuntime(
+      fenced,
+      requested({
+        generation: 2,
+        playbackFence: 0,
+        jobId: "job:new-controller",
+        responseId: "response:new-controller",
+      }),
+      3,
+    );
+    expect(selectCourtroomPresentationRuntime(fenced)).toMatchObject({
+      rulingPhase: "idle",
+      rulingTransition: null,
+      sceneActor: "witness",
+    });
+    const afterStaleTiming = reduceCourtroomPresentationRuntime(
+      fenced,
+      timing(ruling),
+      4,
+    );
+    expect(afterStaleTiming).toBe(fenced);
+  });
+
+  it("selects the earliest camera, display, or gavel wake and terminates it", () => {
+    const testimony = {
+      jobId: "job:wake-testimony",
+      responseId: "response:wake-testimony",
+    };
+    let cameraAndDisplay = createCourtroomPresentationRuntime({
+      baseDisplay: idleDisplay,
+      displayHead: presentationHead(1),
+    });
+    cameraAndDisplay = reduceCourtroomPresentationRuntime(
+      cameraAndDisplay,
+      requested(testimony),
+      0,
+    );
+    cameraAndDisplay = reduceCourtroomPresentationRuntime(
+      cameraAndDisplay,
+      terminal(testimony),
+      10,
+    );
+    cameraAndDisplay = rebaseDisplay(
+      cameraAndDisplay,
+      evidenceDisplay(),
+      presentationHead(2),
+      20,
+    );
+    expect(nextCourtroomPresentationWakeAt(cameraAndDisplay)).toBe(
+      10 + COURTROOM_CAMERA_HYSTERESIS_MS,
+    );
+    cameraAndDisplay = advanceCourtroomPresentationRuntime(
+      cameraAndDisplay,
+      10 + COURTROOM_CAMERA_HYSTERESIS_MS,
+    );
+    expect(nextCourtroomPresentationWakeAt(cameraAndDisplay)).toBe(
+      20 + COURTROOM_DISPLAY_TRANSITION_MS,
+    );
+    cameraAndDisplay = advanceCourtroomPresentationRuntime(
+      cameraAndDisplay,
+      20 + COURTROOM_DISPLAY_TRANSITION_MS,
+    );
+    expect(nextCourtroomPresentationWakeAt(cameraAndDisplay)).toBeNull();
+
+    const ruling = {
+      jobId: "job:wake-ruling",
+      responseId: "response:wake-ruling",
+      actor: "actor:judge",
+      sceneActor: "judge" as const,
+      purpose: "ruling" as const,
+    };
+    let displayAndGavel = createCourtroomPresentationRuntime({
+      baseDisplay: idleDisplay,
+      displayHead: presentationHead(1),
+    });
+    displayAndGavel = rebaseDisplay(
+      displayAndGavel,
+      evidenceDisplay(),
+      presentationHead(2),
+      100,
+    );
+    displayAndGavel = reduceCourtroomPresentationRuntime(
+      displayAndGavel,
+      requested(ruling),
+      110,
+    );
+    displayAndGavel = reduceCourtroomPresentationRuntime(
+      displayAndGavel,
+      started(ruling),
+      120,
+    );
+    expect(nextCourtroomPresentationWakeAt(displayAndGavel)).toBe(
+      100 + COURTROOM_DISPLAY_TRANSITION_MS,
+    );
+    displayAndGavel = advanceCourtroomPresentationRuntime(
+      displayAndGavel,
+      100 + COURTROOM_DISPLAY_TRANSITION_MS,
+    );
+    expect(nextCourtroomPresentationWakeAt(displayAndGavel)).toBe(
+      120 + COURTROOM_GAVEL_PHASE_MS,
+    );
+    displayAndGavel = advanceCourtroomPresentationRuntime(
+      displayAndGavel,
+      120 + COURTROOM_GAVEL_PHASE_MS,
+    );
+    expect(nextCourtroomPresentationWakeAt(displayAndGavel)).toBeNull();
   });
 
   it("rejects invalid monotonic observation values", () => {
