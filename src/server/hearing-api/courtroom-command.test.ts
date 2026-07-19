@@ -425,6 +425,8 @@ describe("orchestrateCourtroomCommand", () => {
       view: completedView(),
       objectionRulings: [
         {
+          objectionEventId: objectionRequest.objection.sourceEventId,
+          responseId: objectionRequest.interruption?.interruptedResponseId,
           ruling: createObjectionRulingOutputFixture().ruling,
           remedy: createObjectionRulingOutputFixture().remedy,
         },

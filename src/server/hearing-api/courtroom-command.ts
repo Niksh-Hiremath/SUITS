@@ -296,7 +296,10 @@ export type OrchestratePreparedCourtroomCommandOptions = Readonly<{
 }>;
 
 export type CommittedObjectionRulingOutcome = Readonly<
-  Pick<ObjectionRulingModelOutput, "ruling" | "remedy">
+  Pick<ObjectionRulingModelOutput, "ruling" | "remedy"> & {
+    objectionEventId: string;
+    responseId: string;
+  }
 >;
 
 export type PreparedCourtroomCommandResult = Readonly<{
@@ -486,6 +489,8 @@ async function runPreparedCourtroomCommand(
           ),
         );
         objectionRulings.push({
+          objectionEventId: precommit.objectionEventId,
+          responseId: precommit.responseId,
           ruling: generated.output.ruling,
           remedy: generated.output.remedy,
         });
