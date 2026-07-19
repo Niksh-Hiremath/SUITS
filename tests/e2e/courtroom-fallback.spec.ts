@@ -3,6 +3,7 @@ import { chromium, expect, test } from "@playwright/test";
 test("retains the hearing controls when WebGL is unavailable", async ({
   baseURL,
 }) => {
+  test.setTimeout(45_000);
   if (!baseURL) throw new Error("Playwright baseURL is required");
 
   const browser = await chromium.launch({
@@ -25,6 +26,7 @@ test("retains the hearing controls when WebGL is unavailable", async ({
     await expect(stage).toContainText(
       "3D rendering is unavailable. The hearing controls remain fully usable.",
     );
+    await expect(stage).toHaveAttribute("data-quality", "balanced");
     await expect(
       page.getByRole("button", { name: "Call witness" }).first(),
     ).toBeEnabled();

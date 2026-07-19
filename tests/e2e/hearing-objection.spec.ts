@@ -248,6 +248,11 @@ test.describe("production-path partial objection", () => {
       "true",
       { timeout: 30_000 },
     );
+    await page.getByRole("button", { name: "reduced", exact: true }).click();
+    await expect(courtroomStage).toHaveAttribute("data-quality", "reduced");
+    await expect(courtroomStage).toHaveAttribute("data-renderer-ready", "true");
+    await page.getByRole("button", { name: "balanced", exact: true }).click();
+    await expect(courtroomStage).toHaveAttribute("data-quality", "balanced");
     const callWitness = page.getByRole("button", { name: "Call witness" }).first();
     await expect(callWitness).toBeVisible({ timeout: 30_000 });
     await callWitness.click();
