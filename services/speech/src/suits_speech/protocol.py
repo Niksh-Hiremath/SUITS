@@ -57,9 +57,7 @@ class HelloControl(ProtocolModel):
     type: Literal["hello"] = "hello"
     request_id: Identifier
     client_id: Identifier
-    supported_protocols: tuple[Literal[PROTOCOL_VERSION], ...] = (
-        PROTOCOL_VERSION,
-    )
+    supported_protocols: tuple[Literal[PROTOCOL_VERSION], ...] = (PROTOCOL_VERSION,)
 
 
 class LoadModelsControl(ProtocolModel):
