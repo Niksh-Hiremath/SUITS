@@ -33,6 +33,9 @@ class EnergyVad:
         self._threshold_rms = threshold_rms
         self._min_speech_ms = min_speech_ms
         self._end_silence_ms = end_silence_ms
+        self._active: bool
+        self._candidate_speech_ms: float
+        self._silence_ms: float
         self.reset()
 
     @property
@@ -83,5 +86,5 @@ class EnergyVad:
 
     def reset(self) -> None:
         self._active = False
-        self._candidate_speech_ms = 0
-        self._silence_ms = 0
+        self._candidate_speech_ms = 0.0
+        self._silence_ms = 0.0
