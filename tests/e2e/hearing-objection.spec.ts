@@ -203,7 +203,7 @@ test.describe("production-path partial objection", () => {
 
   test("interrupts before final STT, cancels playback, commits a ruling, and resumes", async ({
     page,
-  }) => {
+  }, testInfo) => {
     test.setTimeout(90_000);
     let nextOrder = 0;
     const observations: Observation[] = [];
@@ -241,12 +241,23 @@ test.describe("production-path partial objection", () => {
     const response = await page.goto("/hearing/");
     expect(response?.ok()).toBe(true);
     await page.getByRole("button", { name: "Begin V3 hearing" }).click();
+    const courtroomStage = page.getByTestId("courtroom-stage");
+    await expect(courtroomStage).toBeVisible({ timeout: 30_000 });
+    await expect(courtroomStage).toHaveAttribute(
+      "data-renderer-ready",
+      "true",
+      { timeout: 30_000 },
+    );
     const callWitness = page.getByRole("button", { name: "Call witness" }).first();
     await expect(callWitness).toBeVisible({ timeout: 30_000 });
     await callWitness.click();
     await expect(
       page.getByRole("button", { name: "Start spoken question" }),
     ).toBeVisible({ timeout: 30_000 });
+    await testInfo.attach("procedural-courtroom-stage", {
+      body: await courtroomStage.screenshot(),
+      contentType: "image/png",
+    });
 
     await page.getByRole("button", { name: "Prepare local audio" }).click();
     await expect(page.getByText("Local courtroom audio ready", { exact: true })).toBeVisible({

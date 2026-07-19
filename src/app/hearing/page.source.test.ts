@@ -12,6 +12,15 @@ const SOURCE_PATHS = {
   hearingController: fileURLToPath(
     new URL("../../lib/speech/hearing-controller.ts", import.meta.url),
   ),
+  courtroomStage: fileURLToPath(
+    new URL("../../components/courtroom/courtroom-stage.tsx", import.meta.url),
+  ),
+  courtroomCanvas: fileURLToPath(
+    new URL("../../components/courtroom/courtroom-canvas.tsx", import.meta.url),
+  ),
+  courtroomPresentation: fileURLToPath(
+    new URL("../../domain/courtroom-presentation/derive.ts", import.meta.url),
+  ),
   sessionPolicy: fileURLToPath(
     new URL("./session-policy.ts", import.meta.url),
   ),
@@ -217,6 +226,17 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("Let the witness answer");
     expect(sources.page).toContain("Objection telemetry");
     expect(sources.page).toContain("Local audio telemetry");
+    expect(sources.page).toContain("deriveCourtroomPresentation({");
+    expect(sources.page).toContain("<CourtroomStage frame={courtroomPresentation}");
+    expect(sources.page).toContain('(prefers-reduced-motion: reduce)');
+    expect(sources.courtroomStage).toContain("ssr: false");
+    expect(sources.courtroomStage).toContain('data-testid="courtroom-stage"');
+    expect(sources.courtroomStage).toContain('probe.getContext("webgl2")');
+    expect(sources.courtroomCanvas).toContain('useFrame(() => {');
+    expect(sources.courtroomCanvas).toContain('"webglcontextlost"');
+    expect(sources.courtroomCanvas).not.toContain("onCreated={onReady}");
+    expect(sources.courtroomPresentation).not.toContain("case.summary");
+    expect(sources.courtroomPresentation).not.toContain("knownFactIds");
     expect(sources.page).not.toContain("<textarea");
     expect(sources.page).not.toContain("sendPcmFrame");
     expect(sources.page).not.toContain("frame.pcm");

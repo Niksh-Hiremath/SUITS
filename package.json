@@ -20,6 +20,7 @@
     "verify:convex-surface": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-convex-public-surface.ps1"
   },
   "dependencies": {
+    "@react-three/fiber": "9.6.1",
     "convex": "^1.42.1",
     "mammoth": "1.12.0",
     "next": "16.2.10",
@@ -27,6 +28,7 @@
     "pdf-parse": "2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "three": "0.185.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -35,6 +37,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.185.1",
     "@vitest/coverage-v8": "^4.1.10",
     "convex-test": "^0.0.54",
     "eslint": "^9",

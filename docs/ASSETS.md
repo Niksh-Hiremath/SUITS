@@ -19,4 +19,10 @@ The local speech companion synthesizes PCM in memory. Its canonical “Objection
 
 ## Courtroom visual and animation assets
 
-No production courtroom models, textures, character rigs, animations, or sound effects are approved or recorded yet. Add each asset's creator, canonical source URL, exact version/file, license, required attribution, and any modifications before introducing it into the product.
+The initial courtroom is generated entirely from repository-authored geometry and materials. It does not load an external model, texture, HDR environment, animation, or sound effect.
+
+| Asset | Source | Creator and method | External inputs | License/attribution | Repository treatment |
+| --- | --- | --- | --- | --- | --- |
+| Procedural courtroom room, furniture, display, and stylized character figures | `src/components/courtroom/courtroom-canvas.tsx` and `courtroom-stage.module.css` | Original SUITS implementation, assembled from Three.js primitives | None | Repository-authored; no third-party attribution required. The repository does not yet declare a project-wide license. | TypeScript and CSS only; no binary asset is committed |
+
+Any future production model, texture, character rig, animation, HDR environment, font file, or sound effect must record its creator, canonical source URL, exact version/file, license, required attribution, and modifications here before it is introduced.

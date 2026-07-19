@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 
+import { CourtroomStage } from "@/components/courtroom/courtroom-stage";
+import { deriveCourtroomPresentation } from "@/domain/courtroom-presentation";
 import {
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_START_SCHEMA_VERSION,
@@ -103,6 +105,20 @@ function speechStatusLabel(snapshot: HearingControllerSnapshot | null): string {
 
 function readable(value: string): string {
   return value.replaceAll("_", " ").replaceAll("-", " ");
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = (): void => setReducedMotion(preference.matches);
+    updatePreference();
+    preference.addEventListener("change", updatePreference);
+    return () => preference.removeEventListener("change", updatePreference);
+  }, []);
+
+  return reducedMotion;
 }
 
 function sameHearingHead(
@@ -207,6 +223,7 @@ export default function HearingPage() {
 }
 
 function HearingPageContent() {
+  const reducedMotion = usePrefersReducedMotion();
   const searchParams = useSearchParams();
   const initialTrialId = trialIdFromSearch(searchParams.toString());
   const [createdTrialId, setCreatedTrialId] = useState<string>();
@@ -1022,6 +1039,20 @@ function HearingPageContent() {
     speechIsRecording && speechSnapshot?.activeMode === "question";
   const closingIsRecording =
     speechIsRecording && speechSnapshot?.activeMode === "closing";
+  const courtroomPresentation = view
+    ? deriveCourtroomPresentation({
+        view,
+        speech: speechSnapshot
+          ? {
+              lifecycle: speechSnapshot.lifecycle,
+              activeMode: speechSnapshot.activeMode,
+            }
+          : null,
+        busy: courtroomBusy,
+        quality: "balanced",
+        reducedMotion,
+      })
+    : null;
 
   return (
     <main className="hearing-shell">
@@ -1101,6 +1132,9 @@ function HearingPageContent() {
         </section>
       ) : (
         <div className="hearing-grid">
+          {courtroomPresentation && (
+            <CourtroomStage frame={courtroomPresentation} />
+          )}
           <section className="transcript-panel">
             <div className="panel-heading">
               <div>
