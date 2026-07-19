@@ -2,7 +2,7 @@
 
 SUITS uses a local FastAPI companion for speech-to-text (STT), voice activity detection (VAD), and text-to-speech (TTS). The service accepts microphone PCM from the browser over a loopback WebSocket and returns transcripts, synthesized PCM, and timing metadata. It has no Convex or OpenAI integration, so raw microphone audio stays inside the browser-to-local-service boundary.
 
-The current companion and real Nemotron/Kokoro adapters are implemented and covered by deterministic tests. A synthetic in-memory CUDA provider smoke has passed on the target RTX 5070. Browser transport and AudioWorklet modules are being integrated in parallel, but production hearing-page integration and a real browser microphone/audible-playback run have not been verified. The provider smoke is therefore not proof of live microphone capture, audible browser playback, or a full voice-first hearing.
+The current companion, real Nemotron/Kokoro adapters, exact-loopback browser client, and bounded AudioWorklet capture/playback modules are implemented and covered by deterministic tests. A synthetic in-memory CUDA provider smoke has passed on the target RTX 5070. Production hearing-page integration and a real browser microphone/audible-playback run have not been verified. The provider smoke and module tests are therefore not proof of live microphone capture, audible browser playback, or a full voice-first hearing.
 
 ## Runtime choices
 
@@ -204,7 +204,7 @@ Every JSON control or event includes `"protocol": "suits.speech.v1"`. The public
 
 1. Connect to `/v1/speech` while requesting subprotocol `suits.speech.v1` and using an allowed `Origin`.
 2. Send `hello` first with stable `requestId` and `clientId`.
-3. Receive `ready`, the initial non-loading `capabilities`, and `flow_control`.
+3. Receive `ready`, the initial non-loading `capabilities`, and `flow_control`. The handshake flow event has a positive `sttCreditRevision`, `sttUtteranceId: null`, and `sttAcceptedThroughSequence: -1`.
 4. Send `load_models` with a stable `requestId` and the configured provider IDs if supplied.
 5. Receive a request-bound `capabilities` event after both providers load and all three fixed clips prewarm atomically. A failure emits `MODEL_LOAD_FAILED` and publishes no partial fixed-clip cache.
 
@@ -217,6 +217,8 @@ Every JSON control or event includes `"protocol": "suits.speech.v1"`. The public
 5. Receive exactly one later `stt_final` revision and `speech_ended` for a successful utterance.
 
 Partial and final events carry the same `utteranceId`; revisions increase monotonically, duplicate partial text is suppressed, and stale/cancelled utterance output is fenced. `cancel_utterance` cancels local provider work and emits `cancelled`. Only one utterance may be active per connection, and the default Nemotron runtime admits one process-wide recognizer session.
+
+Every `flow_control` event carries a monotonically increasing `sttCreditRevision`, the service's current or most recently completed `sttUtteranceId`, and its cumulative `sttAcceptedThroughSequence`. A browser ignores stale revisions, removes locally sent frames only when the matching cumulative watermark covers them, and subtracts all still-unaccounted frames and bytes from the advertised absolute availability. An unknown identity, regressing watermark, or watermark beyond the highest locally sent sequence is a protocol error. This prevents unrelated TTS flow updates from granting microphone credit for PCM the service has not admitted yet.
 
 Starting an utterance with `bargeIn: true` cancels all queued/current synthesis before admitting microphone audio.
 
@@ -369,7 +371,8 @@ Verified now:
 
 - strict local protocol, fake-mode service, VAD, queues, cancellation, backpressure, and fixed clips through automated tests;
 - real cache-only Nemotron and Kokoro provider construction through automated/injected tests;
-- one explicit real CUDA Kokoro-to-Nemotron in-memory smoke on the target RTX 5070.
+- one explicit real CUDA Kokoro-to-Nemotron in-memory smoke on the target RTX 5070;
+- exact-loopback browser transport, cumulative microphone-credit reconciliation, explicitly armed 16 kHz AudioWorklet capture, bounded playback, output-latency drain, and cleanup/cancellation races through automated tests.
 
 Not yet verified:
 
