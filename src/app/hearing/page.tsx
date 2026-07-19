@@ -11,7 +11,10 @@ import {
 } from "react";
 
 import { CourtroomStage } from "@/components/courtroom/courtroom-stage";
-import { deriveCourtroomPresentation } from "@/domain/courtroom-presentation";
+import {
+  deriveCourtroomPresentation,
+  type CourtroomQuality,
+} from "@/domain/courtroom-presentation";
 import {
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
   HEARING_START_SCHEMA_VERSION,
@@ -224,6 +227,8 @@ export default function HearingPage() {
 
 function HearingPageContent() {
   const reducedMotion = usePrefersReducedMotion();
+  const [courtroomQuality, setCourtroomQuality] =
+    useState<CourtroomQuality>("balanced");
   const searchParams = useSearchParams();
   const initialTrialId = trialIdFromSearch(searchParams.toString());
   const [createdTrialId, setCreatedTrialId] = useState<string>();
@@ -1049,7 +1054,7 @@ function HearingPageContent() {
             }
           : null,
         busy: courtroomBusy,
-        quality: "balanced",
+        quality: courtroomQuality,
         reducedMotion,
       })
     : null;
@@ -1133,7 +1138,10 @@ function HearingPageContent() {
       ) : (
         <div className="hearing-grid">
           {courtroomPresentation && (
-            <CourtroomStage frame={courtroomPresentation} />
+            <CourtroomStage
+              frame={courtroomPresentation}
+              onQualityChange={setCourtroomQuality}
+            />
           )}
           <section className="transcript-panel">
             <div className="panel-heading">

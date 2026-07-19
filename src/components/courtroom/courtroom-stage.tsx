@@ -9,7 +9,10 @@ import {
   type ReactNode,
 } from "react";
 
-import type { CourtroomPresentationFrame } from "@/domain/courtroom-presentation";
+import type {
+  CourtroomPresentationFrame,
+  CourtroomQuality,
+} from "@/domain/courtroom-presentation";
 
 import styles from "./courtroom-stage.module.css";
 
@@ -48,7 +51,11 @@ class RendererBoundary extends Component<
 
 export function CourtroomStage({
   frame,
-}: Readonly<{ frame: CourtroomPresentationFrame }>) {
+  onQualityChange,
+}: Readonly<{
+  frame: CourtroomPresentationFrame;
+  onQualityChange: (quality: CourtroomQuality) => void;
+}>) {
   const [webglSupported, setWebglSupported] = useState<boolean | null>(null);
   const [ready, setReady] = useState(false);
   const [rendererError, setRendererError] = useState<string | null>(null);
@@ -131,7 +138,23 @@ export function CourtroomStage({
           <span>Live courtroom</span>
           <h2 id="courtroom-stage-heading">Semantic performance stage</h2>
         </div>
-        <span className={styles.quality}>{frame.quality} quality</span>
+        <div
+          aria-label="Courtroom rendering quality"
+          className={styles.qualityControls}
+          role="group"
+        >
+          {(["high", "balanced", "reduced"] as const).map((quality) => (
+            <button
+              aria-pressed={frame.quality === quality}
+              data-quality-option={quality}
+              key={quality}
+              onClick={() => onQualityChange(quality)}
+              type="button"
+            >
+              {quality}
+            </button>
+          ))}
+        </div>
       </div>
       <div
         className={styles.display}

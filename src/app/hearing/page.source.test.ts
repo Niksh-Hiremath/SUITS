@@ -227,10 +227,13 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("Objection telemetry");
     expect(sources.page).toContain("Local audio telemetry");
     expect(sources.page).toContain("deriveCourtroomPresentation({");
-    expect(sources.page).toContain("<CourtroomStage frame={courtroomPresentation}");
+    expect(sources.page).toContain("<CourtroomStage");
+    expect(sources.page).toContain("onQualityChange={setCourtroomQuality}");
     expect(sources.page).toContain('(prefers-reduced-motion: reduce)');
     expect(sources.courtroomStage).toContain("ssr: false");
     expect(sources.courtroomStage).toContain('data-testid="courtroom-stage"');
+    expect(sources.courtroomStage).toContain('aria-label="Courtroom rendering quality"');
+    expect(sources.courtroomStage).toContain("data-quality-option={quality}");
     expect(sources.courtroomStage).toContain('probe.getContext("webgl2")');
     expect(sources.courtroomCanvas).toContain('useFrame(() => {');
     expect(sources.courtroomCanvas).toContain('"webglcontextlost"');
