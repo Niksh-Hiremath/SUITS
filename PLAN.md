@@ -506,17 +506,17 @@ Deliverables:
 
 - [x] Responses API streaming adapter;
 - [x] strict schemas for all call classes;
-- [ ] role-specific KnowledgeView prompts;
-- [ ] cancellation/revision handling;
-- [ ] validation and targeted repair;
+- [x] role-specific KnowledgeView prompts;
+- [x] cancellation/revision handling;
+- [x] validation and targeted repair;
 - [x] prompt/version/cost/latency traces;
 - [x] deterministic mock/replay adapter;
 - [x] live integration smoke command.
 
 Gate:
 
-- [ ] Mock integration suite passes all role and validation scenarios.
-- [ ] With a key available, at least one live GPT-5.6 multi-witness trial completes without knowledge leakage or unsupported admitted facts.
+- [x] Mock integration suite passes all role and validation scenarios.
+- [x] With a key available, at least one live GPT-5.6 multi-witness trial completes without knowledge leakage or unsupported admitted facts.
 - [x] Runtime witness/counsel answers are accepted GPT-5.6 outputs, not authored golden-answer replacements.
 
 ### Milestone 5 — Local real-time STT/TTS companion
@@ -742,7 +742,7 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Milestone 1 complete.
 - [x] Milestone 2 complete.
 - [x] Milestone 3 complete.
-- [ ] Milestone 4 complete.
+- [x] Milestone 4 complete.
 - [ ] Milestone 5 complete.
 - [ ] Milestone 6 complete.
 - [ ] Milestone 7 complete.
@@ -826,6 +826,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none. Convex CLI authentication is already valid; no login is requested unless the next development sync reports an authentication failure.
   - Commit: `feat: complete generated trial finale`.
 
+- 2026-07-19 10:16 IST — Milestone 4 GPT-5.6 courtroom-intelligence gate complete
+  - Changed: added an application-level objection decision window for pending AI witness responses; strict role-isolated Luna judge and settlement requests; one-repair precommit boundaries; atomic ruling/resolution/resume-or-cancel and negotiation/audit commits; high-level user continue, object, propose, counter, accept, reject, and withdraw intents; verdict-free Terra coaching after settlement; protected Convex HTTP/Next.js orchestration; and exact resumed-response rebinding after an overruled objection. No authored dialogue, ruling, settlement decision, verdict, or coaching result is used on the normal runtime path.
+  - Verified: the focused objection/settlement/BFF/provider slice passed 74 tests, and the expanded Convex plus resumed-response slice passed 31 tests. The full repository gate passed lint with four generated warnings and no errors, both TypeScript surfaces, 876 tests with three explicit live-only skips, three evals, the 17/17 production build, and `git diff --check`. `npx convex dev --once` synchronized the linked development deployment in 6.81 seconds without a login prompt. A real protected two-witness trial passed in 228.802 seconds for `trial_c2e0b65b75fa478ebe4cde79476f4a28`: 30/30 accepted calls included eight witness answers, nine opponent plans, nine counsel responses, one judge objection ruling, one settlement evaluation, one jury deliberation, and one Terra debrief. The durable stream contains exactly one user objection, interruption, AI ruling, deterministic resolve/resume chain, user offer, AI counteroffer, user rejection, jury deliberation, and generated debrief; exact owner reload and all scoped-citation assertions passed. Aggregate usage was 124,007 input and 16,791 output tokens, one accepted planner repair, and estimated cost $0.2775385.
+  - Remaining: begin Milestone 5 local Python STT/TTS. Milestone 6 still owns true partial-STT mid-sentence detection, cached audible objection, audio cancellation/barge-in, rephrase handling, and speech-timing proof; this M4 gate does not claim those audio behaviors. The visible typed courtroom control remains interim until the voice-first UI gate, and owner-bound V3 Court Records remains a later deliverable.
+  - Blocked: none. The live command loaded the existing development service secret into one PowerShell process without printing, rotating, or persisting it; Convex CLI authentication remained valid.
+  - Commits: `e622142`, `ea27f4e`; live-gate harness and this PLAN evidence are committed separately.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -869,6 +876,11 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The strict closing contract requires public record grounding. A trial with no jury-considerable fact, admitted evidence, or active testimony must stop before the closing/model pipeline instead of manufacturing an uncited closing or verdict.
 - The first complete real multi-role trial accepted 28 calls: eight witness answers, nine opponent plans, nine counsel responses, one jury deliberation, and one Terra debrief. Terra coaching alone used 10,296 input/5,048 output tokens and an estimated $0.10353625, about 44% of the $0.2366214 total, so final coaching should remain a single terminal call rather than a reviewer chain.
 
+- A resumed pending response retains its historical `interruptId`; treating every non-null interrupt marker as currently blocked made an overruled objection impossible to answer. The witness boundary now accepts only the exact `resumed` interruption bound to the current response/head, while active, resolved, cancelled, stale, or mismatched interruptions remain rejected.
+- Settlement acceptance moves the canonical trial into `debrief` with no verdict. Terra coaching therefore validates a distinct settled-without-verdict audit shape, while user propose/counter/accept commands require an existing jury-considerable record so the resulting coaching cannot be manufactured from an empty case record. Reject and withdraw remain available without creating a settlement outcome.
+- The M4 objection window is deliberately application-level: opposing dialogue is prepared and paused before witness generation so the user can object or continue. It proves validated judge reasoning and coherent deterministic resume/cancel behavior, but it is not the partial-STT, cached-audio, or mid-utterance barge-in path reserved for Milestone 6.
+- The first live judge-and-settlement complete trial accepted 30 calls. The single Terra debrief used 10,941 input and 7,065 output tokens at an estimated $0.13540375, nearly half of the $0.2775385 run, reinforcing the single terminal coaching-call decision.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -909,6 +921,11 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Commit each accepted jury generation as one atomic bundle containing the Luna deliberation action, deterministic verdict/debrief phase transitions, the verdict derived from the validated recommendation, the private exact artifact, and its terminal trace. Commit the accepted Terra coaching action, completion transition, private artifact, and terminal trace with the same atomicity so a crash cannot expose a partial accepted finale.
 - Keep full jury deliberation and Terra coaching artifacts out of TrialEvents, snapshots, and browser projections. Store them only in the owner-bound generated-artifact ledger and bind public events through stable decision/action/event IDs, hashes, schema versions, prompt versions, model roles, and exact source heads.
 - Reject zero-record closing before any write. Do not weaken the required public-grounding citation contract or invent deterministic support merely to force a trial to completion.
+
+- Commit each accepted objection decision as one transaction containing the Luna judge ruling, deterministic interruption resolution, optional deterministic speech resume, and terminal call audit. M4 permits only the two outcomes the current response lifecycle can execute exactly: sustained/cancel and overruled/resume. Rephrase remains a Milestone 6 speech-orchestration outcome rather than a silently accepted no-op.
+- Keep negotiation reasoning private and derive every material party, offer, parent, expiry, action, and event identity server-side. The model may recommend only a request-allowed counter, accept, or reject with strict citations and terms; the deterministic engine and atomic mutation decide whether it commits.
+- Treat M4 revision handling as immutable response/call identity plus stale-head rejection and cancellation. Do not conflate that gate with revisioned partial STT, which remains an explicit Milestone 5/6 deliverable.
+- Pause an AI question response at the protected application boundary until the player chooses object or continue. This provides deterministic user agency now without claiming audible mid-sentence interruption before the local speech companion exists.
 
 ## 16. Verification Evidence
 
@@ -1047,6 +1064,17 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - A read-only PowerShell in-memory aggregate over `npx convex data courtroomModelCalls --limit 250 --format json` and `courtroomGeneratedArtifacts --limit 100 --format json`, filtered to that trial without printing raw rows, found 28/28 accepted calls, 116,023 input and 14,052 output tokens, one accepted planner repair, estimated total cost $0.2366214, and exactly two private artifacts (`jury_deliberation` on `gpt-5.6-luna`, `final_debrief` on `gpt-5.6-terra`). Task totals were: eight witness calls, 17,684/1,366 tokens, $0.02588; nine planner calls, 52,290/4,522 tokens, one repair, $0.0623973; nine counsel calls, 32,581/2,388 tokens, $0.0369566; one jury call, 3,172/728 tokens, $0.00785125; and one debrief call, 10,296/5,048 tokens, $0.10353625.
   - `git diff --check` — exit 0 before the checkpoint plan update.
   - Judge/objection and settlement live-runtime coverage remains pending; this finale proof does not report those paths as passed.
+
+- 2026-07-19 09:48–10:16 IST — Milestone 4 judge, objection, settlement, and complete live gate
+  - `npx vitest run convex/hearingRuntime.integration.test.ts src/domain/courtroom-ai/witness-answer.test.ts src/domain/hearing-runtime/objection-boundary.test.ts src/domain/hearing-runtime/settlement-boundary.test.ts src/server/courtroom-ai/objection-ruling.test.ts src/server/courtroom-ai/negotiation-agent.test.ts src/server/hearing-api/courtroom-command.test.ts src/server/hearing-api/convex-http.source.test.ts src/app/api/hearings/route.test.ts` — exit 0; nine files and 74 tests passed across strict precommits, provider generation, protected HTTP/Next orchestration, and API behavior.
+  - `npx vitest run convex/hearingRuntime.integration.test.ts src/domain/courtroom-ai/witness-answer.test.ts` — exit 0 after the resumed-response fix and final atomic-conflict cases; two files and 31 tests passed. The Convex suite proves sustained/cancel and overruled/resolve/resume chains, resumed witness generation, exact replay, stale/tampered/cross-owner rejection, rollback on terminal-trace conflict, AI counter/accept/reject, player acceptance of an AI counter, settled Terra preparation without a verdict, and completed settled coaching.
+  - `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, and `npm run build` — exit 0. Lint reported four generated-file warnings and no errors; 116 files/876 tests passed with three explicit live-only skips; three evals passed; and Next.js 16.2.10 compiled, typechecked, and generated 17/17 pages.
+  - `npx tsc -p convex/tsconfig.json --noEmit --pretty false`, scoped ESLint, and `git diff --check` — exit 0 for the Convex runtime, event mutations, boundaries, routes, orchestration, and integration tests.
+  - `git push origin main` — exit 0 for `e622142` (`feat: commit generated objection and settlement actions`) and `ea27f4e` (`test: prove objection and settlement model loops`).
+  - `npx convex dev --once` — exit 0; `cheery-bandicoot-36` reported functions ready in 6.81 seconds without a login prompt.
+  - `npm run test:live:courtroom-witness` without the opt-in flag — exit 0 with one explicit skip. The first flagged preflight then failed in 4 ms before any model call because the local service secret was absent/short; no product state changed. Loading the already-configured development value into one PowerShell process via `npx convex env get`, without printing or persisting it, and rerunning with `RUN_OPENAI_LIVE_COURTROOM=1` — exit 0; the real protected trial passed in 228,802 ms (`trial_c2e0b65b75fa478ebe4cde79476f4a28`).
+  - The live test asserted exact role/model/task/usage bindings for the Luna judge (`resolve_objection`), Luna settlement counsel (`evaluate_settlement`), Luna jury, and Terra debrief; two scoped direct witnesses; bounded opposing examinations; no citation outside each request; durable completion; and exact owner reload. The canonical event stream contains one `OBJECT`, `BEGIN_INTERRUPTION`, AI `RULE_ON_OBJECTION`, deterministic `RESOLVE_INTERRUPTION`, deterministic `RESUME_INTERRUPTED_SPEECH`, user `PROPOSE_SETTLEMENT`, AI `COUNTER_SETTLEMENT`, user `REJECT_SETTLEMENT`, Luna `DELIBERATE`, and Terra `GENERATE_DEBRIEF`.
+  - A read-only PowerShell aggregate over `npx convex data courtroomModelCalls --limit 250 --format json` and `trialEvents --limit 500 --format json`, filtered in memory without printing raw rows, found 30/30 accepted calls, 124,007 input and 16,791 output tokens, one accepted planner repair, and estimated cost $0.2775385. Task counts were eight witness answers, nine opponent plans, nine counsel responses, one objection ruling, one settlement evaluation, one jury deliberation, and one debrief.
 
 ## 17. Blocked external prerequisites
 
