@@ -8,6 +8,7 @@ import {
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
+  isHearingWitnessModelRequiredPreparation,
   type HearingCommandPreparation,
   type HearingPlayerCommand,
   type HearingRuntimeViewV1,
@@ -124,6 +125,11 @@ export async function orchestrateHearingCommand(
 
   if (preparation.status === "completed") {
     return HearingRuntimeViewV1Schema.parse(preparation.view);
+  }
+  if (!isHearingWitnessModelRequiredPreparation(preparation)) {
+    throw new Error(
+      "Witness command orchestration received a non-witness model request",
+    );
   }
 
   let generation: Awaited<ReturnType<typeof generateWitnessAnswer>>;

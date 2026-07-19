@@ -6,6 +6,7 @@ import {
   HEARING_START_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
   HearingRuntimeViewV1Schema,
+  isHearingWitnessModelRequiredPreparation,
   type HearingCommandPreparation,
   type HearingPlayerIntent,
   type HearingRuntimeViewV1,
@@ -145,7 +146,8 @@ liveDescribe("live Luna witness runtime", () => {
         expect(preparation).toMatchObject({ status: "model_required" });
         expect(generation).not.toBeNull();
         if (
-          preparation?.status !== "model_required" ||
+          preparation === null ||
+          !isHearingWitnessModelRequiredPreparation(preparation) ||
           generation === null
         ) {
           throw new Error("Live witness generation did not reach commit");

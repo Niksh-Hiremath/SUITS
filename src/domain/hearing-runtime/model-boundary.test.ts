@@ -1,24 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
   WITNESS_ANSWER_REQUEST_SCHEMA_VERSION,
-} from "../courtroom-ai/witness-answer";
+} from "../courtroom-ai";
 import {
   COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
   COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
 } from "../courtroom-ai/model-call-trace";
+import {
+  createOpponentPlannerOutputFixture,
+  createOpponentPlannerRequestFixture,
+} from "../../server/courtroom-ai/opponent-planner.test-fixtures";
 import {
   HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
   type HearingRuntimeViewV1,
 } from "./schema";
 import {
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+  HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
+  HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
+  hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
+  isHearingOpponentPlanModelRequiredPreparation,
+  isHearingWitnessModelRequiredPreparation,
+  opponentPlannerOutputCitations,
   witnessAnswerOutputCitations,
+  type HearingOpponentPlanPrecommit,
   type HearingWitnessGenerationPrecommit,
 } from "./model-boundary";
 
@@ -28,6 +40,7 @@ const RESPONSE_ID = "response:witness-answer:001";
 const PROVIDER_REQUEST_ID = "request:openai:001";
 const PROVIDER_RESPONSE_ID = "response:openai:001";
 const PROMPT_VERSION = "role-responder.witness-answer.prompt.v1";
+const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v1";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
@@ -317,8 +330,140 @@ function validPrecommit(): HearingWitnessGenerationPrecommit {
   });
 }
 
+function opponentPlanProposedCitationCount(
+  output: ReturnType<typeof createOpponentPlannerOutputFixture>,
+): number {
+  return output.proposedMoves.reduce(
+    (total, move) =>
+      total +
+      Object.values(move.citations).reduce(
+        (moveTotal, identifiers) => moveTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+}
+
+function validOpponentPlanPrecommit(): HearingOpponentPlanPrecommit {
+  const request = createOpponentPlannerRequestFixture();
+  const output = createOpponentPlannerOutputFixture();
+  const outputHash = hashOpponentPlannerModelOutput(output);
+  const citations = opponentPlannerOutputCitations(output);
+  const citationCount = Object.values(citations).reduce(
+    (total, identifiers) => total + identifiers.length,
+    0,
+  );
+  const usage = {
+    inputTokens: 620,
+    outputTokens: 140,
+    totalTokens: 760,
+    cachedInputTokens: 200,
+    cacheWriteTokens: 0,
+    reasoningTokens: 20,
+  };
+  const providerRequestId = "request:openai:opponent-plan:001";
+  const providerResponseId = "response:openai:opponent-plan:001";
+
+  return HearingOpponentPlanPrecommitSchema.parse({
+    schemaVersion: HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    output,
+    modelMetadata: {
+      model: "gpt-5.6-luna",
+      requestId: providerRequestId,
+      promptVersion: OPPONENT_PROMPT_VERSION,
+      schemaVersion: OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
+      latencyMs: 720,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: 0.002,
+      retryCount: 0,
+      validationFailureCount: 0,
+    },
+    trace: {
+      schemaVersion: COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+      callId: request.callId,
+      trialId: request.trialId,
+      responseId: null,
+      actorId: request.actorId,
+      actorRole: "counsel",
+      callClass: "opponent_planner",
+      task: "plan_opponent",
+      inputEventIds: [request.expectedLastEventId],
+      expectedStateVersion: request.expectedStateVersion,
+      expectedLastEventId: request.expectedLastEventId,
+      provider: "openai-responses",
+      model: "gpt-5.6-luna",
+      providerProtocolVersion: "courtroom-model-provider.v1",
+      promptVersion: OPPONENT_PROMPT_VERSION,
+      outputSchemaVersion: OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
+      knowledgeScope: {
+        knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
+        knowledgeViewHash: HASH_A,
+        stateVersion: request.expectedStateVersion,
+        factCount: 1,
+        evidenceCount: 1,
+        testimonyCount: 0,
+        priorStatementCount: 0,
+        sourceSegmentCount: 0,
+        publicRecordEventCount: 0,
+        currentExchangeCount: 0,
+      },
+      promptAudit: {
+        stablePrefixHash: HASH_A,
+        trustedContextHash: HASH_B,
+        untrustedInputHash: HASH_C,
+        inputCharacterCount: 1_600,
+      },
+      status: "accepted",
+      startedAt: "2026-07-19T06:00:00.000Z",
+      completedAt: "2026-07-19T06:00:00.720Z",
+      latencyMs: 720,
+      firstStructuredDeltaMs: 240,
+      firstAcceptedSegmentMs: null,
+      retryCount: 0,
+      validationFailureCount: 0,
+      estimatedCostUsd: 0.002,
+      usage,
+      acceptedAttempt: 1,
+      acceptedCitations: citations,
+      acceptedCitationCount: citationCount,
+      outputHash,
+      outputCharacterCount: JSON.stringify(output).length,
+      committedActionId: null,
+      committedEventId: null,
+      safeFailureCode: null,
+      attempts: [
+        {
+          schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+          attempt: 1,
+          mode: "initial",
+          status: "accepted",
+          providerRequestId,
+          providerResponseId,
+          startedAt: "2026-07-19T06:00:00.000Z",
+          completedAt: "2026-07-19T06:00:00.720Z",
+          latencyMs: 720,
+          firstStructuredDeltaMs: 240,
+          streamEventCount: 12,
+          structuredDeltaCount: 4,
+          streamedCharacterCount: 560,
+          outputHash,
+          proposedCitationCount:
+            opponentPlanProposedCitationCount(output),
+          usage,
+          validationIssueCodes: [],
+          safeErrorCode: null,
+        },
+      ],
+    },
+  });
+}
+
 describe("hearing command model boundary", () => {
-  it("strictly accepts only completed views or server-only witness requests", () => {
+  it("strictly accepts completed views and both server-only model requests", () => {
     const completed = {
       schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
       status: "completed" as const,
@@ -329,11 +474,38 @@ describe("hearing command model boundary", () => {
       status: "model_required" as const,
       request: witnessRequest(),
     };
+    const opponentModelRequired = {
+      schemaVersion: HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
+      status: "model_required" as const,
+      request: createOpponentPlannerRequestFixture(),
+    };
 
     expect(HearingCommandPreparationSchema.parse(completed)).toEqual(completed);
     expect(HearingCommandPreparationSchema.parse(modelRequired)).toEqual(
       modelRequired,
     );
+    expect(
+      HearingCommandPreparationSchema.parse(opponentModelRequired),
+    ).toEqual(opponentModelRequired);
+    expect(
+      isHearingWitnessModelRequiredPreparation(
+        HearingCommandPreparationSchema.parse(modelRequired),
+      ),
+    ).toBe(true);
+    expect(
+      isHearingOpponentPlanModelRequiredPreparation(
+        HearingCommandPreparationSchema.parse(opponentModelRequired),
+      ),
+    ).toBe(true);
+    expect(
+      HearingCommandPreparationSchema.safeParse({
+        ...opponentModelRequired,
+        request: {
+          ...opponentModelRequired.request,
+          responseId: "response:forged-witness-field",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it.each(["ownerId", "stateJson", "graphJson", "policyJson"])(
@@ -565,6 +737,185 @@ describe("hearing command model boundary", () => {
 
       expect(
         HearingWitnessGenerationPrecommitSchema.safeParse(envelope).success,
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a mutually bound, uncommitted opponent plan", () => {
+    const envelope = validOpponentPlanPrecommit();
+
+    expect(HearingOpponentPlanPrecommitSchema.parse(envelope)).toEqual(
+      envelope,
+    );
+    expect(envelope.trace.outputHash).toBe(
+      hashOpponentPlannerModelOutput(envelope.output),
+    );
+    expect(envelope.trace.acceptedCitations).toEqual(
+      opponentPlannerOutputCitations(envelope.output),
+    );
+  });
+
+  it.each(["ownerId", "actorId", "actionId", "strategyId", "stateJson"])(
+    "rejects forbidden opponent-plan precommit %s data",
+    (field) => {
+      expect(
+        HearingOpponentPlanPrecommitSchema.safeParse({
+          ...validOpponentPlanPrecommit(),
+          [field]: "must-be-derived-server-side",
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["trialId", "trial:other"],
+    ["callId", "call:opponent-plan:other"],
+  ] as const)("rejects a mismatched opponent trace %s", (field, value) => {
+    const envelope = validOpponentPlanPrecommit();
+    envelope.trace[field] = value;
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("rejects the wrong task, model, or response identity", () => {
+    const wrongTask = validOpponentPlanPrecommit();
+    wrongTask.trace.callClass = "role_responder";
+    wrongTask.trace.task = "witness_answer";
+    wrongTask.trace.actorRole = "witness";
+    const wrongModel = validOpponentPlanPrecommit();
+    wrongModel.trace.model = "gpt-5.6-terra";
+    wrongModel.modelMetadata.model = "gpt-5.6-terra";
+    const responseBound = validOpponentPlanPrecommit();
+    responseBound.trace.responseId = "response:forged";
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(wrongTask).success,
+    ).toBe(false);
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(wrongModel).success,
+    ).toBe(false);
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(responseBound).success,
+    ).toBe(false);
+  });
+
+  it.each<{
+    field: string;
+    mutate: (envelope: HearingOpponentPlanPrecommit) => void;
+  }>([
+    {
+      field: "promptVersion",
+      mutate: (envelope) => {
+        envelope.modelMetadata.promptVersion = "wrong.prompt.v1";
+      },
+    },
+    {
+      field: "schemaVersion",
+      mutate: (envelope) => {
+        envelope.modelMetadata.schemaVersion = "wrong.schema.v1";
+      },
+    },
+    {
+      field: "latencyMs",
+      mutate: (envelope) => {
+        envelope.modelMetadata.latencyMs =
+          (envelope.modelMetadata.latencyMs ?? 0) + 1;
+      },
+    },
+    {
+      field: "estimatedCostUsd",
+      mutate: (envelope) => {
+        envelope.modelMetadata.estimatedCostUsd = 0.5;
+      },
+    },
+    {
+      field: "requestId",
+      mutate: (envelope) => {
+        envelope.modelMetadata.requestId = "request:wrong";
+      },
+    },
+  ])("rejects opponent metadata $field mismatches", ({ mutate }) => {
+    const envelope = validOpponentPlanPrecommit();
+    mutate(envelope);
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("rejects a mutually matching but unsupported planner prompt version", () => {
+    const envelope = validOpponentPlanPrecommit();
+    envelope.trace.promptVersion = "opponent-planner.prompt.v2";
+    envelope.modelMetadata.promptVersion = "opponent-planner.prompt.v2";
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it("rejects opponent output hash and proposed-citation mismatches", () => {
+    const wrongHash = validOpponentPlanPrecommit();
+    wrongHash.trace.outputHash = "f".repeat(64);
+    wrongHash.trace.attempts[0].outputHash = "f".repeat(64);
+    const wrongCount = validOpponentPlanPrecommit();
+    wrongCount.trace.attempts[0].proposedCitationCount += 1;
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(wrongHash).success,
+    ).toBe(false);
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(wrongCount).success,
+    ).toBe(false);
+  });
+
+  it("rejects opponent citations outside the durable audit fields", () => {
+    const wrongDurableCitation = validOpponentPlanPrecommit();
+    wrongDurableCitation.trace.acceptedCitations.factIds = ["fact:other"];
+    const unauditableCitation = validOpponentPlanPrecommit();
+    unauditableCitation.output.proposedMoves[0].citations.issueIds = [
+      "issue:private",
+    ];
+    const unauditableHash = hashOpponentPlannerModelOutput(
+      unauditableCitation.output,
+    );
+    unauditableCitation.trace.outputHash = unauditableHash;
+    unauditableCitation.trace.attempts[0].outputHash = unauditableHash;
+    unauditableCitation.trace.attempts[0].proposedCitationCount += 1;
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(wrongDurableCitation)
+        .success,
+    ).toBe(false);
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(unauditableCitation)
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects opponent usage not accounted for by its attempts", () => {
+    const envelope = validOpponentPlanPrecommit();
+    if (envelope.trace.usage === null) {
+      throw new Error("Fixture requires opponent-plan usage");
+    }
+    envelope.trace.usage.inputTokens += 1;
+    envelope.trace.usage.totalTokens += 1;
+    envelope.modelMetadata.inputTokens = envelope.trace.usage.inputTokens;
+
+    expect(
+      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
+    ).toBe(false);
+  });
+
+  it.each(["committedActionId", "committedEventId"] as const)(
+    "rejects an opponent-plan precommit with %s populated",
+    (field) => {
+      const envelope = validOpponentPlanPrecommit();
+      envelope.trace[field] = `${field}:already-committed`;
+
+      expect(
+        HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
       ).toBe(false);
     },
   );

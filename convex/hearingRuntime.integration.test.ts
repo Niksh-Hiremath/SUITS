@@ -22,6 +22,7 @@ import {
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
   hashWitnessAnswerModelOutput,
+  isHearingWitnessModelRequiredPreparation,
   witnessAnswerOutputCitations,
   type HearingCommandPreparation,
   type HearingPlayerIntent,
@@ -182,9 +183,12 @@ async function prepare(
 }
 
 async function fakeWitnessGeneration(
-  preparation: Extract<HearingCommandPreparation, { status: "model_required" }>,
+  preparation: HearingCommandPreparation,
   startedAt: string,
 ): Promise<HearingWitnessGenerationPrecommit> {
+  if (!isHearingWitnessModelRequiredPreparation(preparation)) {
+    throw new Error("Expected witness model preparation");
+  }
   const fact = preparation.request.knowledgeView.witness.facts[0];
   if (!fact) throw new Error("Fixture witness requires at least one known fact");
   const output = WitnessAnswerModelOutputSchema.parse({
@@ -558,7 +562,7 @@ describe("V3 hearing runtime facade", () => {
       },
     );
     expect(question.preparation.status).toBe("model_required");
-    if (question.preparation.status !== "model_required") {
+    if (!isHearingWitnessModelRequiredPreparation(question.preparation)) {
       throw new Error("Expected witness model preparation");
     }
     const preparedRequest = question.preparation.request;
@@ -614,7 +618,7 @@ describe("V3 hearing runtime facade", () => {
       }),
     );
     expect(retry.status).toBe("model_required");
-    if (retry.status !== "model_required") {
+    if (!isHearingWitnessModelRequiredPreparation(retry)) {
       throw new Error("Expected retry model preparation");
     }
     expect(retry.request.responseId).toBe(preparedRequest.responseId);
@@ -666,7 +670,7 @@ describe("V3 hearing runtime facade", () => {
         presentedEvidenceIds: [],
       },
     );
-    if (question.preparation.status !== "model_required") {
+    if (!isHearingWitnessModelRequiredPreparation(question.preparation)) {
       throw new Error("Expected witness model preparation");
     }
     const generation = await fakeWitnessGeneration(
@@ -771,7 +775,7 @@ describe("V3 hearing runtime facade", () => {
         presentedEvidenceIds: [],
       },
     );
-    if (question.preparation.status !== "model_required") {
+    if (!isHearingWitnessModelRequiredPreparation(question.preparation)) {
       throw new Error("Expected witness model preparation");
     }
     const generation = await fakeWitnessGeneration(
