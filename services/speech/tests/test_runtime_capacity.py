@@ -77,12 +77,19 @@ async def test_stt_sessions_are_bounded_and_terminal_release_is_idempotent(
 
     first = await runtime.create_stt_session(sample_rate_hz=16_000)
     assert runtime.capacity_snapshot.stt_sessions.active == 1
+    stt_capability = runtime.capabilities().providers[0]
+    assert stt_capability.ready is False
+    assert stt_capability.diagnostic is not None
+    assert "capacity is exhausted" in stt_capability.diagnostic
+    assert runtime.models_ready is False
     with pytest.raises(SttSessionCapacityError, match="capacity is exhausted"):
         await runtime.create_stt_session(sample_rate_hz=16_000)
 
     final = await first.finish()
     assert final.is_final is True
     assert runtime.capacity_snapshot.stt_sessions.active == 0
+    assert runtime.capabilities().providers[0].ready is True
+    assert runtime.models_ready is True
     await first.cancel()
     assert runtime.capacity_snapshot.stt_sessions.active == 0
 

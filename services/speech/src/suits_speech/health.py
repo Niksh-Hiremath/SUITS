@@ -239,10 +239,16 @@ class SpeechRuntime:
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
         self.cached_clip_ids: tuple[str, ...] = ()
         self._load_lock = asyncio.Lock()
+        self._load_task: asyncio.Task[CapabilitiesEvent] | None = None
 
     @property
     def models_ready(self) -> bool:
-        return self.stt_provider.status.ready and self.tts_provider.status.ready
+        return (
+            self.stt_provider.status.ready
+            and self.tts_provider.status.ready
+            and self._stt_session_pool.snapshot.available > 0
+            and not self._tts_lane.snapshot.quarantined
+        )
 
     @property
     def tts_lane_snapshot(self) -> TtsLaneSnapshot:
@@ -344,13 +350,66 @@ class SpeechRuntime:
         """Load configured local artifacts. Providers may not download here."""
 
         async with self._load_lock:
-            await asyncio.gather(
-                self.stt_provider.load(),
-                self.tts_provider.load(),
+            if self.models_ready:
+                return self.capabilities()
+            if self._load_task is None or self._load_task.done():
+                self._load_task = asyncio.create_task(
+                    self._load_models_once(),
+                    name="speech:providers:load",
+                )
+            load_task = self._load_task
+        return await asyncio.shield(load_task)
+
+    async def _load_models_once(self) -> CapabilitiesEvent:
+        results = await asyncio.gather(
+            self._load_provider_if_needed(self.stt_provider),
+            self._load_provider_if_needed(self.tts_provider),
+            return_exceptions=True,
+        )
+        failures = tuple(result for result in results if isinstance(result, BaseException))
+        if failures:
+            _LOGGER.warning(
+                "speech provider load failed failureCount=%s errorTypes=%s",
+                len(failures),
+                ",".join(sorted({type(error).__name__ for error in failures})),
             )
-            return self.capabilities()
+            raise RuntimeError("one or more local speech providers failed to load")
+        return self.capabilities()
+
+    @staticmethod
+    async def _load_provider_if_needed(
+        provider: SttProvider | TtsProvider,
+    ) -> ProviderStatus:
+        status = provider.status
+        if status.ready:
+            return status
+        return await provider.load()
 
     def capabilities(self, *, request_id: str | None = None) -> CapabilitiesEvent:
+        stt = _provider_capability(self.stt_provider.status)
+        stt_capacity = self._stt_session_pool.snapshot
+        if stt_capacity.available == 0:
+            stt = stt.model_copy(
+                update={
+                    "ready": False,
+                    "diagnostic": (
+                        "local recognizer capacity is exhausted; finish the active utterance "
+                        "or restart the speech service if capacity does not recover"
+                    ),
+                }
+            )
+        tts = _provider_capability(self.tts_provider.status)
+        tts_lane = self._tts_lane.snapshot
+        if tts_lane.quarantined:
+            tts = tts.model_copy(
+                update={
+                    "ready": False,
+                    "diagnostic": (
+                        "local synthesis lane is quarantined after provider termination could "
+                        "not be confirmed; restart the speech service"
+                    ),
+                }
+            )
         vad = ProviderCapability(
             provider_id="energy-vad",
             kind="vad",
@@ -367,8 +426,8 @@ class SpeechRuntime:
         return CapabilitiesEvent(
             request_id=request_id,
             providers=(
-                _provider_capability(self.stt_provider.status),
-                _provider_capability(self.tts_provider.status),
+                stt,
+                tts,
                 vad,
             ),
             cuda=self.cuda,

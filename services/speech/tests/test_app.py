@@ -10,6 +10,7 @@ from starlette.testclient import WebSocketTestSession
 
 from suits_speech.app import create_app
 from suits_speech.config import SpeechSettings
+from suits_speech.health import SpeechRuntime
 from suits_speech.protocol import PROTOCOL_VERSION
 
 
@@ -83,7 +84,7 @@ def test_handshake_load_and_ping(client: TestClient) -> None:
             "type": "flow_control",
             "sttAvailableFrames": 8,
             "sttAvailableBytes": 524_288,
-            "ttsWindowBytes": 96_000,
+            "ttsWindowBytes": 5_760,
             "ttsOutstandingBytes": 0,
         }
 
@@ -158,3 +159,25 @@ def test_websocket_rejects_wrong_origin_and_missing_protocol(client: TestClient)
         ):
             pass
     assert missing_protocol.value.code == 4_406
+
+
+def test_websocket_connection_capacity_is_enforced_and_released(tmp_path: Path) -> None:
+    settings = SpeechSettings.from_env(
+        {
+            "SUITS_SPEECH_MODE": "fake",
+            "SUITS_SPEECH_ALLOWED_ORIGINS": "http://testserver",
+            "SUITS_SPEECH_CACHE_DIR": str(tmp_path),
+            "SUITS_SPEECH_MAX_CONNECTIONS": "1",
+        }
+    )
+    runtime = SpeechRuntime(settings=settings)
+    bounded_client = TestClient(create_app(settings, runtime=runtime))
+
+    with _connect(bounded_client):
+        assert runtime.capacity_snapshot.connections.active == 1
+        with pytest.raises(WebSocketDisconnect) as overloaded:
+            with _connect(bounded_client):
+                pass
+        assert overloaded.value.code == 4_013
+
+    assert runtime.capacity_snapshot.connections.active == 0

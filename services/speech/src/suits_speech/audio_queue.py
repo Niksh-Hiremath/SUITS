@@ -343,7 +343,9 @@ class TtsAckWindow:
         self._maximum = max_outstanding_bytes
         self._condition = asyncio.Condition()
         self._reservations: dict[str, AckReservation] = {}
+        self._delivering_tokens: set[str] = set()
         self._sent_tokens: set[str] = set()
+        self._early_acked_tokens: set[str] = set()
         self._pending_keys: set[str] = set()
         self._outstanding_bytes = 0
 
@@ -388,12 +390,28 @@ class TtsAckWindow:
             finally:
                 self._pending_keys.discard(key)
 
+    async def mark_delivering(self, *, frame_token: str) -> bool:
+        """Open the delivery race window without releasing playback credit."""
+
+        async with self._condition:
+            if frame_token not in self._reservations:
+                return False
+            self._delivering_tokens.add(frame_token)
+            return True
+
     async def mark_sent(self, *, frame_token: str) -> bool:
         """Make a reservation ACKable only after its binary frame was sent."""
 
         async with self._condition:
             if frame_token not in self._reservations:
                 return False
+            self._delivering_tokens.discard(frame_token)
+            if frame_token in self._early_acked_tokens:
+                reservation = self._reservations.pop(frame_token)
+                self._early_acked_tokens.discard(frame_token)
+                self._outstanding_bytes -= reservation.byte_length
+                self._condition.notify_all()
+                return True
             self._sent_tokens.add(frame_token)
             return True
 
@@ -411,7 +429,7 @@ class TtsAckWindow:
         key = frame_token
         async with self._condition:
             reservation = self._reservations.get(key)
-            if reservation is None or key not in self._sent_tokens:
+            if reservation is None:
                 return False
             if (
                 reservation.job_id != job_id
@@ -419,6 +437,11 @@ class TtsAckWindow:
                 or reservation.frame_sequence != frame_sequence
                 or reservation.byte_length != byte_length
             ):
+                return False
+            if key in self._delivering_tokens:
+                self._early_acked_tokens.add(key)
+                return True
+            if key not in self._sent_tokens:
                 return False
             del self._reservations[key]
             self._sent_tokens.discard(key)
@@ -436,7 +459,9 @@ class TtsAckWindow:
             released = 0
             for key in removed:
                 released += self._reservations.pop(key).byte_length
+                self._delivering_tokens.discard(key)
                 self._sent_tokens.discard(key)
+                self._early_acked_tokens.discard(key)
             self._outstanding_bytes -= released
             self._condition.notify_all()
             return released
@@ -473,7 +498,9 @@ class TtsAckWindow:
         async with self._condition:
             released = self._outstanding_bytes
             self._reservations.clear()
+            self._delivering_tokens.clear()
             self._sent_tokens.clear()
+            self._early_acked_tokens.clear()
             self._outstanding_bytes = 0
             self._condition.notify_all()
             return released

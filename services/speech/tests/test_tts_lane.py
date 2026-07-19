@@ -349,6 +349,48 @@ async def test_executor_work_remains_tracked_until_physical_exit() -> None:
     assert lane.snapshot.quarantined is True
 
 
+async def test_runtime_capability_reports_quarantined_synthesis_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        health_module,
+        "detect_cuda",
+        lambda *, fake_mode: CudaCapability(
+            available=False,
+            diagnostic=f"fake_mode={fake_mode}",
+        ),
+    )
+    provider = _NonCooperativeProvider()
+    runtime = SpeechRuntime(
+        settings=SpeechSettings.from_env({"SUITS_SPEECH_MODE": "fake"}),
+        tts_provider=provider,
+    )
+    runtime._tts_lane = TtsProviderLane(
+        provider=provider,
+        call_timeout_seconds=0.01,
+        cancellation_grace_seconds=0.01,
+    )
+    synthesis = asyncio.create_task(
+        runtime.synthesize_phrase(
+            text="slow",
+            voice_id="judge",
+            cancel_event=asyncio.Event(),
+        )
+    )
+    await provider.first_entered.wait()
+    with pytest.raises(TtsLaneQuarantinedError):
+        await synthesis
+
+    tts_capability = runtime.capabilities().providers[1]
+    assert tts_capability.ready is False
+    assert tts_capability.diagnostic is not None
+    assert "restart the speech service" in tts_capability.diagnostic
+    assert runtime.models_ready is False
+
+    provider.release_first.set()
+    await _wait_until_lane_is_physically_idle(runtime._tts_lane)
+
+
 async def test_noncooperative_active_cancellation_quarantines_lane() -> None:
     provider = _NonCooperativeProvider()
     lane = TtsProviderLane(

@@ -329,6 +329,35 @@ async def test_ack_before_binary_send_never_releases_reserved_bytes() -> None:
     assert await window.mark_sent(frame_token=reservation.frame_token) is False
 
 
+async def test_ack_during_binary_delivery_is_deferred_until_send_commits() -> None:
+    window = TtsAckWindow(max_outstanding_bytes=640)
+    reservation = _reservation("job:delivering", frame_sequence=0)
+    await window.reserve(reservation, cancel_event=asyncio.Event())
+    assert await window.mark_delivering(frame_token=reservation.frame_token) is True
+
+    assert await window.acknowledge(
+        job_id=reservation.job_id,
+        response_id=reservation.response_id,
+        frame_sequence=reservation.frame_sequence,
+        frame_token=reservation.frame_token,
+        byte_length=reservation.byte_length,
+    )
+    assert await window.outstanding_bytes() == 640
+
+    assert await window.mark_sent(frame_token=reservation.frame_token) is True
+    assert await window.outstanding_bytes() == 0
+    assert (
+        await window.acknowledge(
+            job_id=reservation.job_id,
+            response_id=reservation.response_id,
+            frame_sequence=reservation.frame_sequence,
+            frame_token=reservation.frame_token,
+            byte_length=reservation.byte_length,
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize("byte_length", [0, -10])
 async def test_credit_accounting_rejects_non_positive_lengths(byte_length: int) -> None:
     with pytest.raises(ValueError):
