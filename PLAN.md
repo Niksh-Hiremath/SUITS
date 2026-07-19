@@ -92,15 +92,15 @@ Codex may mark the Goal complete only when all applicable items below are proven
 
 ### E. Courtroom presentation
 
-- [ ] The hearing runs inside a rendered courtroom scene rather than a chat-only interface.
-- [ ] The scene includes judge, user counsel, opposing counsel, current witness, clerk/evidence display, and jury representation.
-- [ ] Characters support idle, listening, thinking, speaking, objecting, standing, sitting, presenting, reacting, and ruling/gavel states.
-- [ ] Active-speaker camera direction and smooth cuts are implemented.
-- [ ] Speech drives lip/viseme movement and speaking-state timing.
+- [x] The hearing runs inside a rendered courtroom scene rather than a chat-only interface.
+- [x] The scene includes judge, user counsel, opposing counsel, current witness, clerk/evidence display, and jury representation.
+- [x] Characters support idle, listening, thinking, speaking, objecting, standing, sitting, presenting, reacting, and ruling/gavel states.
+- [x] Active-speaker camera direction and smooth cuts are implemented.
+- [x] Speech drives lip/viseme movement and speaking-state timing.
 - [ ] Emotional/performance metadata influences bounded facial/body animation.
 - [ ] Evidence presentation and rulings have visible transitions.
-- [ ] A reduced-quality mode preserves all interactions on weaker hardware.
-- [ ] All external assets have recorded licenses/attribution.
+- [x] A reduced-quality mode preserves all interactions on weaker hardware.
+- [x] All external assets have recorded licenses/attribution.
 
 ### F. Debrief, records, and evaluation
 
@@ -560,19 +560,19 @@ Gate:
 Deliverables:
 
 - [x] Three.js/R3F scene and licensed assets;
-- [ ] character animation state machines;
-- [ ] camera director;
-- [ ] lip/viseme timing;
+- [x] character animation state machines;
+- [x] camera director;
+- [x] lip/viseme timing;
 - [ ] evidence/ruling/settlement transitions;
-- [ ] quality settings and responsive layout;
-- [ ] accessibility and motion-reduction support;
+- [x] quality settings and responsive layout;
+- [x] accessibility and motion-reduction support;
 - [ ] visual regression evidence.
 
 Gate:
 
 - [ ] Playwright completes the primary trial flow with no console errors.
 - [ ] Screenshots/video show each required character state and a mid-sentence objection sequence.
-- [ ] Reduced-quality mode remains functional.
+- [x] Reduced-quality mode remains functional.
 
 ### Milestone 8 — Debrief, records, and evals
 
@@ -909,6 +909,13 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: presentation state still uses the static view selector. Next work must add the pure ephemeral animation/camera/mouth reducer, consume this exact stream on the hearing page, animate the R3F scene, project validated model performance safely, and capture the required visual/browser evidence.
   - Commits: `b7da0b4` and `670abc0`.
 
+- 2026-07-20 03:23 IST - Milestone 7 exact performance runtime and renderer checkpoint
+  - Changed: added a strict immutable ephemeral presentation reducer with monotonic playback/VAD high-water marks, bounded terminal identities and shape-only mouth cues, the required semantic priority ladder, exact current/pending camera compositions, and 180 ms return hysteresis. The hearing page now subscribes to exact performance events, resets before cross-trial speech can enqueue, memoizes the durable base frame, rebases focus/shot/reduced motion, and schedules one absolute hysteresis wakeup. The R3F scene now blends or cuts camera poses on demand, animates all eleven allowlisted poses, samples mouth cues against the page monotonic clock, exposes only semantic renderer selectors, and stops continuous animation under reduced motion. High/balanced/reduced quality controls remain functional without remounting or hiding hearing controls.
+  - Safety and evidence: static recording stands/listens and cannot fabricate speaking before exact VAD. Requested playback may set posture/focus but the mouth remains at rest until the scheduled Web Audio start; terminal events return the mouth to rest while camera composition holds through hysteresis. The browser ledger is bounded and records only allowlisted actor/purpose/pose/camera/mouth attributes, never transcript, timing-mark text, or raw audio. The production-path fixture proves opposing-counsel objection, judge ruling, resumed-witness speech, exact close shots, mouth-after-scheduled-Web-Audio-start ordering, terminal rest, the settled witness/counsel two-shot, and a reduced-motion judge speaker test with cut plus static narrow mouth.
+  - Verified: 31 focused presentation/page/renderer tests, strict TypeScript, zero-warning scoped ESLint, the full 1,307-test root suite with three intentional live-only skips, the 19-route production build, and the production-path Playwright fixture passed. The final browser run completed 1/1 in 44.4 seconds including PowerShell-launched fake speech, Next.js, and a 7.07-second linked Convex synchronization without a login prompt. Independent reviews found and confirmed fixes for stale generation/fence resurrection, same-actor and base-to-base camera composition loss, reduced-motion render loops, cross-trial reset ordering, and a test timestamp that previously measured source scheduling call order rather than the scheduled AudioContext start; the final re-review reported no P0/P1 findings.
+  - Remaining: Milestone 7 is not complete. Validated GPT performance metadata, evidence and settlement transitions, a deterministic visual state atlas, success-run screenshots/video of every required state, and the primary full-trial Playwright flow remain open. Automated Chromium remains fake-media and muted-output evidence, not a real microphone, physical speaker audibility, or GPU speech claim.
+  - Commits: `d32d165`, `378595f`, `361b3b5`, `3b77f41`, `b763b48`, and `01d55c4`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -984,6 +991,10 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The speech companion publishes `stt_final` immediately followed by its authoritative `speech_ended` event. A controller fallback emitted from the final handler wins too early in browser task ordering; the fallback must occur only when the owned recording is actually cleared, so the service VAD reason and epoch timestamp can remain authoritative.
 - Local partial-objection IDs are derived from generation, utterance ID, and revision and can reach 292 characters even though each speech protocol identifier is limited to 128. Presentation contracts therefore need a distinct bounded local-interruption identifier instead of reusing the transport identifier schema.
 
+- The browser playback adapter schedules each source at least eight milliseconds ahead of `AudioContext.currentTime`. The initial M7 probe timestamped the intercepted JavaScript call, so it could not prove mouth-after-scheduled-start ordering until it retained the `when` value and converted both clocks.
+- A durable base reframe can keep the same semantic actor while changing composition, most visibly from `witness_close` to `witness_counsel_two_shot`. Actor-only camera state silently bypassed hysteresis for that case; exact shot ownership fixed it.
+- R3F `frameloop="demand"` still becomes a continuous loop when a component calls `invalidate()` on every active semantic frame. Reduced motion required both static pose time and explicit invalidation termination, not only smaller animation amplitudes.
+
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
@@ -1056,6 +1067,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep renderer state subordinate to validated application contracts. The scene consumes an immutable allowlisted presentation frame, never the controller, model output JSON, transcript text, case summary, fact propositions, evidence descriptions, or arbitrary Three.js properties.
 - Do not fabricate an audible actor from the durable transcript. Generic playback remains neutral when no exact local event is available; the hearing performance stream now carries explicit stable scene bindings, Web Audio timing, and cancellation fencing for renderer consumption.
 - Keep exact local audio/VAD performance as a separate ephemeral renderer stream rather than a material trial event. Bind every playback update to the full controller identity and semantic scene purpose, use the Web Audio clock for mouth timing, and treat observer/schema failures as presentation failures that cannot retain microphone or playback ownership. Durable GPT-selected emotion/gesture metadata remains a separately authorized Convex sidecar decision and is not inferred from this stream.
+- `AudioBufferSourceNode.start()` schedules against the AudioContext clock and may target a future `when`; the JavaScript call timestamp is not an audible-start timestamp. Browser timing evidence must convert that scheduled context time to the page monotonic clock, and muted fake-media automation must not claim physical speaker audibility.
+- Camera actor identity is insufficient to preserve composition: the witness can validly own both a close shot and a witness/counsel two-shot. The ephemeral runtime therefore owns the exact current and pending shot in addition to actor, priority, and cue order.
+- Reduced motion must freeze time-varying pose functions and stop mouth/pose self-invalidation after the event-triggered frame. A static semantic speaking state is not permission to run a perpetual render loop.
 
 ## 16. Verification Evidence
 
@@ -1292,6 +1306,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npx vitest run src/lib/speech` - exit 0; all 11 files and 134 tests passed.
   - `npm test` - exit 0; 148 files passed and three intentional live-only files skipped, with 1,284 tests passed and three skipped.
   - `git diff --check` - exit 0 before commit. `git push origin main` - exit 0 through `b7da0b4` (`feat: define hearing performance event contract`) and then `670abc0` (`feat: stream exact hearing performance events`).
+
+- 2026-07-20 02:37-03:23 IST - Milestone 7 runtime, animation, and browser verification
+  - `npm run typecheck`, scoped `npx eslint` over the runtime/page/renderer/E2E slice with `--max-warnings 0`, and `git diff --check` - exit 0 after the exact-shot and scheduled-start fixes.
+  - `npx vitest run src/domain/courtroom-presentation src/components/courtroom/courtroom-runtime.source.test.ts src/app/hearing/page.source.test.ts` - exit 0; four files and 31 tests passed. Coverage includes high-water/tombstone fencing, all eleven semantic poses, bounded shape-only timing, exact current/pending shots, same-actor and base-to-base hysteresis, recording-without-fabricated-speech, trial reset ordering, reduced-motion cuts/static pose, and renderer data boundaries.
+  - `npm test` - exit 0; 150 files passed, three live-only files skipped, 1,307 tests passed, and three tests skipped.
+  - `npm run build` - exit 0 in 16.1 seconds; Next.js compiled/typechecked and generated all 19 routes/pages.
+  - `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts` - exit 0; one Chromium production-path fixture passed in 44.4 seconds (23.3-second test body). Its PowerShell harness synchronized `cheery-bandicoot-36` in 7.07 seconds without a login prompt and used fake media plus muted output. The bounded semantic ledger proved objection -> ruling -> resumed witness order, close-shot blends, scheduled-Web-Audio-start-before-mouth timing on the shared page clock, terminal rest, settled return to the witness/counsel two-shot, reduced-quality switching without renderer loss, and a reduced-motion cut/static-mouth speaker test. The pure runtime tests prove the exact 180 ms threshold. This does not claim human microphone, physical speaker, or GPU inference evidence.
+  - Two independent review rounds found and drove fixes for monotonic playback/VAD fencing, exact camera composition, same-actor/base-to-base hysteresis, reduced-motion demand-loop termination, cross-trial reset ordering, and source-call-versus-scheduled-audio timing. Final focused re-review reported no P0/P1 findings.
+  - `git push origin main` - exit 0 through `361b3b5` (`feat: add fenced courtroom performance runtime`), `3b77f41` (`fix: preserve same-actor camera hysteresis`), `b763b48` (`feat: animate exact courtroom performance`), and `01d55c4` (`test: verify courtroom performance sequence`). The earlier quality-control commits `d32d165` and `378595f` are also on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
