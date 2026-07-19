@@ -216,7 +216,8 @@ async function fakeWitnessGeneration(
     throw new Error("Expected witness model preparation");
   }
   const fact = preparation.request.knowledgeView.witness.facts[0];
-  if (!fact) throw new Error("Fixture witness requires at least one known fact");
+  if (!fact)
+    throw new Error("Fixture witness requires at least one known fact");
   const output = WitnessAnswerModelOutputSchema.parse({
     schemaVersion: WITNESS_ANSWER_OUTPUT_SCHEMA_VERSION,
     disposition: "substantive",
@@ -275,10 +276,7 @@ async function fakeWitnessGeneration(
     callClass: "role_responder",
     task: "witness_answer",
     inputEventIds: [
-      ...new Set([
-        request.question.eventId,
-        request.expectedLastEventId,
-      ]),
+      ...new Set([request.question.eventId, request.expectedLastEventId]),
     ].sort((left, right) => left.localeCompare(right)),
     expectedStateVersion: request.expectedStateVersion,
     expectedLastEventId: request.expectedLastEventId,
@@ -289,9 +287,7 @@ async function fakeWitnessGeneration(
     outputSchemaVersion: output.schemaVersion,
     knowledgeScope: {
       knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
-      knowledgeViewHash: sha256Utf8(
-        JSON.stringify(request.knowledgeView),
-      ),
+      knowledgeViewHash: sha256Utf8(JSON.stringify(request.knowledgeView)),
       stateVersion: request.knowledgeView.stateVersion,
       factCount: request.knowledgeView.witness.facts.length,
       evidenceCount: new Set([
@@ -303,8 +299,7 @@ async function fakeWitnessGeneration(
         ),
       ]).size,
       testimonyCount: request.knowledgeView.publicRecord.testimony.length,
-      priorStatementCount:
-        request.knowledgeView.witness.priorStatements.length,
+      priorStatementCount: request.knowledgeView.witness.priorStatements.length,
       sourceSegmentCount,
       publicRecordEventCount: new Set(
         request.knowledgeView.publicRecord.testimony.map(
@@ -343,8 +338,7 @@ async function fakeWitnessGeneration(
     safeFailureCode: null,
     attempts: [
       {
-        schemaVersion:
-          COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+        schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
         attempt: 1,
         mode: "initial",
         status: "accepted",
@@ -434,22 +428,23 @@ function counselKnowledgeScope(
   };
 }
 
-function acceptedCounselTrace(input: Readonly<{
-  request: OpponentPlannerRequest | CounselResponseRequest;
-  outputHash: string;
-  outputCharacterCount: number;
-  proposedCitationCount: number;
-  acceptedCitations: ReturnType<typeof opponentPlannerOutputCitations>;
-  startedAt: string;
-  callClass: "opponent_planner" | "role_responder";
-  task: "plan_opponent" | "counsel_response";
-  promptVersion:
-    | "opponent-planner.prompt.v2"
-    | "role-responder.counsel.prompt.v1";
-  outputSchemaVersion:
-    | typeof OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION
-    | typeof COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION;
-}>) {
+function acceptedCounselTrace(
+  input: Readonly<{
+    request: OpponentPlannerRequest | CounselResponseRequest;
+    outputHash: string;
+    outputCharacterCount: number;
+    proposedCitationCount: number;
+    acceptedCitations: ReturnType<typeof opponentPlannerOutputCitations>;
+    startedAt: string;
+    callClass: "opponent_planner" | "role_responder";
+    task: "plan_opponent" | "counsel_response";
+    promptVersion:
+      "opponent-planner.prompt.v2" | "role-responder.counsel.prompt.v2";
+    outputSchemaVersion:
+      | typeof OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION
+      | typeof COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION;
+  }>,
+) {
   const completedAt = new Date(Date.parse(input.startedAt) + 250).toISOString();
   const usage = {
     inputTokens: 130,
@@ -558,7 +553,8 @@ async function fakeOpponentPlanGeneration(
     request.knowledgeView.counsel.facts[0]?.factId ??
     request.knowledgeView.publicRecord.facts[0]?.factId;
   const evidenceId = request.opportunities.presentableEvidenceIds[0];
-  const testimonyId = request.knowledgeView.publicRecord.testimony[0]?.testimonyId;
+  const testimonyId =
+    request.knowledgeView.publicRecord.testimony[0]?.testimonyId;
   if (move === "question" && !factId && !evidenceId && !testimonyId) {
     throw new Error("Fixture requires grounding for an opponent question");
   }
@@ -576,7 +572,9 @@ async function fakeOpponentPlanGeneration(
   };
   const output = OpponentPlannerModelOutputSchema.parse({
     schemaVersion: OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
-    objectives: ["Test the active witness without exceeding the permitted record."],
+    objectives: [
+      "Test the active witness without exceeding the permitted record.",
+    ],
     witnessPriorityIds: [request.procedure.activeWitnessId],
     evidencePriorityIds: [],
     settlementPosture: "avoid",
@@ -596,7 +594,8 @@ async function fakeOpponentPlanGeneration(
         : [
             {
               kind: "no_action",
-              rationale: "No further question is needed on this examination leg.",
+              rationale:
+                "No further question is needed on this examination leg.",
               citations: {
                 factIds: [],
                 evidenceIds: [],
@@ -648,6 +647,9 @@ async function fakeCounselGeneration(
   }
   const request = preparation.request;
   const directive = request.directive;
+  if (directive.kind === "give_closing") {
+    throw new Error("This examination fixture does not materialize closings");
+  }
   const citations = {
     factIds:
       directive.kind === "question_witness"
@@ -712,7 +714,7 @@ async function fakeCounselGeneration(
     startedAt,
     callClass: "role_responder",
     task: "counsel_response",
-    promptVersion: "role-responder.counsel.prompt.v1",
+    promptVersion: "role-responder.counsel.prompt.v2",
     outputSchemaVersion: output.schemaVersion,
   });
   return HearingCounselResponsePrecommitSchema.parse({
@@ -1060,8 +1062,12 @@ describe("V3 hearing runtime facade", () => {
         )
         .collect(),
     );
-    expect(events.filter((event) => event.eventType === "CALL_WITNESS")).toHaveLength(1);
-    expect(events.filter((event) => event.eventType === "SWEAR_WITNESS")).toHaveLength(1);
+    expect(
+      events.filter((event) => event.eventType === "CALL_WITNESS"),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.eventType === "SWEAR_WITNESS"),
+    ).toHaveLength(1);
   });
 
   it("prepares only a fresh witness-scoped model request and never fabricates testimony", async () => {
@@ -1166,9 +1172,15 @@ describe("V3 hearing runtime facade", () => {
         .collect(),
       calls: await ctx.db.query("courtroomModelCalls").collect(),
     }));
-    expect(stored.events.filter((event) => event.eventType === "ASK_QUESTION")).toHaveLength(1);
-    expect(stored.events.filter((event) => event.eventType === "REQUEST_RESPONSE")).toHaveLength(1);
-    expect(stored.events.filter((event) => event.eventType === "ANSWER_QUESTION")).toEqual([]);
+    expect(
+      stored.events.filter((event) => event.eventType === "ASK_QUESTION"),
+    ).toHaveLength(1);
+    expect(
+      stored.events.filter((event) => event.eventType === "REQUEST_RESPONSE"),
+    ).toHaveLength(1);
+    expect(
+      stored.events.filter((event) => event.eventType === "ANSWER_QUESTION"),
+    ).toEqual([]);
     expect(stored.events.some((event) => event.source === "ai")).toBe(false);
     expect(stored.calls).toEqual([]);
   });
@@ -1326,7 +1338,8 @@ describe("V3 hearing runtime facade", () => {
     const foreignFact = graph.facts.find(
       (fact) => !allowedFactIds.has(fact.factId),
     );
-    if (!foreignFact) throw new Error("Fixture requires a foreign witness fact");
+    if (!foreignFact)
+      throw new Error("Fixture requires a foreign witness fact");
     const foreignOutput = WitnessAnswerModelOutputSchema.parse({
       ...generation.output,
       segments: generation.output.segments.map((segment, index) =>
@@ -1536,7 +1549,9 @@ describe("V3 hearing runtime facade", () => {
       ),
     ).toEqual([]);
     expect(
-      afterDirectEvents.filter((event) => event.eventType === "RELEASE_WITNESS"),
+      afterDirectEvents.filter(
+        (event) => event.eventType === "RELEASE_WITNESS",
+      ),
     ).toEqual([]);
 
     const retriedPlan = HearingCommandPreparationSchema.parse(
@@ -1623,7 +1638,9 @@ describe("V3 hearing runtime facade", () => {
       }),
     );
     if (!isHearingWitnessModelRequiredPreparation(witnessPreparation)) {
-      throw new Error("Counsel question should atomically request a witness answer");
+      throw new Error(
+        "Counsel question should atomically request a witness answer",
+      );
     }
     expect(witnessPreparation.request.question).toMatchObject({
       examinationKind: "cross",
@@ -1676,7 +1693,9 @@ describe("V3 hearing runtime facade", () => {
     if (!isHearingOpponentPlanModelRequiredPreparation(exactWitnessReplay)) {
       throw new Error("Exact witness replay should resume opponent planning");
     }
-    expect(exactWitnessReplay.request.decisionId).toBe(nextPlan.request.decisionId);
+    expect(exactWitnessReplay.request.decisionId).toBe(
+      nextPlan.request.decisionId,
+    );
     expect(exactWitnessReplay.request.callId).not.toBe(nextPlan.request.callId);
 
     const endPlanGeneration = await fakeOpponentPlanGeneration(
@@ -1691,8 +1710,12 @@ describe("V3 hearing runtime facade", () => {
         generationJson: JSON.stringify(endPlanGeneration),
       }),
     );
-    if (!isHearingCounselResponseModelRequiredPreparation(endCounselPreparation)) {
-      throw new Error("Ending plan should still require durable counsel speech");
+    if (
+      !isHearingCounselResponseModelRequiredPreparation(endCounselPreparation)
+    ) {
+      throw new Error(
+        "Ending plan should still require durable counsel speech",
+      );
     }
     expect(endCounselPreparation.request.directive).toEqual({
       kind: "end_examination",
@@ -1741,17 +1764,19 @@ describe("V3 hearing runtime facade", () => {
       calls: await ctx.db.query("courtroomModelCalls").collect(),
     }));
     expect(
-      stored.events.filter((event) => event.eventType === "UPDATE_OPPOSING_STRATEGY"),
+      stored.events.filter(
+        (event) => event.eventType === "UPDATE_OPPOSING_STRATEGY",
+      ),
     ).toHaveLength(2);
     expect(
       stored.events.filter(
-        (event) =>
-          event.eventType === "ASK_QUESTION" && event.source === "ai",
+        (event) => event.eventType === "ASK_QUESTION" && event.source === "ai",
       ),
     ).toHaveLength(1);
     expect(
       stored.events.filter(
-        (event) => event.eventType === "REQUEST_RESPONSE" && event.source === "system",
+        (event) =>
+          event.eventType === "REQUEST_RESPONSE" && event.source === "system",
       ),
     ).toHaveLength(2);
     expect(
@@ -1764,7 +1789,9 @@ describe("V3 hearing runtime facade", () => {
     expect(
       stored.events.filter((event) => event.eventType === "RELEASE_WITNESS"),
     ).toHaveLength(1);
-    expect(stored.calls.filter((call) => call.status === "accepted")).toHaveLength(6);
+    expect(
+      stored.calls.filter((call) => call.status === "accepted"),
+    ).toHaveLength(6);
   });
 
   it("recovers an existing counsel question whose response continuation is missing", async () => {
@@ -1799,6 +1826,9 @@ describe("V3 hearing runtime facade", () => {
       throw new Error("Fixture requires a completed counsel question");
     }
     const request = counselPreparation.request;
+    if (request.appearance === null) {
+      throw new Error("Fixture requires a counsel examination appearance");
+    }
     const material = {
       trialId: request.trialId,
       decisionId: request.decisionId,
@@ -1806,9 +1836,7 @@ describe("V3 hearing runtime facade", () => {
     const actor = await backend.run(async (ctx) => {
       const projection = await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", request.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", request.trialId))
         .unique();
       if (!projection) throw new Error("Expected trial projection");
       const state = TrialStateV3Schema.parse(JSON.parse(projection.stateJson));
@@ -1876,9 +1904,7 @@ describe("V3 hearing runtime facade", () => {
     if (!isHearingWitnessModelRequiredPreparation(recovered)) {
       throw new Error("Recovered question should require witness generation");
     }
-    expect(recovered.request.question.questionId).toBe(
-      primaryQuestionId,
-    );
+    expect(recovered.request.question.questionId).toBe(primaryQuestionId);
 
     const stored = await backend.run(async (ctx) => ({
       events: await ctx.db
@@ -1891,8 +1917,7 @@ describe("V3 hearing runtime facade", () => {
     }));
     expect(
       stored.events.filter(
-        (event) =>
-          event.eventType === "ASK_QUESTION" && event.source === "ai",
+        (event) => event.eventType === "ASK_QUESTION" && event.source === "ai",
       ),
     ).toHaveLength(1);
     expect(
@@ -1918,7 +1943,9 @@ describe("V3 hearing runtime facade", () => {
 
     for (let questionIndex = 0; questionIndex < 3; questionIndex += 1) {
       if (!isHearingOpponentPlanModelRequiredPreparation(preparation)) {
-        throw new Error("Expected opponent planning before each capped question");
+        throw new Error(
+          "Expected opponent planning before each capped question",
+        );
       }
       expect(preparation.request.procedure.answeredQuestionCount).toBe(
         questionIndex,
@@ -1957,7 +1984,9 @@ describe("V3 hearing runtime facade", () => {
       throw new Error("Third answer should reach one final capped plan");
     }
     expect(preparation.request.procedure.answeredQuestionCount).toBe(3);
-    expect(preparation.request.opportunities.questionableWitnessIds).toEqual([]);
+    expect(preparation.request.opportunities.questionableWitnessIds).toEqual(
+      [],
+    );
     const cappedQuestionGeneration = await fakeOpponentPlanGeneration(
       preparation,
       new Date(baseTime + modelSteps * 1_000).toISOString(),
@@ -2011,8 +2040,7 @@ describe("V3 hearing runtime facade", () => {
     );
     expect(
       events.filter(
-        (event) =>
-          event.eventType === "ASK_QUESTION" && event.source === "ai",
+        (event) => event.eventType === "ASK_QUESTION" && event.source === "ai",
       ),
     ).toHaveLength(3);
     expect(
@@ -2103,7 +2131,9 @@ describe("V3 hearing runtime facade", () => {
     ));
     expect(view.activeAppearance).toBeNull();
     expect(
-      view.witnesses.find((witness) => witness.witnessId === "witness_rina_shah"),
+      view.witnesses.find(
+        (witness) => witness.witnessId === "witness_rina_shah",
+      ),
     ).toMatchObject({ status: "released", callCount: 1 });
 
     ({ view } = await command(
@@ -2153,7 +2183,8 @@ describe("V3 hearing runtime facade", () => {
       "2026-07-19T03:07:00.000Z",
       {
         type: "finish_trial",
-        closingText: "The testimony shows why the admitted record warrants relief.",
+        closingText:
+          "The testimony shows why the admitted record warrants relief.",
       },
     ));
     expect(view.trial).toMatchObject({ phase: "complete", status: "complete" });

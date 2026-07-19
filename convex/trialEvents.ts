@@ -1,9 +1,6 @@
 import { v } from "convex/values";
 
-import {
-  CaseGraphV1Schema,
-  type CaseGraphV1,
-} from "../src/domain/case-graph";
+import { CaseGraphV1Schema, type CaseGraphV1 } from "../src/domain/case-graph";
 import {
   CourtroomModelCallTraceSchema,
   type CounselRoleResponseModelOutput,
@@ -306,10 +303,7 @@ async function requireStoredGeneratedWitnessEvent(
     event.responseId !== input.action.responseId ||
     !sameIdentifierSet(event.factIds, input.action.payload.factIds) ||
     !sameIdentifierSet(event.evidenceIds, input.action.payload.evidenceIds) ||
-    !sameIdentifierSet(
-      event.factIds,
-      input.trace.acceptedCitations.factIds,
-    ) ||
+    !sameIdentifierSet(event.factIds, input.trace.acceptedCitations.factIds) ||
     !sameIdentifierSet(
       event.evidenceIds,
       input.trace.acceptedCitations.evidenceIds,
@@ -541,8 +535,7 @@ function requireOpponentDirectiveAtCurrentHead(
     state.activeWitnessId !== directive.appearance.witnessId ||
     appearance?.witnessId !== directive.appearance.witnessId ||
     appearance?.stage !== directive.appearance.examinationKind ||
-    leg?.answeredQuestionCount !==
-      directive.appearance.answeredQuestionCount ||
+    leg?.answeredQuestionCount !== directive.appearance.answeredQuestionCount ||
     !sameCanonicalJson(state.actors[action.actor.actorId], action.actor)
   ) {
     return staleOpponentPlan();
@@ -650,19 +643,13 @@ function citationsWithinDirective(
     );
   }
   const allowedFacts = new Set(directive.directive.permittedFactIds);
-  const allowedEvidence = new Set(
-    directive.directive.permittedEvidenceIds,
-  );
-  const allowedTestimony = new Set(
-    directive.directive.permittedTestimonyIds,
-  );
+  const allowedEvidence = new Set(directive.directive.permittedEvidenceIds);
+  const allowedTestimony = new Set(directive.directive.permittedTestimonyIds);
   return output.speechSegments.every(
     (segment) =>
       segment.citations.factIds.every((id) => allowedFacts.has(id)) &&
       segment.citations.evidenceIds.every((id) => allowedEvidence.has(id)) &&
-      segment.citations.testimonyIds.every((id) =>
-        allowedTestimony.has(id),
-      ) &&
+      segment.citations.testimonyIds.every((id) => allowedTestimony.has(id)) &&
       segment.citations.factIds.length +
         segment.citations.evidenceIds.length +
         segment.citations.testimonyIds.length >
@@ -681,8 +668,7 @@ function requireGeneratedCounselAction(
   directive: PersistedOpponentDirective,
 ): GeneratedCounselAction {
   if (
-    (action.type !== "ASK_QUESTION" &&
-      action.type !== "END_EXAMINATION") ||
+    (action.type !== "ASK_QUESTION" && action.type !== "END_EXAMINATION") ||
     action.source !== "ai" ||
     action.actor.role !== "opposing_counsel" ||
     action.actor.side !== "opposing" ||
@@ -711,8 +697,7 @@ function requireGeneratedCounselAction(
       output.proposedAction.kind !== "ask_question" ||
       !text.includes("?") ||
       action.payload.witnessId !== directive.appearance.witnessId ||
-      action.payload.examinationKind !==
-        directive.appearance.examinationKind ||
+      action.payload.examinationKind !== directive.appearance.examinationKind ||
       action.payload.text !== text ||
       !sameOrderedIdentifiers(
         output.proposedAction.presentedEvidenceIds,
@@ -737,6 +722,10 @@ function requireGeneratedCounselAction(
     return action;
   }
 
+  if (directive.directive.kind !== "end_examination") {
+    return invalidCounselResponse();
+  }
+
   if (
     action.type !== "END_EXAMINATION" ||
     output.proposedAction.kind !== "end_examination" ||
@@ -747,10 +736,7 @@ function requireGeneratedCounselAction(
     action.payload.turnId === undefined ||
     action.payload.text !== text ||
     action.payload.citations === undefined ||
-    !sameIdentifierSet(
-      action.payload.citations.factIds,
-      citations.factIds,
-    ) ||
+    !sameIdentifierSet(action.payload.citations.factIds, citations.factIds) ||
     !sameIdentifierSet(
       action.payload.citations.evidenceIds,
       citations.evidenceIds,
@@ -759,10 +745,7 @@ function requireGeneratedCounselAction(
       action.payload.citations.testimonyIds,
       citations.testimonyIds,
     ) ||
-    !sameIdentifierSet(
-      action.payload.citations.eventIds,
-      citations.eventIds,
-    ) ||
+    !sameIdentifierSet(action.payload.citations.eventIds, citations.eventIds) ||
     !sameIdentifierSet(
       action.payload.citations.sourceSegmentIds,
       citations.sourceSegmentIds,
@@ -791,8 +774,7 @@ function requireCounselContinuation(
       continuation.responseId !== continuation.payload.responseId ||
       continuation.payload.purpose !== "answer_question" ||
       continuation.trialId !== primary.trialId ||
-      continuation.expectedStateVersion !==
-        primary.expectedStateVersion + 1 ||
+      continuation.expectedStateVersion !== primary.expectedStateVersion + 1 ||
       continuation.causationId !==
         eventIdForGeneratedAction(primary.actionId) ||
       continuation.correlationId !== primary.trialId
@@ -1048,9 +1030,7 @@ async function loadActiveHead(
     const suffix = await ctx.db
       .query("trialEvents")
       .withIndex("by_trial_sequence", (index) =>
-        index
-          .eq("trialId", projection.trialId)
-          .gt("sequence", prefixSequence),
+        index.eq("trialId", projection.trialId).gt("sequence", prefixSequence),
       )
       .order("asc")
       .take(MAX_REPLAY_EVENTS + 1);
@@ -1082,7 +1062,11 @@ function referenceIdsFromPayload(
   singular: string,
   plural: string,
 ): string[] {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload)
+  ) {
     return [];
   }
   const record = payload as Record<string, unknown>;
@@ -1139,7 +1123,10 @@ function eventStorageRecord(event: TrialEventV3, committedAt: number) {
     validationFailureCount: model?.validationFailureCount,
     factIds: assertReferences(event.citations.factIds, "factIds"),
     evidenceIds: assertReferences(event.citations.evidenceIds, "evidenceIds"),
-    testimonyIds: assertReferences(event.citations.testimonyIds, "testimonyIds"),
+    testimonyIds: assertReferences(
+      event.citations.testimonyIds,
+      "testimonyIds",
+    ),
     citationEventIds: assertReferences(event.citations.eventIds, "eventIds"),
     sourceSegmentIds: assertReferences(
       event.citations.sourceSegmentIds,
@@ -1155,10 +1142,7 @@ function eventStorageRecord(event: TrialEventV3, committedAt: number) {
   };
 }
 
-function receiptResult(
-  receipt: Doc<"actionReceipts">,
-  replayed: boolean,
-) {
+function receiptResult(receipt: Doc<"actionReceipts">, replayed: boolean) {
   return {
     receiptId: receipt.receiptId,
     trialId: receipt.trialId,
@@ -1245,9 +1229,7 @@ async function persistCommit(
     const existingSnapshot = await ctx.db
       .query("trialSnapshots")
       .withIndex("by_trial_version", (index) =>
-        index
-          .eq("trialId", action.trialId)
-          .eq("stateVersion", state.version),
+        index.eq("trialId", action.trialId).eq("stateVersion", state.version),
       )
       .unique();
     if (existingSnapshot) throw new Error("DUPLICATE_SNAPSHOT_VERSION");
@@ -1317,60 +1299,58 @@ async function createTrialForOwner(
   },
   ownerId: string,
 ) {
-    assertIdentifier(ownerId, "ownerId");
-    assertIdentifier(args.trialId, "trialId");
-    assertIdentifier(args.actionId, "actionId");
-    if (!Number.isFinite(args.requestedAt) || args.requestedAt < 0) {
-      throw new Error("requestedAt must be a non-negative timestamp");
-    }
-    const { graph } = await requirePublishedGraph(ctx, args.graphId, ownerId);
-    const bindings = args.actorBindings;
-    const action = TrialActionV3Schema.parse(
-      createStartTrialAction({
-        trialId: args.trialId,
-        actionId: args.actionId,
-        requestedAt: new Date(args.requestedAt).toISOString(),
-        graph,
-        actors: bindings.map((binding) => binding.actor) as ActorRef[],
-        actorBindings: bindings,
-        userSide: args.userSide,
-      }),
-    );
-    const requestHash = await sha256Hex(canonicalJson(action));
+  assertIdentifier(ownerId, "ownerId");
+  assertIdentifier(args.trialId, "trialId");
+  assertIdentifier(args.actionId, "actionId");
+  if (!Number.isFinite(args.requestedAt) || args.requestedAt < 0) {
+    throw new Error("requestedAt must be a non-negative timestamp");
+  }
+  const { graph } = await requirePublishedGraph(ctx, args.graphId, ownerId);
+  const bindings = args.actorBindings;
+  const action = TrialActionV3Schema.parse(
+    createStartTrialAction({
+      trialId: args.trialId,
+      actionId: args.actionId,
+      requestedAt: new Date(args.requestedAt).toISOString(),
+      graph,
+      actors: bindings.map((binding) => binding.actor) as ActorRef[],
+      actorBindings: bindings,
+      userSide: args.userSide,
+    }),
+  );
+  const requestHash = await sha256Hex(canonicalJson(action));
 
-    const projection = await ctx.db
-      .query("trialProjections")
-      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
-      .unique();
-    if (projection) {
-      requireOwnedProjection(projection, ownerId);
-      const receipt = await ctx.db
-        .query("actionReceipts")
-        .withIndex("by_action_id", (index) =>
-          index.eq("actionId", action.actionId),
-        )
-        .unique();
-      if (receipt) return replayExistingReceipt(receipt, action, requestHash);
-      throw new Error("TRIAL_ALREADY_EXISTS");
-    }
-    const conflictingReceipt = await ctx.db
+  const projection = await ctx.db
+    .query("trialProjections")
+    .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+    .unique();
+  if (projection) {
+    requireOwnedProjection(projection, ownerId);
+    const receipt = await ctx.db
       .query("actionReceipts")
       .withIndex("by_action_id", (index) =>
         index.eq("actionId", action.actionId),
       )
       .unique();
-    if (conflictingReceipt) throw new Error("ACTION_ID_CONFLICT");
+    if (receipt) return replayExistingReceipt(receipt, action, requestHash);
+    throw new Error("TRIAL_ALREADY_EXISTS");
+  }
+  const conflictingReceipt = await ctx.db
+    .query("actionReceipts")
+    .withIndex("by_action_id", (index) => index.eq("actionId", action.actionId))
+    .unique();
+  if (conflictingReceipt) throw new Error("ACTION_ID_CONFLICT");
 
-    const committed = commitAction(null, action);
-    return await persistCommit(ctx, {
-      ownerId,
-      graphId: args.graphId,
-      currentProjection: null,
-      action,
-      requestHash,
-      commit: committed,
-      writeSnapshot: true,
-    });
+  const committed = commitAction(null, action);
+  return await persistCommit(ctx, {
+    ownerId,
+    graphId: args.graphId,
+    currentProjection: null,
+    action,
+    requestHash,
+    commit: committed,
+    writeSnapshot: true,
+  });
 }
 
 /**
@@ -1459,9 +1439,7 @@ async function appendActiveAction(
 
   const receipt = await ctx.db
     .query("actionReceipts")
-    .withIndex("by_action_id", (index) =>
-      index.eq("actionId", action.actionId),
-    )
+    .withIndex("by_action_id", (index) => index.eq("actionId", action.actionId))
     .unique();
   if (receipt) return replayExistingReceipt(receipt, action, requestHash);
   if (action.expectedStateVersion !== projection.stateVersion) {
@@ -1499,9 +1477,7 @@ export const append = internalMutation({
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", action.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
         .unique(),
       ownerId,
     );
@@ -1531,9 +1507,7 @@ export const appendPlayerForOwner = internalMutation({
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", action.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
         .unique(),
       args.ownerId,
     );
@@ -1590,9 +1564,7 @@ export const appendTrustedForOwner = internalMutation({
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", action.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
         .unique(),
       args.ownerId,
     );
@@ -1636,9 +1608,7 @@ export const appendGeneratedForOwner = internalMutation({
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", action.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
         .unique(),
       args.ownerId,
     );
@@ -1707,9 +1677,7 @@ export const appendOpponentPlanForOwner = internalMutation({
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", action.trialId),
-        )
+        .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
         .unique(),
       args.ownerId,
     );
@@ -1795,9 +1763,7 @@ export const appendCounselTurnForOwner = internalMutation({
       return invalidCounselResponse();
     }
 
-    const generation = parseCounselResponseGenerationJson(
-      args.generationJson,
-    );
+    const generation = parseCounselResponseGenerationJson(args.generationJson);
     const projection = requireOwnedProjection(
       await ctx.db
         .query("trialProjections")
@@ -1822,8 +1788,7 @@ export const appendCounselTurnForOwner = internalMutation({
       action,
       ownerId: args.ownerId,
       projection,
-      writeSnapshot:
-        continuation === null ? args.writeSnapshot : false,
+      writeSnapshot: continuation === null ? args.writeSnapshot : false,
       playerControlledOnly: false,
     });
     const committedEventId = receipt.eventIds[0];
@@ -1845,9 +1810,7 @@ export const appendCounselTurnForOwner = internalMutation({
       const continuedProjection = requireOwnedProjection(
         await ctx.db
           .query("trialProjections")
-          .withIndex("by_trial", (index) =>
-            index.eq("trialId", action.trialId),
-          )
+          .withIndex("by_trial", (index) => index.eq("trialId", action.trialId))
           .unique(),
         args.ownerId,
       );
@@ -1951,106 +1914,102 @@ async function reloadForOwner(
   },
   ownerId: string,
 ) {
-    assertIdentifier(ownerId, "ownerId");
-    assertIdentifier(args.trialId, "trialId");
-    const afterSequence = args.afterSequence ?? 0;
-    assertNonNegativeInteger(afterSequence, "afterSequence");
-    const limit = args.limit ?? DEFAULT_RELOAD_EVENTS;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RELOAD_EVENTS) {
-      throw new Error(`limit must be between 1 and ${MAX_RELOAD_EVENTS}`);
-    }
-    const projection = requireOwnedProjection(
-      await ctx.db
-        .query("trialProjections")
-        .withIndex("by_trial", (index) =>
-          index.eq("trialId", args.trialId),
-        )
-        .unique(),
-      ownerId,
-    );
-    if (afterSequence > projection.lastSequence) {
-      throw new Error("AFTER_SEQUENCE_AHEAD_OF_HEAD");
-    }
+  assertIdentifier(ownerId, "ownerId");
+  assertIdentifier(args.trialId, "trialId");
+  const afterSequence = args.afterSequence ?? 0;
+  assertNonNegativeInteger(afterSequence, "afterSequence");
+  const limit = args.limit ?? DEFAULT_RELOAD_EVENTS;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RELOAD_EVENTS) {
+    throw new Error(`limit must be between 1 and ${MAX_RELOAD_EVENTS}`);
+  }
+  const projection = requireOwnedProjection(
+    await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+      .unique(),
+    ownerId,
+  );
+  if (afterSequence > projection.lastSequence) {
+    throw new Error("AFTER_SEQUENCE_AHEAD_OF_HEAD");
+  }
 
-    let validated = false;
-    let requiresMigration =
-      projection.stateSchemaVersion !== TRIAL_STATE_SCHEMA_VERSION_V3 ||
-      projection.eventSchemaVersion !== TRIAL_EVENT_SCHEMA_VERSION_V3;
-    if (!requiresMigration) {
-      try {
-        await loadActiveHead(ctx, projection);
-        validated = true;
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.includes("TRIAL_MIGRATION_REQUIRED")
-        ) {
-          requiresMigration = true;
-        } else {
-          throw error;
+  let validated = false;
+  let requiresMigration =
+    projection.stateSchemaVersion !== TRIAL_STATE_SCHEMA_VERSION_V3 ||
+    projection.eventSchemaVersion !== TRIAL_EVENT_SCHEMA_VERSION_V3;
+  if (!requiresMigration) {
+    try {
+      await loadActiveHead(ctx, projection);
+      validated = true;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("TRIAL_MIGRATION_REQUIRED")
+      ) {
+        requiresMigration = true;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const snapshots = await ctx.db
+    .query("trialSnapshots")
+    .withIndex("by_trial_version", (index) => index.eq("trialId", args.trialId))
+    .order("desc")
+    .collect();
+  const selectedSnapshot = snapshots.find(
+    (snapshot) =>
+      snapshot.stateSchemaVersion === projection.stateSchemaVersion &&
+      snapshot.lastSequence > afterSequence &&
+      snapshot.lastSequence <= projection.lastSequence,
+  );
+  const baseSequence = selectedSnapshot?.lastSequence ?? afterSequence;
+  const rows = await ctx.db
+    .query("trialEvents")
+    .withIndex("by_trial_sequence", (index) =>
+      index.eq("trialId", args.trialId).gt("sequence", baseSequence),
+    )
+    .order("asc")
+    .take(limit + 1);
+  const page = rows.slice(0, limit);
+  let expectedSequence = baseSequence + 1;
+  for (const row of page) {
+    if (row.sequence !== expectedSequence) {
+      throw new Error("TRIAL_EVENT_SEQUENCE_GAP");
+    }
+    expectedSequence += 1;
+  }
+  const hasMore = rows.length > limit;
+  const lastReturnedSequence = page.at(-1)?.sequence ?? baseSequence;
+
+  return {
+    trialId: projection.trialId,
+    graphId: projection.graphId ?? null,
+    caseId: projection.caseId ?? null,
+    caseVersion: projection.caseVersion ?? null,
+    stateVersion: projection.stateVersion,
+    lastSequence: projection.lastSequence,
+    stateJson: projection.stateJson,
+    stateSchemaVersion: projection.stateSchemaVersion,
+    eventSchemaVersion: projection.eventSchemaVersion,
+    validated,
+    requiresMigration,
+    snapshot: selectedSnapshot
+      ? {
+          snapshotId: selectedSnapshot.snapshotId,
+          stateVersion: selectedSnapshot.stateVersion,
+          lastSequence: selectedSnapshot.lastSequence,
+          stateJson: selectedSnapshot.stateJson,
+          stateSchemaVersion: selectedSnapshot.stateSchemaVersion,
+          source: selectedSnapshot.source,
+          createdAt: selectedSnapshot.createdAt,
         }
-      }
-    }
-
-    const snapshots = await ctx.db
-      .query("trialSnapshots")
-      .withIndex("by_trial_version", (index) =>
-        index.eq("trialId", args.trialId),
-      )
-      .order("desc")
-      .collect();
-    const selectedSnapshot = snapshots.find(
-      (snapshot) =>
-        snapshot.stateSchemaVersion === projection.stateSchemaVersion &&
-        snapshot.lastSequence > afterSequence &&
-        snapshot.lastSequence <= projection.lastSequence,
-    );
-    const baseSequence = selectedSnapshot?.lastSequence ?? afterSequence;
-    const rows = await ctx.db
-      .query("trialEvents")
-      .withIndex("by_trial_sequence", (index) =>
-        index.eq("trialId", args.trialId).gt("sequence", baseSequence),
-      )
-      .order("asc")
-      .take(limit + 1);
-    const page = rows.slice(0, limit);
-    let expectedSequence = baseSequence + 1;
-    for (const row of page) {
-      if (row.sequence !== expectedSequence) {
-        throw new Error("TRIAL_EVENT_SEQUENCE_GAP");
-      }
-      expectedSequence += 1;
-    }
-    const hasMore = rows.length > limit;
-    const lastReturnedSequence = page.at(-1)?.sequence ?? baseSequence;
-
-    return {
-      trialId: projection.trialId,
-      graphId: projection.graphId ?? null,
-      caseId: projection.caseId ?? null,
-      caseVersion: projection.caseVersion ?? null,
-      stateVersion: projection.stateVersion,
-      lastSequence: projection.lastSequence,
-      stateJson: projection.stateJson,
-      stateSchemaVersion: projection.stateSchemaVersion,
-      eventSchemaVersion: projection.eventSchemaVersion,
-      validated,
-      requiresMigration,
-      snapshot: selectedSnapshot
-        ? {
-            snapshotId: selectedSnapshot.snapshotId,
-            stateVersion: selectedSnapshot.stateVersion,
-            lastSequence: selectedSnapshot.lastSequence,
-            stateJson: selectedSnapshot.stateJson,
-            stateSchemaVersion: selectedSnapshot.stateSchemaVersion,
-            source: selectedSnapshot.source,
-            createdAt: selectedSnapshot.createdAt,
-          }
-        : null,
-      events: page.map(publicEvent),
-      hasMore,
-      nextAfterSequence: hasMore ? lastReturnedSequence : null,
-    };
+      : null,
+    events: page.map(publicEvent),
+    hasMore,
+    nextAfterSequence: hasMore ? lastReturnedSequence : null,
+  };
 }
 
 /** Trusted server read for an owner session verified outside Convex auth. */

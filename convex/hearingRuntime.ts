@@ -515,12 +515,10 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
   handler: async (
     ctx,
     args,
-  ): Promise<
-    Readonly<{
-      actionJson: string;
-      continuationActionJson: string | null;
-    }> | null
-  > => {
+  ): Promise<Readonly<{
+    actionJson: string;
+    continuationActionJson: string | null;
+  }> | null> => {
     const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
     const projection = await ctx.db
       .query("trialProjections")
@@ -538,11 +536,9 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
     if (!event) return null;
     if (
       event.source !== "ai" ||
-      ![
-        "UPDATE_OPPOSING_STRATEGY",
-        "ASK_QUESTION",
-        "END_EXAMINATION",
-      ].includes(event.eventType)
+      !["UPDATE_OPPOSING_STRATEGY", "ASK_QUESTION", "END_EXAMINATION"].includes(
+        event.eventType,
+      )
     ) {
       throw new Error("COURTROOM_GENERATION_INVALID");
     }
@@ -550,9 +546,7 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
     const nextEvent = await ctx.db
       .query("trialEvents")
       .withIndex("by_trial_sequence", (index) =>
-        index
-          .eq("trialId", args.trialId)
-          .eq("sequence", event.sequence + 1),
+        index.eq("trialId", args.trialId).eq("sequence", event.sequence + 1),
       )
       .unique();
     const continuation =
@@ -610,8 +604,7 @@ function opposingCounselForAiRuntime(state: TrialStateV3): ActorRef {
     throw new Error("RUNTIME_AI_USER_SIDE_UNSUPPORTED");
   }
   const matches = Object.values(state.actors).filter(
-    (actor) =>
-      actor.role === "opposing_counsel" && actor.side === "opposing",
+    (actor) => actor.role === "opposing_counsel" && actor.side === "opposing",
   );
   if (matches.length !== 1) {
     throw new Error("RUNTIME_OPPOSING_COUNSEL_AMBIGUOUS");
@@ -623,8 +616,7 @@ function assertSupportedAiRuntimeRoster(
   bindings: ReturnType<typeof deriveTrialActorBindings>,
 ): void {
   const userCounselCount = bindings.filter(
-    ({ actor }) =>
-      actor.role === "user_counsel" && actor.side === "user",
+    ({ actor }) => actor.role === "user_counsel" && actor.side === "user",
   ).length;
   if (userCounselCount !== 1) {
     throw new Error("RUNTIME_USER_COUNSEL_AMBIGUOUS");
@@ -675,7 +667,10 @@ function stableRuntimeId(prefix: string, material: unknown): string {
   return `${prefix}:${sha256Utf8(JSON.stringify(material))}`;
 }
 
-function freshModelCallId(prefix: "opponent" | "counsel", material: unknown): string {
+function freshModelCallId(
+  prefix: "opponent" | "counsel",
+  material: unknown,
+): string {
   const callId = `call:${prefix}:${sha256Utf8(JSON.stringify(material))}:${globalThis.crypto.randomUUID()}`;
   if (callId.length > 128) throw new Error("COURTROOM_GENERATION_INVALID");
   return callId;
@@ -822,7 +817,9 @@ export const start = internalAction({
       actorBindings: bindings,
       userSide: request.userSide,
     });
-    const judge = bindings.find((binding) => binding.actor.role === "judge")?.actor;
+    const judge = bindings.find(
+      (binding) => binding.actor.role === "judge",
+    )?.actor;
     if (!judge) throw new Error("RUNTIME_JUDGE_REQUIRED");
     const openingActionId = runtimeActionId(
       trialId,
@@ -880,10 +877,7 @@ async function callWitness(
   state: TrialStateV3,
 ): Promise<void> {
   if (command.intent.type !== "call_witness") throw new Error("INVALID_INTENT");
-  const counsel = playerCounselForWitness(
-    state,
-    command.intent.witnessId,
-  );
+  const counsel = playerCounselForWitness(state, command.intent.witnessId);
   const actionId = runtimeActionId(trialId, command.requestId, "call-witness");
   const callType =
     state.witnesses[command.intent.witnessId]?.status === "released"
@@ -1130,7 +1124,9 @@ function canonicalWitnessAnswerRequest(input: {
     knowledgeView,
   });
   if (!request.success) return invalidWitnessGeneration();
-  if (validateWitnessAnswerRequestBinding(request.data, input.state).length > 0) {
+  if (
+    validateWitnessAnswerRequestBinding(request.data, input.state).length > 0
+  ) {
     return staleWitnessGeneration();
   }
   return request.data;
@@ -1140,7 +1136,10 @@ function stableUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
-function sameOrderedIds(left: readonly string[], right: readonly string[]): boolean {
+function sameOrderedIds(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
   return (
     left.length === right.length &&
     left.every((identifier, index) => identifier === right[index])
@@ -1244,13 +1243,15 @@ function opponentDecisionMaterial(
   };
 }
 
-function canonicalOpponentPlannerRequest(input: Readonly<{
-  graph: CaseGraphV1;
-  state: TrialStateV3;
-  actor: ActorRef;
-  callId?: string;
-  decisionId?: string;
-}>): OpponentPlannerRequest {
+function canonicalOpponentPlannerRequest(
+  input: Readonly<{
+    graph: CaseGraphV1;
+    state: TrialStateV3;
+    actor: ActorRef;
+    callId?: string;
+    decisionId?: string;
+  }>,
+): OpponentPlannerRequest {
   const material = opponentDecisionMaterial(input.state, input.actor);
   const decisionId = stableRuntimeId("decision:opponent", material);
   if (input.decisionId !== undefined && input.decisionId !== decisionId) {
@@ -1258,9 +1259,7 @@ function canonicalOpponentPlannerRequest(input: Readonly<{
   }
   const callId =
     input.callId ?? freshModelCallId("opponent", { decisionId, material });
-  if (
-    !isFreshModelCallId(callId, "opponent", { decisionId, material })
-  ) {
+  if (!isFreshModelCallId(callId, "opponent", { decisionId, material })) {
     throw new Error("OPPONENT_PLAN_GENERATION_INVALID");
   }
   const knowledgeView = buildOpponentPlannerKnowledgeView(
@@ -1274,9 +1273,7 @@ function canonicalOpponentPlannerRequest(input: Readonly<{
     (candidate) => candidate.witnessId === material.witnessId,
   );
   if (!witness) throw new Error("UNKNOWN_WITNESS");
-  const seenEvidenceIds = new Set(
-    witness.knowledgeBoundary.seenEvidenceIds,
-  );
+  const seenEvidenceIds = new Set(witness.knowledgeBoundary.seenEvidenceIds);
   const presentableEvidenceIds = Object.values(input.state.evidence)
     .filter(
       (evidence) =>
@@ -1356,7 +1353,8 @@ function counselScopeMatchesTrace(
     trace.knowledgeScope.stateVersion === view.stateVersion &&
     trace.knowledgeScope.factCount === factCount &&
     trace.knowledgeScope.evidenceCount === evidenceCount &&
-    trace.knowledgeScope.testimonyCount === view.publicRecord.testimony.length &&
+    trace.knowledgeScope.testimonyCount ===
+      view.publicRecord.testimony.length &&
     trace.knowledgeScope.priorStatementCount === 0 &&
     trace.knowledgeScope.sourceSegmentCount === sourceSegmentCount &&
     trace.knowledgeScope.publicRecordEventCount === publicRecordEventCount &&
@@ -1382,13 +1380,15 @@ function traceMatchesOpponentPlanRequest(
   );
 }
 
-function canonicalCounselResponseRequest(input: Readonly<{
-  graph: CaseGraphV1;
-  state: TrialStateV3;
-  actor: ActorRef;
-  callId?: string;
-  decisionId?: string;
-}>): CounselResponseRequest {
+function canonicalCounselResponseRequest(
+  input: Readonly<{
+    graph: CaseGraphV1;
+    state: TrialStateV3;
+    actor: ActorRef;
+    callId?: string;
+    decisionId?: string;
+  }>,
+): CounselResponseRequest {
   const material = opponentDecisionMaterial(input.state, input.actor);
   const strategy = input.state.opposingStrategy;
   if (
@@ -1427,13 +1427,12 @@ function canonicalCounselResponseRequest(input: Readonly<{
     strategyEventId: record.strategyEventId,
     stateVersion: input.state.version,
   };
-  const callId =
-    input.callId ?? freshModelCallId("counsel", callMaterial);
+  const callId = input.callId ?? freshModelCallId("counsel", callMaterial);
   if (!isFreshModelCallId(callId, "counsel", callMaterial)) {
     throw new Error("COUNSEL_GENERATION_INVALID");
   }
   return CounselResponseRequestSchema.parse({
-    schemaVersion: "role-responder.counsel.request.v1",
+    schemaVersion: "role-responder.counsel.request.v2",
     callId,
     decisionId: record.decisionId,
     trialId: input.state.trialId,
@@ -1625,7 +1624,8 @@ async function finishWitness(
   command: ReturnType<typeof HearingPlayerCommandSchema.parse>,
   state: TrialStateV3,
 ): Promise<void> {
-  if (command.intent.type !== "finish_witness") throw new Error("INVALID_INTENT");
+  if (command.intent.type !== "finish_witness")
+    throw new Error("INVALID_INTENT");
   const endActionId = runtimeActionId(
     trialId,
     command.requestId,
@@ -1903,13 +1903,7 @@ async function prepareCommandHandler(
       return await canonicalContinuation(ctx, ownerId, args.trialId);
     }
     case "finish_witness":
-      await finishWitness(
-        ctx,
-        ownerId,
-        args.trialId,
-        commandInput,
-        head.state,
-      );
+      await finishWitness(ctx, ownerId, args.trialId, commandInput, head.state);
       break;
     case "finish_trial":
       await finishTrial(ctx, ownerId, args.trialId, commandInput, head.state);
@@ -2044,17 +2038,13 @@ export const commitOpponentPlanGeneration = internalAction({
     } catch {
       return invalidOpponentPlanGeneration();
     }
-    const parsed = HearingOpponentPlanPrecommitSchema.safeParse(
-      generationInput,
-    );
+    const parsed =
+      HearingOpponentPlanPrecommitSchema.safeParse(generationInput);
     if (!parsed.success || parsed.data.trialId !== args.trialId) {
       return invalidOpponentPlanGeneration();
     }
     const envelope = parsed.data;
-    const actionId = opponentPlanActionId(
-      args.trialId,
-      envelope.decisionId,
-    );
+    const actionId = opponentPlanActionId(args.trialId, envelope.decisionId);
     const existing = await ctx.runQuery(loadGeneratedCounselTurnReference, {
       ownerId,
       trialId: args.trialId,
@@ -2126,9 +2116,8 @@ export const commitOpponentPlanGeneration = internalAction({
         evidencePriorityIds: validation.output.evidencePriorityIds,
         settlementPosture: validation.output.settlementPosture,
         privateNotes: validation.output.privateNotes,
-        pendingDirectiveJson: serializePersistedOpponentDirective(
-          persistedDirective,
-        ),
+        pendingDirectiveJson:
+          serializePersistedOpponentDirective(persistedDirective),
       },
     });
     await appendOpponentPlanGeneration(
@@ -2151,17 +2140,18 @@ function emptyCourtroomCitations() {
   };
 }
 
-function counselContinuationForAction(input: Readonly<{
-  state: TrialStateV3;
-  decisionId: string;
-  action: TrialActionV3;
-}>): TrialActionV3 | null {
+function counselContinuationForAction(
+  input: Readonly<{
+    state: TrialStateV3;
+    decisionId: string;
+    action: TrialActionV3;
+  }>,
+): TrialActionV3 | null {
   const appearance = activeAppearance(input.state);
   if (input.action.type === "ASK_QUESTION") {
     const witnessActor = Object.values(input.state.actors).find(
       (actor) =>
-        actor.role === "witness" &&
-        actor.witnessId === appearance.witnessId,
+        actor.role === "witness" && actor.witnessId === appearance.witnessId,
     );
     if (!witnessActor) return invalidCounselGeneration();
     const responseId = stableRuntimeId("response:counsel", {
@@ -2265,9 +2255,8 @@ export const commitCounselGeneration = internalAction({
     } catch {
       return invalidCounselGeneration();
     }
-    const parsed = HearingCounselResponsePrecommitSchema.safeParse(
-      generationInput,
-    );
+    const parsed =
+      HearingCounselResponsePrecommitSchema.safeParse(generationInput);
     if (!parsed.success || parsed.data.trialId !== args.trialId) {
       return invalidCounselGeneration();
     }
@@ -2330,6 +2319,7 @@ export const commitCounselGeneration = internalAction({
     const validation = validateCounselResponseOutput(request, envelope.output);
     if (!validation.accepted) return invalidCounselGeneration();
     const response = validation.response;
+    if (request.appearance === null) return invalidCounselGeneration();
     let action: TrialActionV3;
     if (response.action.kind === "ask_question") {
       const questionId = stableRuntimeId("question:counsel", {
@@ -2429,17 +2419,13 @@ export const commitWitnessGeneration = internalAction({
     } catch {
       return invalidWitnessGeneration();
     }
-    const generation = HearingWitnessGenerationPrecommitSchema.safeParse(
-      generationInput,
-    );
+    const generation =
+      HearingWitnessGenerationPrecommitSchema.safeParse(generationInput);
     if (!generation.success || generation.data.trialId !== args.trialId) {
       return invalidWitnessGeneration();
     }
     const envelope = generation.data;
-    const actionId = witnessAnswerActionId(
-      args.trialId,
-      envelope.responseId,
-    );
+    const actionId = witnessAnswerActionId(args.trialId, envelope.responseId);
     const head = await loadHead(ctx, ownerId, args.trialId);
     const existingAction = await ctx.runQuery(
       loadGeneratedAnswerActionReference,

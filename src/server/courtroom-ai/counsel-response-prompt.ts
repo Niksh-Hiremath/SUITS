@@ -12,9 +12,9 @@ import {
 import type { CourtroomModelPrompt } from "./provider";
 
 export const COUNSEL_RESPONSE_PROMPT_VERSION =
-  "role-responder.counsel.prompt.v1" as const;
+  "role-responder.counsel.prompt.v2" as const;
 export const COUNSEL_RESPONSE_PROMPT_CACHE_KEY =
-  "suits:role-responder:counsel:v1" as const;
+  "suits:role-responder:counsel:v2" as const;
 export const MAX_COUNSEL_RESPONSE_REPAIR_CANDIDATE_CHARACTERS = 20_000;
 export const MAX_COUNSEL_RESPONSE_REPAIR_ISSUES = 64;
 
@@ -49,8 +49,8 @@ AUTHORITY AND SECURITY BOUNDARY
 - This is an educational simulation, not legal advice or a prediction about a real dispute.
 
 OPEN-COURT COUNSEL RULES
-- Match the directive exactly. For question_witness, propose ask_question with the exact presentedEvidenceIds and produce one concise interrogative question. For end_examination, propose the exact disposition and say only a short formal closing phrase for that examination.
-- Ground every question segment in at least one directive-permitted fact, evidence, or active testimony ID. Cite only IDs supplied by the directive and public KnowledgeView.
+- Match the directive exactly. For question_witness, propose ask_question with the exact presentedEvidenceIds and produce one concise interrogative question. For end_examination, propose the exact disposition and say only a short formal closing phrase for that examination. For give_closing, propose give_closing and deliver a concise closing argument to the jury from the admitted public record.
+- Ground every question or closing segment in at least one directive-permitted fact, evidence, or active testimony ID. Cite only IDs supplied by the directive and public KnowledgeView. A closing may use only admitted facts, admitted evidence, and active testimony selected by the server.
 - Do not present a proposed, disputed, or verified fact as admitted. Phrase disputed material as a question, not testimony by counsel.
 - Do not cite or mention settlement, private strategy, source segments, hidden facts, excluded evidence, stricken testimony, another witness's private knowledge, or unsupported prior statements.
 - Keep performance fields within the semantic allowlist. Do not request a gavel, arbitrary renderer properties, or an objection unless the bound directive is an objection.
@@ -123,15 +123,17 @@ function projectRejectedCandidate(candidate: unknown): unknown {
 
   if (hasOwn(candidate, "speechSegments")) {
     projected.speechSegments = Array.isArray(candidate.speechSegments)
-      ? candidate.speechSegments.slice(0, MAX_REJECTED_SEGMENTS).map((segment) => {
-          if (!isRecord(segment)) return safePrimitive(segment);
-          const projectedSegment: Record<string, unknown> = {};
-          copyPrimitiveField(segment, projectedSegment, "text");
-          if (hasOwn(segment, "citations")) {
-            projectedSegment.citations = projectCitations(segment.citations);
-          }
-          return projectedSegment;
-        })
+      ? candidate.speechSegments
+          .slice(0, MAX_REJECTED_SEGMENTS)
+          .map((segment) => {
+            if (!isRecord(segment)) return safePrimitive(segment);
+            const projectedSegment: Record<string, unknown> = {};
+            copyPrimitiveField(segment, projectedSegment, "text");
+            if (hasOwn(segment, "citations")) {
+              projectedSegment.citations = projectCitations(segment.citations);
+            }
+            return projectedSegment;
+          })
       : safePrimitive(candidate.speechSegments);
   }
 
@@ -263,7 +265,14 @@ function buildTrustedManifest(
             permittedEvidenceCount: directive.permittedEvidenceIds.length,
             permittedTestimonyCount: directive.permittedTestimonyIds.length,
           }
-        : directive,
+        : directive.kind === "give_closing"
+          ? {
+              kind: directive.kind,
+              permittedFactCount: directive.permittedFactIds.length,
+              permittedEvidenceCount: directive.permittedEvidenceIds.length,
+              permittedTestimonyCount: directive.permittedTestimonyIds.length,
+            }
+          : directive,
     knowledgeBinding: {
       schemaVersion: view.schemaVersion,
       stateVersion: view.stateVersion,

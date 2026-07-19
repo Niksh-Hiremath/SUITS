@@ -48,7 +48,7 @@ export const HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
 const HEARING_OPPONENT_PLANNER_PROMPT_VERSION =
   "opponent-planner.prompt.v2" as const;
 const HEARING_COUNSEL_RESPONSE_PROMPT_VERSION =
-  "role-responder.counsel.prompt.v1" as const;
+  "role-responder.counsel.prompt.v2" as const;
 
 const CompletedHearingCommandPreparationSchema = z
   .object({
@@ -114,8 +114,7 @@ export function isHearingWitnessModelRequiredPreparation(
 ): preparation is HearingWitnessModelRequiredPreparation {
   return (
     preparation.status === "model_required" &&
-    preparation.request.schemaVersion ===
-      WITNESS_ANSWER_REQUEST_SCHEMA_VERSION
+    preparation.request.schemaVersion === WITNESS_ANSWER_REQUEST_SCHEMA_VERSION
   );
 }
 
@@ -136,7 +135,8 @@ export function isHearingCounselResponseModelRequiredPreparation(
 ): preparation is HearingCounselResponseModelRequiredPreparation {
   return (
     preparation.status === "model_required" &&
-    preparation.request.schemaVersion === COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
+    preparation.request.schemaVersion ===
+      COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION
   );
 }
 
@@ -190,14 +190,10 @@ export function opponentPlannerOutputCitations(
     ),
     eventIds: [],
     sourceSegmentIds: stableUnique(
-      output.proposedMoves.flatMap(
-        (move) => move.citations.sourceSegmentIds,
-      ),
+      output.proposedMoves.flatMap((move) => move.citations.sourceSegmentIds),
     ),
     priorStatementIds: stableUnique(
-      output.proposedMoves.flatMap(
-        (move) => move.citations.priorStatementIds,
-      ),
+      output.proposedMoves.flatMap((move) => move.citations.priorStatementIds),
     ),
   });
 }
@@ -215,14 +211,10 @@ export function counselResponseOutputCitations(
   const output = CounselRoleResponseModelOutputSchema.parse(outputInput);
   return CourtroomModelCallCitationSetSchema.parse({
     factIds: stableUnique(
-      output.speechSegments.flatMap(
-        (segment) => segment.citations.factIds,
-      ),
+      output.speechSegments.flatMap((segment) => segment.citations.factIds),
     ),
     evidenceIds: stableUnique(
-      output.speechSegments.flatMap(
-        (segment) => segment.citations.evidenceIds,
-      ),
+      output.speechSegments.flatMap((segment) => segment.citations.evidenceIds),
     ),
     testimonyIds: stableUnique(
       output.speechSegments.flatMap(
@@ -288,8 +280,7 @@ function counselResponseProposedCitationCount(
     (total, segment) =>
       total +
       Object.values(segment.citations).reduce(
-        (segmentTotal, identifiers) =>
-          segmentTotal + identifiers.length,
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
         0,
       ),
     0,
@@ -349,8 +340,7 @@ function aggregateAttemptUsage(
         inputTokens: total.inputTokens + usage.inputTokens,
         outputTokens: total.outputTokens + usage.outputTokens,
         totalTokens: total.totalTokens + usage.totalTokens,
-        cachedInputTokens:
-          total.cachedInputTokens + usage.cachedInputTokens,
+        cachedInputTokens: total.cachedInputTokens + usage.cachedInputTokens,
         cacheWriteTokens: total.cacheWriteTokens + usage.cacheWriteTokens,
         reasoningTokens: total.reasoningTokens + usage.reasoningTokens,
       };
@@ -539,8 +529,7 @@ export const HearingWitnessGenerationPrecommitSchema = z
     }
     if (
       !sameCitations(trace.acceptedCitations, candidateCitations) ||
-      acceptedAttempt?.proposedCitationCount !==
-        candidateProposedCitationCount
+      acceptedAttempt?.proposedCitationCount !== candidateProposedCitationCount
     ) {
       addMismatch(
         context,
@@ -548,10 +537,7 @@ export const HearingWitnessGenerationPrecommitSchema = z
         "Accepted trace citations must match the validated witness candidate",
       );
     }
-    if (
-      trace.committedActionId !== null ||
-      trace.committedEventId !== null
-    ) {
+    if (trace.committedActionId !== null || trace.committedEventId !== null) {
       addMismatch(
         context,
         ["trace", "committedActionId"],
@@ -572,9 +558,7 @@ export type HearingWitnessGenerationPrecommit = z.infer<
  */
 export const HearingOpponentPlanPrecommitSchema = z
   .object({
-    schemaVersion: z.literal(
-      HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
-    ),
+    schemaVersion: z.literal(HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION),
     trialId: CaseGraphEntityIdSchema,
     callId: CaseGraphEntityIdSchema,
     decisionId: CaseGraphEntityIdSchema,
@@ -734,8 +718,7 @@ export const HearingOpponentPlanPrecommitSchema = z
     if (
       opponentPlannerUnauditableCitationCount(output) !== 0 ||
       !sameCitations(trace.acceptedCitations, candidateCitations) ||
-      acceptedAttempt?.proposedCitationCount !==
-        candidateProposedCitationCount
+      acceptedAttempt?.proposedCitationCount !== candidateProposedCitationCount
     ) {
       addMismatch(
         context,
@@ -743,10 +726,7 @@ export const HearingOpponentPlanPrecommitSchema = z
         "Opponent-plan citations must exactly match durable audit fields",
       );
     }
-    if (
-      trace.committedActionId !== null ||
-      trace.committedEventId !== null
-    ) {
+    if (trace.committedActionId !== null || trace.committedEventId !== null) {
       addMismatch(
         context,
         ["trace", "committedActionId"],
@@ -766,9 +746,7 @@ export type HearingOpponentPlanPrecommit = z.infer<
  */
 export const HearingCounselResponsePrecommitSchema = z
   .object({
-    schemaVersion: z.literal(
-      HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
-    ),
+    schemaVersion: z.literal(HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION),
     trialId: CaseGraphEntityIdSchema,
     callId: CaseGraphEntityIdSchema,
     decisionId: CaseGraphEntityIdSchema,
@@ -868,8 +846,7 @@ export const HearingCounselResponsePrecommitSchema = z
       );
     }
     if (
-      output.schemaVersion !==
-        COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION ||
+      output.schemaVersion !== COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION ||
       trace.outputSchemaVersion !== output.schemaVersion ||
       modelMetadata.schemaVersion !== output.schemaVersion
     ) {
@@ -881,8 +858,7 @@ export const HearingCounselResponsePrecommitSchema = z
     }
     if (
       trace.promptVersion !== HEARING_COUNSEL_RESPONSE_PROMPT_VERSION ||
-      modelMetadata.promptVersion !==
-        HEARING_COUNSEL_RESPONSE_PROMPT_VERSION ||
+      modelMetadata.promptVersion !== HEARING_COUNSEL_RESPONSE_PROMPT_VERSION ||
       modelMetadata.promptVersion !== trace.promptVersion
     ) {
       addMismatch(
@@ -959,8 +935,7 @@ export const HearingCounselResponsePrecommitSchema = z
     if (
       counselResponseUnsupportedCitationCount(output) !== 0 ||
       !sameCitations(trace.acceptedCitations, candidateCitations) ||
-      acceptedAttempt?.proposedCitationCount !==
-        candidateProposedCitationCount
+      acceptedAttempt?.proposedCitationCount !== candidateProposedCitationCount
     ) {
       addMismatch(
         context,
@@ -968,10 +943,7 @@ export const HearingCounselResponsePrecommitSchema = z
         "Counsel citations must exactly match supported public audit fields",
       );
     }
-    if (
-      trace.committedActionId !== null ||
-      trace.committedEventId !== null
-    ) {
+    if (trace.committedActionId !== null || trace.committedEventId !== null) {
       addMismatch(
         context,
         ["trace", "committedActionId"],

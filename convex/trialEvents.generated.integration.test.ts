@@ -199,17 +199,19 @@ function eventId(actionId: string): string {
   return `event:${actionId}`;
 }
 
-function action(input: Readonly<{
-  actionId: string;
-  expectedStateVersion: number;
-  actor: ActorRef;
-  source: "user" | "ai" | "deterministic" | "system";
-  causationId: string;
-  type: TrialActionV3["type"];
-  payload: unknown;
-  responseId?: string;
-  modelMetadata?: TrialActionV3["modelMetadata"];
-}>): TrialActionV3 {
+function action(
+  input: Readonly<{
+    actionId: string;
+    expectedStateVersion: number;
+    actor: ActorRef;
+    source: "user" | "ai" | "deterministic" | "system";
+    causationId: string;
+    type: TrialActionV3["type"];
+    payload: unknown;
+    responseId?: string;
+    modelMetadata?: TrialActionV3["modelMetadata"];
+  }>,
+): TrialActionV3 {
   return TrialActionV3Schema.parse({
     schemaVersion: TRIAL_ACTION_SCHEMA_VERSION_V3,
     actionId: input.actionId,
@@ -509,7 +511,9 @@ function generatedAction(
       witnessId: ACTORS.rina.witnessId,
       testimonyId: "testimony:generated:answer-rina",
       turnId: "turn:generated:answer-rina",
-      text: generationInput.output.segments.map((segment) => segment.text).join(" "),
+      text: generationInput.output.segments
+        .map((segment) => segment.text)
+        .join(" "),
       factIds: ["fact_complaint_sent"],
       evidenceIds: ["evidence_complaint_email"],
     },
@@ -610,7 +614,8 @@ function opponentPlanOutput(
         : [
             {
               kind: "no_action",
-              rationale: "Waive cross because no additional question is needed.",
+              rationale:
+                "Waive cross because no additional question is needed.",
               citations,
             },
           ],
@@ -635,8 +640,7 @@ function proposedCitationCount(
     (total, segment) =>
       total +
       Object.values(segment.citations).reduce(
-        (segmentTotal, identifiers) =>
-          segmentTotal + identifiers.length,
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
         0,
       ),
     0,
@@ -757,12 +761,9 @@ function planGeneration(
   });
 }
 
-function persistedDirective(
-  output: OpponentPlannerModelOutput,
-): string {
-  const selectedMoveIndex = output.proposedMoves[0]?.kind === "question_witness"
-    ? 0
-    : null;
+function persistedDirective(output: OpponentPlannerModelOutput): string {
+  const selectedMoveIndex =
+    output.proposedMoves[0]?.kind === "question_witness" ? 0 : null;
   const selectedMove =
     selectedMoveIndex === null ? null : output.proposedMoves[selectedMoveIndex];
   const directive =
@@ -908,7 +909,8 @@ function counselGeneration(
     mode === "question"
       ? "request:generated:counsel-question"
       : "request:generated:counsel-end";
-  const callId = mode === "question" ? COUNSEL_CALL_ID : "call:generated:counsel-end";
+  const callId =
+    mode === "question" ? COUNSEL_CALL_ID : "call:generated:counsel-end";
   return HearingCounselResponsePrecommitSchema.parse({
     schemaVersion: HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
     trialId: TRIAL_ID,
@@ -926,7 +928,7 @@ function counselGeneration(
     modelMetadata: {
       model: "gpt-5.6-luna",
       requestId,
-      promptVersion: "role-responder.counsel.prompt.v1",
+      promptVersion: "role-responder.counsel.prompt.v2",
       schemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
       latencyMs: 680,
       inputTokens: usage.inputTokens,
@@ -950,7 +952,7 @@ function counselGeneration(
       provider: "openai-responses",
       model: "gpt-5.6-luna",
       providerProtocolVersion: "courtroom-model-provider.v1",
-      promptVersion: "role-responder.counsel.prompt.v1",
+      promptVersion: "role-responder.counsel.prompt.v2",
       outputSchemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
       knowledgeScope: {
         knowledgeSchemaVersion: "knowledge-view.opponent-counsel-public.v1",
@@ -1144,9 +1146,7 @@ describe("atomic generated trial-event append", () => {
         .collect(),
       receipts: await ctx.db
         .query("actionReceipts")
-        .withIndex("by_trial_version", (index) =>
-          index.eq("trialId", TRIAL_ID),
-        )
+        .withIndex("by_trial_version", (index) => index.eq("trialId", TRIAL_ID))
         .collect(),
       calls: await ctx.db
         .query("courtroomModelCalls")
@@ -1158,9 +1158,7 @@ describe("atomic generated trial-event append", () => {
         .collect(),
       snapshots: await ctx.db
         .query("trialSnapshots")
-        .withIndex("by_trial_version", (index) =>
-          index.eq("trialId", TRIAL_ID),
-        )
+        .withIndex("by_trial_version", (index) => index.eq("trialId", TRIAL_ID))
         .collect(),
     }));
     expect(persisted.events).toHaveLength(7);
@@ -1196,11 +1194,13 @@ describe("atomic generated trial-event append", () => {
     const generationInput = generation();
     const trialAction = generatedAction(generationInput);
 
-    const invalidCases: Array<Readonly<{
-      action: unknown;
-      generation: unknown;
-      error: string;
-    }>> = [
+    const invalidCases: Array<
+      Readonly<{
+        action: unknown;
+        generation: unknown;
+        error: string;
+      }>
+    > = [
       {
         action: { ...trialAction, source: "deterministic" },
         generation: generationInput,
@@ -1304,17 +1304,13 @@ describe("atomic generated trial-event append", () => {
         .collect(),
       receipts: await ctx.db
         .query("actionReceipts")
-        .withIndex("by_trial_version", (index) =>
-          index.eq("trialId", TRIAL_ID),
-        )
+        .withIndex("by_trial_version", (index) => index.eq("trialId", TRIAL_ID))
         .collect(),
       calls: await ctx.db.query("courtroomModelCalls").collect(),
       attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
       snapshots: await ctx.db
         .query("trialSnapshots")
-        .withIndex("by_trial_version", (index) =>
-          index.eq("trialId", TRIAL_ID),
-        )
+        .withIndex("by_trial_version", (index) => index.eq("trialId", TRIAL_ID))
         .collect(),
       projection: await ctx.db
         .query("trialProjections")
@@ -1322,9 +1318,15 @@ describe("atomic generated trial-event append", () => {
         .unique(),
     }));
     expect(persisted.events).toHaveLength(6);
-    expect(persisted.events.some((event) => event.actionId === trialAction.actionId)).toBe(false);
+    expect(
+      persisted.events.some((event) => event.actionId === trialAction.actionId),
+    ).toBe(false);
     expect(persisted.receipts).toHaveLength(6);
-    expect(persisted.receipts.some((receipt) => receipt.actionId === trialAction.actionId)).toBe(false);
+    expect(
+      persisted.receipts.some(
+        (receipt) => receipt.actionId === trialAction.actionId,
+      ),
+    ).toBe(false);
     expect(persisted.calls).toHaveLength(1);
     expect(persisted.attempts).toHaveLength(1);
     expect(persisted.snapshots).toHaveLength(1);
@@ -1712,12 +1714,7 @@ describe("atomic opponent-plan and counsel-turn append", () => {
     });
 
     await expect(
-      appendCounselTurn(
-        backend,
-        primary,
-        continuation,
-        generationInput,
-      ),
+      appendCounselTurn(backend, primary, continuation, generationInput),
     ).rejects.toThrow("COURTROOM_MODEL_CALL_CONFLICT");
 
     const persisted = await backend.run(async (ctx) => ({
@@ -1750,7 +1747,8 @@ describe("atomic opponent-plan and counsel-turn append", () => {
     });
     expect(
       persisted.snapshots.some(
-        (snapshot) => snapshot.stateVersion === 10 || snapshot.stateVersion === 11,
+        (snapshot) =>
+          snapshot.stateVersion === 10 || snapshot.stateVersion === 11,
       ),
     ).toBe(false);
   });

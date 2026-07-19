@@ -52,7 +52,7 @@ const PROVIDER_REQUEST_ID = "request:openai:001";
 const PROVIDER_RESPONSE_ID = "response:openai:001";
 const PROMPT_VERSION = "role-responder.witness-answer.prompt.v1";
 const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v2";
-const COUNSEL_PROMPT_VERSION = "role-responder.counsel.prompt.v1";
+const COUNSEL_PROMPT_VERSION = "role-responder.counsel.prompt.v2";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
@@ -463,8 +463,7 @@ function validOpponentPlanPrecommit(): HearingOpponentPlanPrecommit {
           structuredDeltaCount: 4,
           streamedCharacterCount: 560,
           outputHash,
-          proposedCitationCount:
-            opponentPlanProposedCitationCount(output),
+          proposedCitationCount: opponentPlanProposedCitationCount(output),
           usage,
           validationIssueCodes: [],
           safeErrorCode: null,
@@ -481,8 +480,7 @@ function counselProposedCitationCount(
     (total, segment) =>
       total +
       Object.values(segment.citations).reduce(
-        (segmentTotal, identifiers) =>
-          segmentTotal + identifiers.length,
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
         0,
       ),
     0,
@@ -839,7 +837,8 @@ describe("hearing command model boundary", () => {
       HearingWitnessGenerationPrecommitSchema.safeParse(missingRequest).success,
     ).toBe(false);
     expect(
-      HearingWitnessGenerationPrecommitSchema.safeParse(missingResponse).success,
+      HearingWitnessGenerationPrecommitSchema.safeParse(missingResponse)
+        .success,
     ).toBe(false);
   });
 
@@ -934,9 +933,9 @@ describe("hearing command model boundary", () => {
     const envelope = validOpponentPlanPrecommit();
     envelope.trace[field] = value;
 
-    expect(
-      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
-    ).toBe(false);
+    expect(HearingOpponentPlanPrecommitSchema.safeParse(envelope).success).toBe(
+      false,
+    );
   });
 
   it("rejects the wrong task, model, or response identity", () => {
@@ -1000,9 +999,9 @@ describe("hearing command model boundary", () => {
     const envelope = validOpponentPlanPrecommit();
     mutate(envelope);
 
-    expect(
-      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
-    ).toBe(false);
+    expect(HearingOpponentPlanPrecommitSchema.safeParse(envelope).success).toBe(
+      false,
+    );
   });
 
   it("rejects a mutually matching but unsupported planner prompt version", () => {
@@ -1010,9 +1009,9 @@ describe("hearing command model boundary", () => {
     envelope.trace.promptVersion = "opponent-planner.prompt.v3";
     envelope.modelMetadata.promptVersion = "opponent-planner.prompt.v3";
 
-    expect(
-      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
-    ).toBe(false);
+    expect(HearingOpponentPlanPrecommitSchema.safeParse(envelope).success).toBe(
+      false,
+    );
   });
 
   it("rejects opponent output hash and proposed-citation mismatches", () => {
@@ -1049,8 +1048,7 @@ describe("hearing command model boundary", () => {
         .success,
     ).toBe(false);
     expect(
-      HearingOpponentPlanPrecommitSchema.safeParse(unauditableCitation)
-        .success,
+      HearingOpponentPlanPrecommitSchema.safeParse(unauditableCitation).success,
     ).toBe(false);
   });
 
@@ -1063,9 +1061,9 @@ describe("hearing command model boundary", () => {
     envelope.trace.usage.totalTokens += 1;
     envelope.modelMetadata.inputTokens = envelope.trace.usage.inputTokens;
 
-    expect(
-      HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
-    ).toBe(false);
+    expect(HearingOpponentPlanPrecommitSchema.safeParse(envelope).success).toBe(
+      false,
+    );
   });
 
   it.each(["committedActionId", "committedEventId"] as const)(
@@ -1142,8 +1140,7 @@ describe("hearing command model boundary", () => {
       duplicateCallIdentity.callId;
 
     expect(
-      HearingCounselResponsePrecommitSchema.safeParse(missingDecision)
-        .success,
+      HearingCounselResponsePrecommitSchema.safeParse(missingDecision).success,
     ).toBe(false);
     expect(
       HearingCounselResponsePrecommitSchema.safeParse({
@@ -1238,9 +1235,9 @@ describe("hearing command model boundary", () => {
     {
       field: "promptVersion",
       mutate: (envelope) => {
-        envelope.trace.promptVersion = "role-responder.counsel.prompt.v2";
+        envelope.trace.promptVersion = "role-responder.counsel.prompt.v1";
         envelope.modelMetadata.promptVersion =
-          "role-responder.counsel.prompt.v2";
+          "role-responder.counsel.prompt.v1";
       },
     },
     {
@@ -1329,9 +1326,7 @@ describe("hearing command model boundary", () => {
     "settlementOfferIds",
   ] as const)("rejects unsupported/private counsel %s", (field) => {
     const envelope = validCounselResponsePrecommit();
-    envelope.output.speechSegments[0].citations[field] = [
-      `${field}:forbidden`,
-    ];
+    envelope.output.speechSegments[0].citations[field] = [`${field}:forbidden`];
     const outputHash = hashCounselResponseModelOutput(envelope.output);
     envelope.trace.outputHash = outputHash;
     envelope.trace.attempts[0].outputHash = outputHash;

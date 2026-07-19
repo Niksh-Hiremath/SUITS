@@ -10,7 +10,7 @@ import {
 } from "./call-contracts";
 
 export const COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION =
-  "role-responder.counsel.request.v1" as const;
+  "role-responder.counsel.request.v2" as const;
 export const COUNSEL_RESPONSE_VALIDATION_SCHEMA_VERSION =
   "role-responder.counsel.validation.v1" as const;
 
@@ -51,6 +51,14 @@ export const CounselResponseDirectiveSchema = z.discriminatedUnion("kind", [
       disposition: z.enum(["completed", "waived"]),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("give_closing"),
+      permittedFactIds: UniqueIdListSchema(64),
+      permittedEvidenceIds: UniqueIdListSchema(64),
+      permittedTestimonyIds: UniqueIdListSchema(128),
+    })
+    .strict(),
 ]);
 
 export const CounselResponseRequestSchema = z
@@ -69,7 +77,8 @@ export const CounselResponseRequestSchema = z
         examinationKind: z.enum(["direct", "cross", "redirect", "recross"]),
         answeredQuestionCount: z.number().int().nonnegative(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
     planBinding: z
       .object({
         plannerCallId: CaseGraphEntityIdSchema,
@@ -81,7 +90,98 @@ export const CounselResponseRequestSchema = z
     directive: CounselResponseDirectiveSchema,
     knowledgeView: OpponentCounselPublicKnowledgeViewSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    const view = request.knowledgeView;
+    if (
+      request.trialId !== view.trialId ||
+      request.trialId !== view.publicRecord.trialId ||
+      request.expectedStateVersion !== view.stateVersion ||
+      request.expectedStateVersion !== view.publicRecord.stateVersion ||
+      request.actorId !== view.actorId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["knowledgeView"],
+        message: "The counsel request must bind one exact public trial head",
+      });
+    }
+
+    const directive = request.directive;
+    if (directive.kind === "give_closing") {
+      if (request.appearance !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["appearance"],
+          message: "A closing response cannot bind a witness appearance",
+        });
+      }
+    } else if (request.appearance === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["appearance"],
+        message: "An examination response requires its canonical appearance",
+      });
+    } else if (
+      directive.kind === "question_witness" &&
+      directive.witnessId !== request.appearance.witnessId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["directive", "witnessId"],
+        message: "The question directive must target the bound appearance",
+      });
+    }
+
+    if (directive.kind === "end_examination") return;
+    const publicOnly = directive.kind === "give_closing";
+    const publicRecord = view.publicRecord;
+    const allowedFacts = new Set([
+      ...publicRecord.facts.map(({ factId }) => factId),
+      ...(publicOnly ? [] : view.counsel.facts.map(({ factId }) => factId)),
+    ]);
+    const allowedEvidence = new Set([
+      ...publicRecord.evidence.map(({ evidenceId }) => evidenceId),
+      ...(publicOnly
+        ? []
+        : view.counsel.evidence.map(({ evidenceId }) => evidenceId)),
+    ]);
+    const allowedTestimony = new Set(
+      publicRecord.testimony.map(({ testimonyId }) => testimonyId),
+    );
+    for (const [field, identifiers, allowed] of [
+      ["permittedFactIds", directive.permittedFactIds, allowedFacts],
+      ["permittedEvidenceIds", directive.permittedEvidenceIds, allowedEvidence],
+      [
+        "permittedTestimonyIds",
+        directive.permittedTestimonyIds,
+        allowedTestimony,
+      ],
+    ] as const) {
+      identifiers.forEach((identifier, index) => {
+        if (!allowed.has(identifier)) {
+          context.addIssue({
+            code: "custom",
+            path: ["directive", field, index],
+            message: "A directive citation is outside its role-scoped record",
+          });
+        }
+      });
+    }
+    if (
+      directive.kind === "give_closing" &&
+      directive.permittedFactIds.length +
+        directive.permittedEvidenceIds.length +
+        directive.permittedTestimonyIds.length ===
+        0
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["directive"],
+        message: "A closing directive requires jury-considerable support",
+      });
+    }
+  });
 
 export const CounselResponseValidationIssueCodeSchema = z.enum([
   "strict_schema_invalid",
@@ -201,17 +301,13 @@ function citationScopeIssues(
   const issues: CounselResponseValidationIssue[] = [];
   const directive = request.directive;
   const allowedFacts = new Set(
-    directive.kind === "question_witness" ? directive.permittedFactIds : [],
+    directive.kind === "end_examination" ? [] : directive.permittedFactIds,
   );
   const allowedEvidence = new Set(
-    directive.kind === "question_witness"
-      ? directive.permittedEvidenceIds
-      : [],
+    directive.kind === "end_examination" ? [] : directive.permittedEvidenceIds,
   );
   const allowedTestimony = new Set(
-    directive.kind === "question_witness"
-      ? directive.permittedTestimonyIds
-      : [],
+    directive.kind === "end_examination" ? [] : directive.permittedTestimonyIds,
   );
   const unsupportedFields: readonly CitationField[] = [
     "transcriptTurnIds",
@@ -274,7 +370,7 @@ function citationScopeIssues(
       }
     });
     if (
-      directive.kind === "question_witness" &&
+      directive.kind !== "end_examination" &&
       segment.citations.factIds.length === 0 &&
       segment.citations.evidenceIds.length === 0 &&
       segment.citations.testimonyIds.length === 0
@@ -340,7 +436,7 @@ function directiveIssues(
         ),
       );
     }
-  } else {
+  } else if (directive.kind === "end_examination") {
     if (
       action.kind !== "end_examination" ||
       action.disposition !== directive.disposition
@@ -362,6 +458,25 @@ function directiveIssues(
         ),
       );
     }
+  } else {
+    if (action.kind !== "give_closing") {
+      issues.push(
+        issue(
+          "directive_mismatch",
+          ["proposedAction", "kind"],
+          "The counsel response must materialize the selected closing directive",
+        ),
+      );
+    }
+    if (text.length > 20_000) {
+      issues.push(
+        issue(
+          "response_too_large",
+          ["speechSegments"],
+          "The joined opposing closing exceeds 20000 characters",
+        ),
+      );
+    }
   }
   return issues;
 }
@@ -376,9 +491,7 @@ function materialize(
       output.speechSegments.flatMap((segment) => segment.citations.factIds),
     ),
     evidenceIds: stableUnique(
-      output.speechSegments.flatMap(
-        (segment) => segment.citations.evidenceIds,
-      ),
+      output.speechSegments.flatMap((segment) => segment.citations.evidenceIds),
     ),
     testimonyIds: stableUnique(
       output.speechSegments.flatMap(

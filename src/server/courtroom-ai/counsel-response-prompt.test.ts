@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { CounselResponseValidationIssueSchema } from "@/domain/courtroom-ai";
+import {
+  CounselResponseRequestSchema,
+  CounselResponseValidationIssueSchema,
+} from "@/domain/courtroom-ai";
 
 import {
   COUNSEL_RESPONSE_INJECTION_CANARY,
@@ -117,6 +120,33 @@ describe("public counsel response prompt", () => {
     expect(prompt.untrustedUserContent).not.toContain("secret scratchpad");
     expect(prompt.untrustedUserContent).not.toContain("owner_leak");
     expect(prompt.untrustedUserContent).toContain("fact_hidden");
+  });
+
+  it("binds an admitted-record closing without a witness appearance", () => {
+    const base = createCounselResponseRequestFixture();
+    const request = CounselResponseRequestSchema.parse({
+      ...base,
+      appearance: null,
+      directive: {
+        kind: "give_closing",
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: ["testimony_foundation"],
+      },
+    });
+    const prompt = buildCounselResponsePrompt({ mode: "initial", request });
+
+    expect(manifest(prompt)).toMatchObject({
+      appearanceBinding: null,
+      directiveBinding: {
+        kind: "give_closing",
+        permittedFactCount: 0,
+        permittedEvidenceCount: 0,
+        permittedTestimonyCount: 1,
+      },
+    });
+    expect(prompt.untrustedUserContent).toContain('"kind":"give_closing"');
+    expect(prompt.developerPrefix).toContain("admitted public record");
   });
 
   it("requires a safe issue for repair", () => {

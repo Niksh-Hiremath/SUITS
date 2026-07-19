@@ -43,7 +43,8 @@ function request(
 ): CounselResponseRequest {
   return CounselResponseRequestSchema.parse({
     schemaVersion: COUNSEL_RESPONSE_REQUEST_SCHEMA_VERSION,
-    callId: "call:trial_counsel:decision_question:00000000-0000-4000-8000-000000000001",
+    callId:
+      "call:trial_counsel:decision_question:00000000-0000-4000-8000-000000000001",
     decisionId: "decision:counsel:question",
     trialId: "trial_counsel",
     expectedStateVersion: 14,
@@ -148,7 +149,10 @@ function questionOutput() {
 
 describe("counsel response boundary", () => {
   it("accepts and materializes the exact grounded question directive", () => {
-    const validation = validateCounselResponseOutput(request(), questionOutput());
+    const validation = validateCounselResponseOutput(
+      request(),
+      questionOutput(),
+    );
     expect(validation.accepted).toBe(true);
     if (!validation.accepted) throw new Error("Expected acceptance");
     expect(validation.response).toMatchObject({
@@ -166,8 +170,10 @@ describe("counsel response boundary", () => {
   it("strictly rejects browser/private fields in the server request", () => {
     const value = request();
     expect(
-      CounselResponseRequestSchema.safeParse({ ...value, ownerId: "owner_leak" })
-        .success,
+      CounselResponseRequestSchema.safeParse({
+        ...value,
+        ownerId: "owner_leak",
+      }).success,
     ).toBe(false);
     expect(
       CounselResponseRequestSchema.safeParse({
@@ -257,5 +263,77 @@ describe("counsel response boundary", () => {
     });
     const validation = validateCounselResponseOutput(endRequest, output);
     expect(validation.accepted).toBe(true);
+  });
+
+  it("accepts an admitted-record-only opposing closing without an appearance", () => {
+    const closingRequest = CounselResponseRequestSchema.parse({
+      ...request(),
+      appearance: null,
+      directive: {
+        kind: "give_closing",
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: ["testimony_foundation"],
+      },
+    });
+    const output = CounselRoleResponseModelOutputSchema.parse({
+      schemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+      speechSegments: [
+        {
+          text: "The admitted testimony establishes the document timeline.",
+          citations: citations({
+            testimonyIds: ["testimony_foundation"],
+          }),
+        },
+      ],
+      proposedAction: { kind: "give_closing" },
+      performance: {
+        activity: "speaking",
+        emotion: "confident",
+        intensity: 0.5,
+        gazeTarget: "jury",
+        gesture: "open_palm",
+        speakingStyle: "firm",
+      },
+    });
+
+    const validation = validateCounselResponseOutput(closingRequest, output);
+    expect(validation.accepted).toBe(true);
+    if (!validation.accepted) throw new Error("Expected acceptance");
+    expect(validation.response).toMatchObject({
+      action: { kind: "give_closing" },
+      testimonyIds: ["testimony_foundation"],
+    });
+  });
+
+  it("rejects stale heads and directives outside the role-scoped record", () => {
+    const value = request();
+    expect(
+      CounselResponseRequestSchema.safeParse({
+        ...value,
+        expectedStateVersion: value.expectedStateVersion + 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      CounselResponseRequestSchema.safeParse({
+        ...value,
+        directive: {
+          ...value.directive,
+          permittedFactIds: ["fact_hidden"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      CounselResponseRequestSchema.safeParse({
+        ...value,
+        appearance: null,
+        directive: {
+          kind: "give_closing",
+          permittedFactIds: ["fact_draft"],
+          permittedEvidenceIds: [],
+          permittedTestimonyIds: [],
+        },
+      }).success,
+    ).toBe(false);
   });
 });
