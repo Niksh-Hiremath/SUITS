@@ -25,6 +25,7 @@ import type {
   AudioPlaybackCompletion,
   AudioPlaybackControllerOptions,
   AudioPlaybackJobIdentity,
+  AudioPlaybackSchedule,
   AudioPlaybackStatus,
   AudioPlaybackTimingBatch,
 } from "./audio-playback";
@@ -43,6 +44,7 @@ import {
   type HearingFinalSubmission,
   type HearingSpeechClientPort,
 } from "./hearing-controller";
+import type { HearingPerformanceEvent } from "./hearing-performance";
 import {
   SPEECH_PROTOCOL,
   type SpeechCapabilitiesEvent,
@@ -484,10 +486,12 @@ class FakePlayback implements HearingAudioPlaybackPort {
   readonly startedJobs: AudioPlaybackJobIdentity[] = [];
   readonly frames: Array<Readonly<{ jobId: string; byteLength: number }>> = [];
   readonly timings: AudioPlaybackTimingBatch[] = [];
+  private readonly emittedTimings = new Set<AudioPlaybackTimingBatch>();
   readonly order: string[] = [];
   bargeCount = 0;
   bargeFailure = false;
   closeCount = 0;
+  closeFailure = false;
   finishFailure = false;
 
   get status(): AudioPlaybackStatus {
@@ -514,14 +518,38 @@ class FakePlayback implements HearingAudioPlaybackPort {
   enqueueFrame(frame: {
     readonly jobId: string;
     readonly byteLength: number;
-  }): unknown {
+  }): AudioPlaybackSchedule {
     this.order.push("enqueue");
     this.frames.push(Object.freeze({
       jobId: frame.jobId,
       byteLength: frame.byteLength,
     }));
     this.setStatus("playing");
-    return Object.freeze({ accepted: true });
+    for (const timing of this.timings) {
+      if (timing.jobId !== frame.jobId || this.emittedTimings.has(timing)) {
+        continue;
+      }
+      this.emittedTimings.add(timing);
+      this.options?.onTiming?.({
+        ...timing,
+        audioClockTimeSeconds: 10,
+        marks: timing.marks.map((mark) => ({
+          ...mark,
+          audioStartTimeSeconds: 10 + mark.startMs / 1_000,
+          audioEndTimeSeconds: 10 + mark.endMs / 1_000,
+        })),
+      });
+    }
+    return Object.freeze({
+      startTimeSeconds: 10,
+      endTimeSeconds: 10.02,
+      pressure: Object.freeze({
+        level: "normal" as const,
+        queuedBytes: frame.byteLength,
+        availableBytes: 512 * 1_024 - frame.byteLength,
+        maxQueuedBytes: 512 * 1_024,
+      }),
+    });
   }
 
   addTiming(batch: AudioPlaybackTimingBatch): void {
@@ -556,6 +584,7 @@ class FakePlayback implements HearingAudioPlaybackPort {
 
   async close(): Promise<void> {
     this.closeCount += 1;
+    if (this.closeFailure) throw new Error("test-only close failure");
     this.setStatus("closed");
   }
 
@@ -570,6 +599,7 @@ type Harness = Readonly<{
   client: FakeSpeechClient;
   capture: FakeCapture;
   playback: FakePlayback;
+  performanceEvents: HearingPerformanceEvent[];
   commits: HearingFinalSubmission[];
   setView: (view: HearingRuntimeViewV1) => void;
   setActivityHook: (hook: (() => void) | null) => void;
@@ -586,12 +616,15 @@ function harness(
     ) => Promise<unknown>;
     onInterruptionPending?: (response: FinalBoundInterruptionResponse) => void;
     publishInterruption?: boolean;
+    performanceNowMs?: () => number;
+    idFactory?: (prefix: string) => string;
   }> = {},
 ): Harness {
   const client = new FakeSpeechClient(capabilityValue);
   const capture = new FakeCapture();
   const playback = new FakePlayback();
   const commits: HearingFinalSubmission[] = [];
+  const performanceEvents: HearingPerformanceEvent[] = [];
   let view = options.view ?? runtimeView();
   let activityHook: (() => void) | null = null;
   let commitHook: (() => Promise<void>) | null = null;
@@ -634,18 +667,21 @@ function harness(
     ...(options.onInterruptionPending === undefined
       ? {}
       : { onInterruptionPending: options.onInterruptionPending }),
-    idFactory: (prefix) => `${prefix}-${++nextId}`,
+    idFactory: options.idFactory ?? ((prefix) => `${prefix}-${++nextId}`),
     clientFactory: () => client,
     captureFactory: (options) => capture.configure(options),
     playbackFactory: (options) => playback.configure(options),
+    performanceNowMs: options.performanceNowMs ?? (() => 1_000),
     finalTimeoutMs: 1_000,
     ttsTimeoutMs: 1_000,
   });
+  controller.subscribePerformance((event) => performanceEvents.push(event));
   return Object.freeze({
     controller,
     client,
     capture,
     playback,
+    performanceEvents,
     commits,
     setView(next) {
       view = next;
@@ -756,6 +792,56 @@ function emitTtsFinished(
     audioDurationMs: 20,
     synthesisLatencyMs: 4,
   });
+}
+
+function emitTtsTiming(
+  client: FakeSpeechClient,
+  request: SynthesisRequest,
+): void {
+  client.emit({
+    protocol: SPEECH_PROTOCOL,
+    type: "tts_timing",
+    jobId: request.jobId,
+    responseId: request.responseId,
+    actor: request.actor,
+    sequence: request.sequence,
+    marks: [
+      { kind: "word", value: "Ready", startMs: 5, endMs: 15 },
+    ],
+  });
+}
+
+function emitTtsAudioFrame(
+  client: FakeSpeechClient,
+  request: SynthesisRequest,
+  frameSequence = 0,
+): Readonly<{ acknowledged: () => boolean }> {
+  let acknowledged = false;
+  client.emit({
+    type: "tts_audio_frame",
+    metadata: {
+      protocol: SPEECH_PROTOCOL,
+      type: "tts_audio",
+      jobId: request.jobId,
+      responseId: request.responseId,
+      actor: request.actor,
+      sequence: request.sequence,
+      frameSequence,
+      frameToken: `frame-token-${frameSequence}`,
+      byteLength: 4,
+      durationMs: 1,
+      sampleRateHz: 16_000,
+      channels: 1,
+      encoding: "pcm_s16le",
+      ackRequired: true,
+    },
+    pcmS16le: new ArrayBuffer(4),
+    acknowledge: () => {
+      acknowledged = true;
+      return true;
+    },
+  });
+  return Object.freeze({ acknowledged: () => acknowledged });
 }
 
 async function completeLatestClip(test: Harness): Promise<SynthesisRequest> {
@@ -1441,6 +1527,35 @@ describe("HearingController", () => {
     );
     expect(test.commits).toHaveLength(0);
     expect(test.controller.snapshot.lifecycle).toBe("ready");
+    expect(
+      test.performanceEvents
+        .filter((event) => event.type === "playback_requested")
+        .map(({ sceneActor, purpose, turnId, interruptId }) => ({
+          sceneActor,
+          purpose,
+          turnId,
+          interruptId,
+        })),
+    ).toEqual([
+      {
+        sceneActor: "opposing_counsel",
+        purpose: "objection",
+        turnId: null,
+        interruptId: expect.stringMatching(/^interrupt:partial:/u),
+      },
+      {
+        sceneActor: "judge",
+        purpose: "ruling",
+        turnId: null,
+        interruptId: "interrupt:durable:001",
+      },
+      {
+        sceneActor: "witness",
+        purpose: "testimony",
+        turnId: "turn-2",
+        interruptId: "interrupt:durable:001",
+      },
+    ]);
   });
 
   it("refuses resumed answer audio from a different witness", async () => {
@@ -2157,6 +2272,11 @@ describe("HearingController", () => {
       lifecycle: "recoverable_error",
       code: "PLAYBACK_FAILED",
     });
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "playback_terminal",
+      status: "failed",
+      reason: "playback_failed",
+    });
   });
 
   it("still cancels service synthesis and cleans capture when local barge fails", async () => {
@@ -2230,6 +2350,450 @@ describe("HearingController", () => {
     expect(test.controller.snapshot.lifecycle).toBe("ready");
   });
 
+  it("emits exact requested, audible, timed, and terminal performance events", async () => {
+    const previous = runtimeView();
+    const answer = transcriptTurn(
+      1,
+      "actor-witness",
+      "witness",
+      "neutral",
+      "I saw the alert.",
+    );
+    const next = runtimeView(8, [answer]);
+    const test = harness(capabilities(true, []), { view: next });
+    test.controller.subscribePerformance(() => {
+      throw new Error("test-only observer failure");
+    });
+    await test.controller.prepare();
+    test.controller.baselineView(previous);
+
+    const adoption = test.controller.adoptView(previous, next, "command");
+    await flushAsync();
+    const request = latestSynthesis(test.client);
+    expect(test.performanceEvents).toHaveLength(1);
+    expect(test.performanceEvents[0]).toMatchObject({
+      type: "playback_requested",
+      jobId: request.jobId,
+      responseId: request.responseId,
+      actor: request.actor,
+      sceneActor: "witness",
+      purpose: "testimony",
+      turnId: answer.turnId,
+      interruptId: null,
+    });
+
+    emitTtsStarted(test.client, request);
+    emitTtsTiming(test.client, request);
+    const firstFrame = emitTtsAudioFrame(test.client, request);
+    expect(firstFrame.acknowledged()).toBe(true);
+    expect(test.performanceEvents.map(({ type }) => type)).toEqual([
+      "playback_requested",
+      "playback_started",
+      "timing_scheduled",
+    ]);
+    expect(test.performanceEvents[2]).toMatchObject({
+      type: "timing_scheduled",
+      audioClockTimeSeconds: 10,
+      marks: [
+        {
+          kind: "word",
+          value: "Ready",
+          audioStartTimeSeconds: 10.005,
+          audioEndTimeSeconds: 10.015,
+        },
+      ],
+    });
+
+    emitTtsFinished(test.client, request);
+    test.playback.resolveAudible(request.jobId);
+    await adoption;
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "playback_terminal",
+      status: "completed",
+      reason: "completed",
+      jobId: request.jobId,
+    });
+    expect(Object.isFrozen(test.performanceEvents.at(-1))).toBe(true);
+
+    const terminalCount = test.performanceEvents.length;
+    emitTtsTiming(test.client, request);
+    const lateFrame = emitTtsAudioFrame(test.client, request, 1);
+    emitTtsFinished(test.client, request);
+    expect(lateFrame.acknowledged()).toBe(true);
+    expect(test.performanceEvents).toHaveLength(terminalCount);
+  });
+
+  it("keeps maximum-length utterance interruption bindings playable", async () => {
+    const utteranceId = `u${"a".repeat(127)}`;
+    let nextId = 0;
+    const test = harness(capabilities(true, INTERRUPTION_CLIPS), {
+      view: objectionView(),
+      interruptFinal: async () => {
+        throw new Error("final dispatch is not expected");
+      },
+      idFactory: (prefix) =>
+        prefix === "utterance" ? utteranceId : `${prefix}-${++nextId}`,
+    });
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+
+    emitSttPartial(
+      test.client,
+      utteranceId,
+      1,
+      "Isn't it true that you ignored the safety alert that morning?",
+      0.99,
+    );
+    await flushAsync();
+
+    const request = latestSynthesis(test.client);
+    expect(request.clipId).toBe("courtroom.objection.v1");
+    const requested = test.performanceEvents.find(
+      (event) =>
+        event.type === "playback_requested" && event.jobId === request.jobId,
+    );
+    expect(requested).toMatchObject({
+      type: "playback_requested",
+      purpose: "objection",
+      sceneActor: "opposing_counsel",
+    });
+    if (requested?.type !== "playback_requested") {
+      throw new Error("missing playback request");
+    }
+    expect(requested.interruptId?.length).toBeGreaterThan(128);
+
+    await test.controller.close();
+  });
+
+  it("forwards only exact VAD speech boundaries for the active user utterance", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId: "utterance-stale",
+      detectedAtMs: 20,
+    });
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 26,
+    });
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_ended",
+      utteranceId,
+      reason: "vad_end",
+      detectedAtMs: 240,
+    });
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_ended",
+      utteranceId,
+      reason: "client_end",
+      detectedAtMs: 245,
+    });
+
+    expect(test.performanceEvents).toEqual([
+      expect.objectContaining({
+        type: "user_speech_started",
+        utteranceId,
+        sceneActor: "user_counsel",
+        mode: "question",
+        observedAtMs: 25,
+        timestampSource: "speech_service",
+      }),
+      expect.objectContaining({
+        type: "user_speech_ended",
+        utteranceId,
+        reason: "vad_end",
+        observedAtMs: 240,
+        timestampSource: "speech_service",
+      }),
+    ]);
+
+    const stopped = test.controller.stopRecording();
+    emitSttFinal(test.client, utteranceId, 1, "What happened next?");
+    await stopped;
+  });
+
+  it("preserves the service VAD boundary that follows its final transcript", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+
+    emitSttFinal(test.client, utteranceId, 1, "What happened next?");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_ended",
+      utteranceId,
+      reason: "vad_end",
+      detectedAtMs: 240,
+    });
+    await flushAsync();
+
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "user_speech_ended",
+      utteranceId,
+      reason: "vad_end",
+      observedAtMs: 240,
+      timestampSource: "speech_service",
+    });
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("ends started user speech when an explicit stop has no service echo", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+
+    const stopped = test.controller.stopRecording();
+    await flushAsync();
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "user_speech_ended",
+      utteranceId,
+      reason: "client_end",
+      observedAtMs: 1_000,
+      timestampSource: "controller",
+    });
+    emitSttFinal(test.client, utteranceId, 1, "What happened next?");
+    await stopped;
+    expect(
+      test.performanceEvents.filter(
+        (event) =>
+          event.type === "user_speech_ended" &&
+          event.utteranceId === utteranceId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("ends started user speech when a final arrives before a boundary", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+
+    emitSttFinal(test.client, utteranceId, 1, "What happened next?");
+    await flushAsync();
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "user_speech_ended",
+      utteranceId,
+      reason: "final_received",
+      observedAtMs: 1_000,
+      timestampSource: "controller",
+    });
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
+  it("ends started user speech on disconnect before cleanup completes", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+
+    test.client.emit({ type: "client_state", state: "disconnected" });
+    await flushAsync();
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "user_speech_ended",
+      utteranceId,
+      reason: "disconnect",
+      observedAtMs: 1_000,
+      timestampSource: "controller",
+    });
+  });
+
+  it("ends started user speech once when the controller closes", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "speech_started",
+      utteranceId,
+      detectedAtMs: 25,
+    });
+
+    await test.controller.close();
+    await test.controller.close();
+    expect(
+      test.performanceEvents.filter(
+        (event) =>
+          event.type === "user_speech_ended" &&
+          event.utteranceId === utteranceId,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        reason: "cancelled",
+        observedAtMs: 1_000,
+        timestampSource: "controller",
+      }),
+    ]);
+  });
+
+  it("emits one exact cancellation when a courtroom action interrupts audio", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    const speaker = test.controller.speakerTest();
+    await flushAsync();
+    const request = latestSynthesis(test.client);
+    emitTtsStarted(test.client, request);
+    emitTtsAudioFrame(test.client, request);
+
+    test.controller.interruptForCourtroomAction();
+    await expect(speaker).rejects.toMatchObject({ code: "BARGED_IN" });
+    expect(
+      test.performanceEvents.filter(
+        (event) =>
+          event.type === "playback_terminal" && event.jobId === request.jobId,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        status: "cancelled",
+        reason: "courtroom_action",
+        sceneActor: "judge",
+        purpose: "speaker_test",
+      }),
+    ]);
+
+    emitTtsFinished(test.client, request);
+    test.playback.resolveAudible(request.jobId, "cancelled");
+    await flushAsync();
+    expect(
+      test.performanceEvents.filter(
+        (event) =>
+          event.type === "playback_terminal" && event.jobId === request.jobId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      completion: "cancelled" as const,
+      status: "cancelled" as const,
+      reason: "service_cancelled" as const,
+    },
+    {
+      completion: "superseded" as const,
+      status: "superseded" as const,
+      reason: "superseded" as const,
+    },
+  ])(
+    "maps a $completion audio completion to one exact terminal event",
+    async ({ completion, status, reason }) => {
+      const test = harness();
+      await test.controller.prepare();
+      const speaker = test.controller.speakerTest();
+      const speakerFailure = expect(speaker).rejects.toMatchObject({
+        code: "SPEECH_CANCELLED",
+      });
+      await flushAsync();
+      const request = latestSynthesis(test.client);
+      emitTtsStarted(test.client, request);
+      emitTtsFinished(test.client, request);
+      test.playback.resolveAudible(request.jobId, completion);
+
+      await speakerFailure;
+      expect(
+        test.performanceEvents.filter(
+          (event) =>
+            event.type === "playback_terminal" &&
+            event.jobId === request.jobId,
+        ),
+      ).toEqual([
+        expect.objectContaining({ status, reason }),
+      ]);
+    },
+  );
+
+  it("emits a controller-close terminal event without leaking observer errors", async () => {
+    const test = harness();
+    test.controller.subscribePerformance(() => {
+      throw new Error("test-only close observer failure");
+    });
+    await test.controller.prepare();
+    const speaker = test.controller.speakerTest();
+    const speakerFailure = expect(speaker).rejects.toMatchObject({
+      code: "CLOSED",
+    });
+    await flushAsync();
+    const request = latestSynthesis(test.client);
+
+    await expect(test.controller.close()).resolves.toBeUndefined();
+    await speakerFailure;
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "playback_terminal",
+      jobId: request.jobId,
+      status: "cancelled",
+      reason: "controller_closed",
+    });
+  });
+
+  it("reports failed playback cleanup when controller close cannot release audio", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    const speaker = test.controller.speakerTest();
+    const speakerFailure = expect(speaker).rejects.toMatchObject({
+      code: "CLOSED",
+    });
+    await flushAsync();
+    const request = latestSynthesis(test.client);
+    test.playback.closeFailure = true;
+
+    await expect(test.controller.close()).rejects.toMatchObject({
+      code: "CLOSE_FAILED",
+    });
+    await speakerFailure;
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "playback_terminal",
+      jobId: request.jobId,
+      status: "failed",
+      reason: "playback_failed",
+    });
+  });
+
   it("surfaces a synchronous playback finish failure without waiting for timeout", async () => {
     const test = harness();
     await test.controller.prepare();
@@ -2242,6 +2806,12 @@ describe("HearingController", () => {
 
     await expect(speaker).rejects.toMatchObject({ code: "PLAYBACK_FAILED" });
     expect(test.controller.snapshot.lifecycle).toBe("recoverable_error");
+    expect(test.performanceEvents.at(-1)).toMatchObject({
+      type: "playback_terminal",
+      jobId: request.jobId,
+      status: "failed",
+      reason: "playback_failed",
+    });
   });
 
   it("baselines without replay and speaks only policy-selected appended turns", async () => {
