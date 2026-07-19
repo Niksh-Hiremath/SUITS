@@ -917,6 +917,72 @@ describe("V3 hearing runtime facade", () => {
     ).rejects.toThrow("HEARING_CASE_NOT_FOUND");
   });
 
+  it.each([
+    ["user", "RUNTIME_USER_COUNSEL_AMBIGUOUS"],
+    ["opposing", "RUNTIME_OPPOSING_COUNSEL_AMBIGUOUS"],
+  ] as const)(
+    "rejects an ambiguous %s counsel roster before creating a trial",
+    async (side, errorCode) => {
+      const backend = convexTest({ schema, modules });
+      const graph = createThreeWitnessCaseGraphV1Fixture();
+      const sourceParty = graph.parties.find(
+        (party) => party.simulationSide === side,
+      );
+      if (!sourceParty) throw new Error(`Fixture requires a ${side} party`);
+      graph.parties.push({
+        ...sourceParty,
+        partyId: `party_extra_${side}`,
+        name: `Additional ${side} party`,
+        proceduralRole: "third_party",
+        counselName: `Additional ${side} counsel`,
+        provenance: sourceParty.provenance.map((entry, index) => ({
+          ...entry,
+          provenanceId: `prov_party_extra_${side}_${index}`,
+        })),
+      });
+      const parsedGraph = CaseGraphV1Schema.parse(graph);
+      const uploadId = `upload:${(side === "user" ? "b" : "c").repeat(48)}`;
+      const graphId = await derivePublishedGraphId(OWNER_ID, uploadId);
+      await backend.run(async (ctx) => {
+        await ctx.db.insert("caseGraphs", {
+          graphId,
+          caseId: parsedGraph.caseId,
+          version: 2,
+          lifecycle: "published",
+          visibility: "private",
+          ownerId: OWNER_ID,
+          uploadId,
+          title: parsedGraph.title,
+          graphJson: JSON.stringify(parsedGraph),
+          graphSchemaVersion: parsedGraph.schemaVersion,
+          compilerMetadataJson: JSON.stringify(parsedGraph.compilerMetadata),
+          sourceDigest: parsedGraph.compilerMetadata.sourceContentHash,
+          createdBy: "user",
+          createdAt: Date.parse("2026-07-19T03:00:00.000Z"),
+        });
+      });
+
+      await expect(
+        backend.action(startReference, {
+          ownerId: OWNER_ID,
+          requestJson: JSON.stringify({
+            ...startRequest(),
+            requestId:
+              side === "user"
+                ? "17171717-1717-4717-8717-171717171717"
+                : "16161616-1616-4616-8616-161616161616",
+            case: { kind: "owned", uploadId },
+          }),
+        }),
+      ).rejects.toThrow(errorCode);
+      const persisted = await backend.run(async (ctx) => ({
+        projections: await ctx.db.query("trialProjections").collect(),
+        events: await ctx.db.query("trialEvents").collect(),
+      }));
+      expect(persisted).toEqual({ projections: [], events: [] });
+    },
+  );
+
   it("continues a partially appended command when the exact request is retried", async () => {
     const backend = convexTest({ schema, modules });
     const started = await start(backend);
@@ -1812,62 +1878,23 @@ describe("V3 hearing runtime facade", () => {
     ).toHaveLength(1);
   });
 
-  it("rejects the unsupported userSide opposing AI workflow instead of silently choosing another counsel", async () => {
+  it("rejects the unsupported userSide before creating durable hearing state", async () => {
     const backend = convexTest({ schema, modules });
-    const started = HearingRuntimeViewV1Schema.parse(
-      await backend.action(startReference, {
+    await expect(
+      backend.action(startReference, {
         ownerId: OWNER_ID,
         requestJson: JSON.stringify({
           ...startRequest(),
           userSide: "opposing",
         }),
       }),
-    );
-    const called = await command(
-      backend,
-      started,
-      "71717171-7171-4171-8171-717171717171",
-      "2026-07-19T05:00:00.000Z",
-      { type: "call_witness", witnessId: "witness_theo_morgan" },
-    );
-    const question = await prepare(
-      backend,
-      called.view,
-      "72727272-7272-4272-8272-727272727272",
-      "2026-07-19T05:01:00.000Z",
-      {
-        type: "ask_question",
-        witnessId: "witness_theo_morgan",
-        examinationKind: "direct",
-        text: "When was the draft first created?",
-        presentedEvidenceIds: [],
-      },
-    );
-    const answered = await commitModelPreparation(
-      backend,
-      question.preparation,
-      "2026-07-19T05:01:02.000Z",
-    );
-    if (answered.status !== "completed") {
-      throw new Error("Expected player control after direct answer");
-    }
-    const finish = playerCommand(
-      answered.view,
-      "73737373-7373-4373-8373-737373737373",
-      "2026-07-19T05:02:00.000Z",
-      {
-        type: "finish_witness",
-        witnessId: "witness_theo_morgan",
-        examinationKind: "direct",
-      },
-    );
-    await expect(
-      backend.action(prepareCommandReference, {
-        ownerId: OWNER_ID,
-        trialId: answered.view.trial.trialId,
-        commandJson: JSON.stringify(finish),
-      }),
     ).rejects.toThrow("RUNTIME_AI_USER_SIDE_UNSUPPORTED");
+    const persisted = await backend.run(async (ctx) => ({
+      graphs: await ctx.db.query("caseGraphs").collect(),
+      projections: await ctx.db.query("trialProjections").collect(),
+      events: await ctx.db.query("trialEvents").collect(),
+    }));
+    expect(persisted).toEqual({ graphs: [], projections: [], events: [] });
   });
 
   it("calls, questions, releases, switches witnesses, completes, and resumes only from V3 events", async () => {

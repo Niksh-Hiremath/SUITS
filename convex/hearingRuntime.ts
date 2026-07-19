@@ -622,6 +622,25 @@ function opposingCounselForAiRuntime(state: TrialStateV3): ActorRef {
   return matches[0];
 }
 
+function assertSupportedAiRuntimeRoster(
+  bindings: ReturnType<typeof deriveTrialActorBindings>,
+): void {
+  const userCounselCount = bindings.filter(
+    ({ actor }) =>
+      actor.role === "user_counsel" && actor.side === "user",
+  ).length;
+  if (userCounselCount !== 1) {
+    throw new Error("RUNTIME_USER_COUNSEL_AMBIGUOUS");
+  }
+  const opposingCounselCount = bindings.filter(
+    ({ actor }) =>
+      actor.role === "opposing_counsel" && actor.side === "opposing",
+  ).length;
+  if (opposingCounselCount !== 1) {
+    throw new Error("RUNTIME_OPPOSING_COUNSEL_AMBIGUOUS");
+  }
+}
+
 function playerCounsel(state: TrialStateV3): ActorRef {
   return actorByRole(state, playerRole(state), state.userSide);
 }
@@ -785,12 +804,16 @@ export const start = internalAction({
     const request = StartHearingRequestSchema.parse(
       parseJson(args.requestJson, "hearing_start_request"),
     );
+    if (request.userSide !== "user") {
+      throw new Error("RUNTIME_AI_USER_SIDE_UNSUPPORTED");
+    }
     const resolved = await ctx.runMutation(resolveGraphReference, {
       ownerId,
       selectorJson: JSON.stringify(request.case),
     });
     const graph = parseGraphJson(resolved.graphJson);
     const bindings = deriveTrialActorBindings(graph);
+    assertSupportedAiRuntimeRoster(bindings);
     const trialId = `trial_${request.requestId.replaceAll("-", "")}`;
     const startActionId = runtimeActionId(trialId, request.requestId, "start");
     const startReceipt = await ctx.runMutation(createForOwnerReference, {
