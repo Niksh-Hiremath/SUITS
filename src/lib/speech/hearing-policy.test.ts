@@ -231,6 +231,22 @@ describe("hearing voice context policy", () => {
       ),
     ).toMatchObject({ valid: false, code: "HEARING_HEAD_CHANGED" });
     expect(
+      validateHearingVoiceContext(context, null, {
+        busy: false,
+        pending: false,
+      }),
+    ).toMatchObject({ valid: false, code: "HEARING_NOT_READY" });
+    expect(
+      validateHearingVoiceContext(
+        context,
+        {
+          ...view,
+          trial: { ...view.trial, trialId: `trial_${"x".repeat(32)}` },
+        },
+        { busy: false, pending: false },
+      ),
+    ).toMatchObject({ valid: false, code: "HEARING_HEAD_CHANGED" });
+    expect(
       validateHearingVoiceContext(
         context,
         { ...view, trial: { ...view.trial, lastEventId: "event_replaced" } },
@@ -261,6 +277,48 @@ describe("hearing voice context policy", () => {
         {
           ...view,
           capabilities: { ...view.capabilities, canAskQuestion: false },
+        },
+        { busy: false, pending: false },
+      ),
+    ).toMatchObject({ valid: false, code: "QUESTION_NOT_AVAILABLE" });
+    expect(
+      validateHearingVoiceContext(
+        context,
+        {
+          ...view,
+          activeAppearance: {
+            ...view.activeAppearance!,
+            stage: "cross",
+            examinationLeg: {
+              ...view.activeAppearance!.examinationLeg!,
+              kind: "cross",
+            },
+          },
+        },
+        { busy: false, pending: false },
+      ),
+    ).toMatchObject({ valid: false, code: "QUESTION_NOT_AVAILABLE" });
+    expect(
+      validateHearingVoiceContext(
+        context,
+        {
+          ...view,
+          activeQuestion: {
+            questionId: "question_open",
+            appearanceId: "appearance_maya_1",
+            witnessId: "witness_maya",
+            examinationKind: "direct",
+            askedBy: {
+              actorId: "actor_user_counsel",
+              role: "user_counsel",
+              side: "user",
+              witnessId: null,
+            },
+            questionTurnId: "turn_open_question",
+            pendingResponseId: null,
+            presentedEvidenceIds: [],
+            status: "open",
+          },
         },
         { busy: false, pending: false },
       ),
@@ -317,6 +375,69 @@ describe("speakable transcript policy", () => {
       ok: false,
       code: "TRANSCRIPT_DIVERGED",
     });
+  });
+
+  it("rejects duplicate turn IDs instead of replaying an appended copy", () => {
+    const base = viewFixture();
+    const first = transcriptTurn(1, "judge", "neutral");
+    const previous = { ...base, transcript: [first] };
+    const duplicated = {
+      ...base,
+      transcript: [first, { ...first, ordinal: 2 }],
+    };
+
+    expect(selectSpeakableTranscriptDelta(previous, duplicated, "command")).toMatchObject({
+      ok: false,
+      code: "TRANSCRIPT_DIVERGED",
+    });
+    expect(selectSpeakableTranscriptDelta(null, duplicated, "new_hearing")).toMatchObject({
+      ok: false,
+      code: "TRANSCRIPT_DIVERGED",
+    });
+  });
+
+  it("accepts valid recovery additions but rejects transcript shrink and trial changes", () => {
+    const base = viewFixture();
+    const first = transcriptTurn(1, "judge", "neutral");
+    const previous = { ...base, transcript: [first] };
+    const recovered = {
+      ...base,
+      transcript: [first, transcriptTurn(2, "witness", "neutral")],
+    };
+
+    expect(selectSpeakableTranscriptDelta(previous, recovered, "recovery")).toMatchObject({
+      ok: true,
+      turns: [{ turnId: "turn_2" }],
+    });
+    expect(selectSpeakableTranscriptDelta(recovered, previous, "command")).toMatchObject({
+      ok: false,
+      code: "TRANSCRIPT_DIVERGED",
+    });
+    expect(
+      selectSpeakableTranscriptDelta(
+        previous,
+        {
+          ...recovered,
+          trial: { ...recovered.trial, trialId: `trial_${"z".repeat(32)}` },
+        },
+        "command",
+      ),
+    ).toMatchObject({ ok: false, code: "TRANSCRIPT_DIVERGED" });
+  });
+
+  it("does not replay a historical turn whose status changes under the same ID", () => {
+    const base = viewFixture();
+    const first = transcriptTurn(1, "witness", "neutral");
+    const result = selectSpeakableTranscriptDelta(
+      { ...base, transcript: [first] },
+      {
+        ...base,
+        transcript: [{ ...first, status: "stricken" }],
+      },
+      "command",
+    );
+
+    expect(result).toEqual({ ok: true, turns: [] });
   });
 
   it("speaks only active judge, witness, jury, and other-side counsel additions", () => {
@@ -406,6 +527,18 @@ describe("speech phrase and intent policy", () => {
       () => splitSpeechPhrases("hello", { maxPhrases: 65 }),
       "SPEECH_PHRASE_LIMIT",
     );
+    expectPolicyError(
+      () => splitSpeechPhrases("hello", { targetChars: 5.5 }),
+      "SPEECH_PHRASE_LIMIT",
+    );
+    expectPolicyError(
+      () => splitSpeechPhrases("hello", { targetChars: 10, maxChars: 9 }),
+      "SPEECH_PHRASE_LIMIT",
+    );
+    expectPolicyError(
+      () => splitSpeechPhrases("hello", { maxChars: 513 }),
+      "SPEECH_PHRASE_LIMIT",
+    );
   });
 
   it("maps normalized final speech to a deterministic question intent", () => {
@@ -418,6 +551,14 @@ describe("speech phrase and intent policy", () => {
       text: "Where were you?",
       presentedEvidenceIds: [],
     });
+    expect(voiceContextToIntent(context, "x".repeat(8_000))).toMatchObject({
+      type: "ask_question",
+      text: "x".repeat(8_000),
+    });
+    expectPolicyError(
+      () => voiceContextToIntent(context, "x".repeat(8_001)),
+      "SPEECH_TEXT_INVALID",
+    );
   });
 
   it("maps closing speech and rejects empty or oversized final text", () => {

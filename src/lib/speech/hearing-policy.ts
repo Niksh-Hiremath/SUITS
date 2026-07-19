@@ -208,6 +208,11 @@ export function selectSpeakableTranscriptDelta(
   if (source === "baseline") {
     return Object.freeze({ ok: true, turns: Object.freeze([]) });
   }
+  const seenTurnIds = new Set<string>();
+  for (const turn of next.transcript) {
+    if (seenTurnIds.has(turn.turnId)) return deltaMismatch();
+    seenTurnIds.add(turn.turnId);
+  }
   if (source === "new_hearing") {
     if (previous !== null) return deltaMismatch();
   } else if (
