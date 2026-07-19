@@ -24,6 +24,7 @@ import {
   type CounselResponseRequest,
   type DebriefCitationSet,
   type DebriefGeneratorRequest,
+  type JuryRoleResponseModelOutput,
   type JuryResponseRequest,
   type OpponentPlannerRequest,
 } from "../src/domain/courtroom-ai";
@@ -192,6 +193,7 @@ async function command(
   requestId: string,
   requestedAt: string,
   intent: HearingPlayerIntent,
+  juryRecommendation?: JuryRoleResponseModelOutput["recommendation"],
 ) {
   const request = playerCommand(view, requestId, requestedAt, intent);
   const preparation = HearingCommandPreparationSchema.parse(
@@ -208,6 +210,8 @@ async function command(
       backend,
       current,
       new Date(Date.parse(requestedAt) + 2_000 + step * 1_000).toISOString(),
+      "end",
+      juryRecommendation,
     );
   }
   const committedView = current.view;
@@ -967,6 +971,11 @@ function acceptedFinalTrace(input: Readonly<{
 async function fakeJuryGeneration(
   preparation: HearingCommandPreparation,
   startedAt: string,
+  recommendation: JuryRoleResponseModelOutput["recommendation"] = {
+    outcome: "user_prevails",
+    decision: "The jury finds for the user on the jury-considerable record.",
+    confidence: 0.76,
+  },
 ): Promise<HearingJuryResponsePrecommit> {
   if (!isHearingJuryResponseModelRequiredPreparation(preparation)) {
     throw new Error("Expected jury response preparation");
@@ -1007,11 +1016,7 @@ async function fakeJuryGeneration(
         citations,
       },
     ],
-    recommendation: {
-      outcome: "user_prevails",
-      decision: "The jury finds for the user on the jury-considerable record.",
-      confidence: 0.76,
-    },
+    recommendation,
     performance: {
       activity: "speaking",
       emotion: "neutral",
@@ -1189,6 +1194,7 @@ async function commitModelPreparation(
   preparation: HearingCommandPreparation,
   startedAt: string,
   opponentMove: "question" | "end" = "end",
+  juryRecommendation?: JuryRoleResponseModelOutput["recommendation"],
 ): Promise<HearingCommandPreparation> {
   if (isHearingWitnessModelRequiredPreparation(preparation)) {
     const generation = await fakeWitnessGeneration(preparation, startedAt);
@@ -1225,7 +1231,11 @@ async function commitModelPreparation(
     );
   }
   if (isHearingJuryResponseModelRequiredPreparation(preparation)) {
-    const generation = await fakeJuryGeneration(preparation, startedAt);
+    const generation = await fakeJuryGeneration(
+      preparation,
+      startedAt,
+      juryRecommendation,
+    );
     return HearingCommandPreparationSchema.parse(
       await backend.action(commitJuryGenerationReference, {
         ownerId: OWNER_ID,
@@ -2570,6 +2580,95 @@ describe("V3 hearing runtime facade", () => {
       }),
     );
     expect(unchanged).toEqual(view);
+  });
+
+  it("preserves an unable-to-reach jury recommendation without inventing a winner", async () => {
+    const backend = convexTest({ schema, modules });
+    let view = await start(backend);
+    ({ view } = await command(
+      backend,
+      view,
+      "91919191-9191-4191-8191-919191919191",
+      "2026-07-19T02:51:00.000Z",
+      { type: "call_witness", witnessId: "witness_rina_shah" },
+    ));
+    ({ view } = await command(
+      backend,
+      view,
+      "92929292-9292-4292-8292-929292929292",
+      "2026-07-19T02:52:00.000Z",
+      {
+        type: "ask_question",
+        witnessId: "witness_rina_shah",
+        examinationKind: "direct",
+        text: "What did you personally observe?",
+        presentedEvidenceIds: [],
+      },
+    ));
+    ({ view } = await command(
+      backend,
+      view,
+      "93939393-9393-4393-8393-939393939393",
+      "2026-07-19T02:53:00.000Z",
+      {
+        type: "finish_witness",
+        witnessId: "witness_rina_shah",
+        examinationKind: "direct",
+      },
+    ));
+
+    const hungJuryDecision =
+      "The jury is unable to reach a verdict on this fictional record.";
+    ({ view } = await command(
+      backend,
+      view,
+      "94949494-9494-4494-8494-949494949494",
+      "2026-07-19T02:54:00.000Z",
+      {
+        type: "finish_trial",
+        closingText: "The admitted testimony should be weighed under the instructions.",
+      },
+      {
+        outcome: "unable_to_reach",
+        decision: hungJuryDecision,
+        confidence: 0.41,
+      },
+    ));
+    expect(view.trial).toMatchObject({ phase: "complete", status: "complete" });
+
+    const stored = await backend.run(async (ctx) => ({
+      verdict: (
+        await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", view.trial.trialId),
+          )
+          .collect()
+      ).find(({ eventType }) => eventType === "RENDER_VERDICT"),
+      juryArtifact: (
+        await ctx.db
+          .query("courtroomGeneratedArtifacts")
+          .withIndex("by_owner_trial_kind", (index) =>
+            index
+              .eq("ownerId", OWNER_ID)
+              .eq("trialId", view.trial.trialId)
+              .eq("artifactKind", "jury_deliberation"),
+          )
+          .collect()
+      )[0],
+    }));
+    expect(JSON.parse(stored.verdict?.payloadJson ?? "null")).toMatchObject({
+      decision: hungJuryDecision,
+    });
+    expect(
+      JuryRoleResponseModelOutputSchema.parse(
+        JSON.parse(stored.juryArtifact?.artifactJson ?? "null"),
+      ).recommendation,
+    ).toEqual({
+      outcome: "unable_to_reach",
+      decision: hungJuryDecision,
+      confidence: 0.41,
+    });
   });
 
   it("calls, questions, releases, switches witnesses, completes, and resumes only from V3 events", async () => {
