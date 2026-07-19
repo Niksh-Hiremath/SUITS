@@ -2003,7 +2003,7 @@ describe("V3 hearing runtime facade", () => {
     const second = await start(backend);
     expect(second).toEqual(first);
     expect(first).toMatchObject({
-      schemaVersion: "hearing-runtime-view.v1",
+      schemaVersion: "hearing-runtime-view.v2",
       case: { caseId: "case_redwood_signal_v1" },
       trial: {
         phase: "case_in_chief",
@@ -2405,6 +2405,26 @@ describe("V3 hearing runtime facade", () => {
       "user_counsel",
       "witness",
     ]);
+    expect(committed.transcript[0]?.semanticCue).toBeNull();
+    expect(committed.transcript[1]?.semanticCue).toMatchObject({
+      kind: "witness_answer",
+      source: {
+        callId: generation.callId,
+        turnId: committed.transcript[1]?.turnId,
+        responseId: generation.responseId,
+        outputHash: generation.trace.outputHash,
+      },
+      actor: committed.transcript[1]?.actor,
+      semantic: {
+        kind: "witness",
+        emotion: generation.output.performance.emotion,
+        intensity: generation.output.performance.intensity,
+        gazeTarget: generation.output.performance.gazeTarget,
+        gesture: generation.output.performance.gesture,
+        delivery: generation.output.performance.delivery,
+      },
+    });
+    expect(committed.currentSemanticCue).toBeNull();
 
     const exactCommitReplay = HearingCommandPreparationSchema.parse(
       await backend.action(commitWitnessGenerationReference, {
@@ -2438,6 +2458,9 @@ describe("V3 hearing runtime facade", () => {
       ).filter((event) => event.eventType === "ANSWER_QUESTION"),
       calls: await ctx.db.query("courtroomModelCalls").collect(),
       attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
+      performances: await ctx.db
+        .query("courtroomCommittedPerformances")
+        .collect(),
     }));
     expect(stored.answerEvents).toHaveLength(1);
     expect(stored.answerEvents[0]).toMatchObject({
@@ -2455,6 +2478,7 @@ describe("V3 hearing runtime facade", () => {
       attemptCount: 1,
     });
     expect(stored.attempts).toHaveLength(1);
+    expect(stored.performances).toHaveLength(1);
     expect(stored.attempts[0]).toMatchObject({
       ownerId: OWNER_ID,
       callId: generation.callId,
@@ -3644,6 +3668,30 @@ describe("V3 hearing runtime facade", () => {
     expect(witnessPreparation.request.responseId).toBe(
       activeQuestion.pendingResponseId,
     );
+    const rulingView = HearingRuntimeViewV1Schema.parse(
+      await backend.action(readReference, {
+        ownerId: OWNER_ID,
+        trialId: responseWindow.view.trial.trialId,
+      }),
+    );
+    expect(rulingView.currentSemanticCue).toMatchObject({
+      kind: "objection_ruling",
+      context: "courtroom",
+      head: {
+        trialId: rulingView.trial.trialId,
+        stateVersion: rulingView.trial.version,
+        lastEventId: rulingView.trial.lastEventId,
+      },
+      source: {
+        callId: generation.callId,
+        turnId: null,
+        responseId: activeQuestion.pendingResponseId,
+        interruptId: expect.any(String),
+        outputHash: generation.trace.outputHash,
+      },
+      actor: { role: "judge" },
+      semantic: generation.output.performance,
+    });
 
     const exactReplay = HearingCommandPreparationSchema.parse(
       await backend.action(commitObjectionRulingGenerationReference, {

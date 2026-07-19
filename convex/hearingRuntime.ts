@@ -38,6 +38,7 @@ import {
 import {
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
+  HearingCommittedPerformanceSchema,
   HearingCaseSelectorSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJudgeResponsePrecommitSchema,
@@ -442,6 +443,17 @@ const reloadForOwnerReference = makeFunctionReference<
   }>,
   ReloadResult
 >("trialEvents:reloadForOwnerSession");
+
+const readPublicPerformancesForOwnerTrialReference = makeFunctionReference<
+  "query",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    expectedStateVersion: number;
+    expectedLastEventId: string;
+  }>,
+  string[] | null
+>("trialEvents:readPublicPerformancesForOwnerTrial");
 
 const resolveGraphReference = makeFunctionReference<
   "mutation",
@@ -1440,32 +1452,55 @@ async function loadHead(
   state: TrialStateV3;
   view: HearingRuntimeViewV1;
 }> {
-  const reload = await ctx.runQuery(reloadForOwnerReference, {
-    ownerId,
-    trialId,
-    limit: 1,
-  });
-  if (!reload.validated || reload.requiresMigration || !reload.graphId) {
-    throw new Error("TRIAL_MIGRATION_REQUIRED");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const reload = await ctx.runQuery(reloadForOwnerReference, {
+      ownerId,
+      trialId,
+      limit: 1,
+    });
+    if (!reload.validated || reload.requiresMigration || !reload.graphId) {
+      throw new Error("TRIAL_MIGRATION_REQUIRED");
+    }
+    const state = TrialStateV3Schema.parse(
+      parseJson(reload.stateJson, "trial_state_json"),
+    );
+    const expectedLastEventId = state.eventIds.at(-1);
+    if (expectedLastEventId === undefined) {
+      throw new Error("TRIAL_HEAD_EVENT_REQUIRED");
+    }
+    const performanceJsons = await ctx.runQuery(
+      readPublicPerformancesForOwnerTrialReference,
+      {
+        ownerId,
+        trialId,
+        expectedStateVersion: state.version,
+        expectedLastEventId,
+      },
+    );
+    if (performanceJsons === null) continue;
+    const committedPerformances = performanceJsons.map((performanceJson) =>
+      HearingCommittedPerformanceSchema.parse(
+        parseJson(performanceJson, "committed_performance_json"),
+      ),
+    );
+    const storedGraph = await ctx.runQuery(loadGraphReference, {
+      ownerId,
+      graphId: reload.graphId,
+    });
+    const graph = parseGraphJson(storedGraph.graphJson);
+    const actor = playerCounsel(state);
+    return {
+      graph,
+      state,
+      view: buildHearingRuntimeView({
+        caseGraph: graph,
+        trialState: state,
+        playerActorId: actor.actorId,
+        committedPerformances,
+      }),
+    };
   }
-  const state = TrialStateV3Schema.parse(
-    parseJson(reload.stateJson, "trial_state_json"),
-  );
-  const storedGraph = await ctx.runQuery(loadGraphReference, {
-    ownerId,
-    graphId: reload.graphId,
-  });
-  const graph = parseGraphJson(storedGraph.graphJson);
-  const actor = playerCounsel(state);
-  return {
-    graph,
-    state,
-    view: buildHearingRuntimeView({
-      caseGraph: graph,
-      trialState: state,
-      playerActorId: actor.actorId,
-    }),
-  };
+  throw new Error("HEARING_RUNTIME_HEAD_UNSTABLE");
 }
 
 export const start = internalAction({

@@ -20,9 +20,11 @@ import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION_V1,
   PERSISTED_OPPONENT_DIRECTIVE_SCHEMA_VERSION,
   HearingCounselResponsePrecommitSchema,
   HearingCommittedPerformanceSchema,
+  HearingCommittedPerformanceV1Schema,
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
   PersistedOpponentDirectiveSchema,
@@ -200,6 +202,17 @@ const readCommittedPerformanceForOwnerHeadReference = makeFunctionReference<
   }>,
   string | null
 >("trialEvents:readCommittedPerformanceForOwnerHead");
+
+const readPublicPerformancesForOwnerTrialReference = makeFunctionReference<
+  "query",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    expectedStateVersion: number;
+    expectedLastEventId: string;
+  }>,
+  string[] | null
+>("trialEvents:readPublicPerformancesForOwnerTrial");
 
 const recordTerminalForOwnerReference = makeFunctionReference<
   "mutation",
@@ -1228,12 +1241,12 @@ describe("atomic generated trial-event append", () => {
       actor: ACTORS.rina,
       evidenceIds: ["evidence_complaint_email"],
       semantic: {
-        activity: "speaking",
+        kind: "witness",
         emotion: "confident",
         intensity: 0.4,
         gazeTarget: "questioning_counsel",
         gesture: "indicate_evidence",
-        speakingStyle: "measured",
+        delivery: "measured",
       },
     });
   });
@@ -1280,6 +1293,22 @@ describe("atomic generated trial-event append", () => {
     });
     const nextReceipt = await appendTrusted(backend, nextAction);
     expect(
+      await backend.query(readPublicPerformancesForOwnerTrialReference, {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        expectedStateVersion: receipt.committedStateVersion,
+        expectedLastEventId: receipt.eventIds[0] ?? "missing",
+      }),
+    ).toBeNull();
+    expect(
+      await backend.query(readPublicPerformancesForOwnerTrialReference, {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        expectedStateVersion: nextReceipt.committedStateVersion,
+        expectedLastEventId: nextReceipt.eventIds[0] ?? "missing",
+      }),
+    ).toHaveLength(1);
+    expect(
       await backend.query(readCommittedPerformanceForOwnerHeadReference, {
         ownerId: OWNER_ID,
         trialId: TRIAL_ID,
@@ -1295,6 +1324,97 @@ describe("atomic generated trial-event append", () => {
         lastEventId: receipt.eventIds[0] ?? "missing",
       }),
     ).rejects.toThrow("COURTROOM_COMMITTED_PERFORMANCE_HEAD_STALE");
+  });
+
+  it("upgrades a valid v1 cue from its immutable accepted trace", async () => {
+    const backend = await setupPendingWitnessResponse();
+    const generationInput = generation();
+    const trialAction = generatedAction(generationInput);
+    const receipt = await appendGenerated(backend, trialAction, generationInput);
+    await backend.run(async (ctx) => {
+      const rows = await ctx.db.query("courtroomCommittedPerformances").collect();
+      const row = rows[0];
+      if (row === undefined) throw new Error("PERFORMANCE_ROW_NOT_FOUND");
+      const current = HearingCommittedPerformanceSchema.parse(
+        JSON.parse(row.performanceJson),
+      );
+      const legacy = HearingCommittedPerformanceV1Schema.parse({
+        ...current,
+        schemaVersion: HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION_V1,
+        source: {
+          callId: current.source.callId,
+          actionId: current.source.actionId,
+          eventId: current.source.eventId,
+          turnId: current.source.turnId,
+          responseId: current.source.responseId,
+          interruptId: current.source.interruptId,
+          model: current.source.model,
+          outputSchemaVersion: current.source.outputSchemaVersion,
+        },
+        semantic: {
+          activity: "speaking",
+          emotion: current.semantic.emotion,
+          intensity: current.semantic.intensity,
+          gazeTarget: current.semantic.gazeTarget,
+          gesture: current.semantic.gesture,
+          speakingStyle:
+            current.semantic.kind === "witness"
+              ? current.semantic.delivery
+              : current.semantic.speakingStyle,
+        },
+      });
+      await ctx.db.patch(row._id, {
+        performanceJson: JSON.stringify(legacy),
+        schemaVersion: legacy.schemaVersion,
+        turnId: undefined,
+        interruptId: undefined,
+        outputHash: undefined,
+      });
+    });
+
+    const upgradedJson = await backend.query(
+      readCommittedPerformanceForOwnerHeadReference,
+      {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        stateVersion: receipt.committedStateVersion,
+        lastEventId: receipt.eventIds[0] ?? "missing",
+      },
+    );
+    expect(
+      HearingCommittedPerformanceSchema.parse(JSON.parse(upgradedJson ?? "null"))
+        .source.outputHash,
+    ).toBe(generationInput.trace.outputHash);
+  });
+
+  it("rejects a cue whose exhibit list differs from accepted citations", async () => {
+    const backend = await setupPendingWitnessResponse();
+    const generationInput = generation();
+    const trialAction = generatedAction(generationInput);
+    const receipt = await appendGenerated(backend, trialAction, generationInput);
+    await backend.run(async (ctx) => {
+      const rows = await ctx.db.query("courtroomCommittedPerformances").collect();
+      const row = rows[0];
+      if (row === undefined) throw new Error("PERFORMANCE_ROW_NOT_FOUND");
+      const current = HearingCommittedPerformanceSchema.parse(
+        JSON.parse(row.performanceJson),
+      );
+      await ctx.db.patch(row._id, {
+        performanceJson: JSON.stringify({
+          ...current,
+          evidenceIds: ["evidence_contract"],
+        }),
+      });
+    });
+
+    await expect(
+      backend.query(readCommittedPerformanceForOwnerHeadReference, {
+        ownerId: OWNER_ID,
+        trialId: TRIAL_ID,
+        stateVersion: receipt.committedStateVersion,
+        lastEventId: receipt.eventIds[0] ?? "missing",
+      }),
+    ).rejects.toThrow("COURTROOM_COMMITTED_PERFORMANCE_RECORD_INVALID");
   });
 
   it("rejects non-strict, cross-boundary, stale-head, model, and citation mismatches", async () => {

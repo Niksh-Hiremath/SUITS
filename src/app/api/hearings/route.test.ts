@@ -93,7 +93,7 @@ const REQUEST_ID = "223e4567-e89b-42d3-a456-426614174000";
 const TRIAL_ID = `trial_${REQUEST_ID.replaceAll("-", "")}`;
 
 const VIEW = HearingRuntimeViewV1Schema.parse({
-  schemaVersion: "hearing-runtime-view.v1",
+  schemaVersion: "hearing-runtime-view.v2",
   case: {
     caseId: "case_redwood_signal_v1",
     version: 1,

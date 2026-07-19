@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
   HearingRuntimeViewV1Schema,
   type HearingRuntimeViewV1,
 } from "../../domain/hearing-runtime";
@@ -19,7 +19,7 @@ const TRIAL_ID = `trial_${"v".repeat(32)}`;
 
 function viewFixture(): HearingRuntimeViewV1 {
   return HearingRuntimeViewV1Schema.parse({
-    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
     case: {
       caseId: "case_voice_policy",
       version: 1,

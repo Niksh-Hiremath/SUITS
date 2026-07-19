@@ -22,7 +22,7 @@ const OPPOSING_COUNSEL_ID = "actor:counsel:opposing";
 
 function responseWindowView(): HearingRuntimeViewV1 {
   return HearingRuntimeViewV1Schema.parse({
-    schemaVersion: "hearing-runtime-view.v1",
+    schemaVersion: "hearing-runtime-view.v2",
     case: {
       caseId: "case_safety_report",
       version: 3,

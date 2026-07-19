@@ -15,19 +15,36 @@ import {
   canActorRecallWitness,
 } from "../trial-policy";
 import {
-  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
   HearingRuntimeViewV1Schema,
   type HearingRuntimeViewV1,
 } from "./schema";
+import {
+  HearingCommittedPerformanceSchema,
+  type HearingCommittedPerformance,
+} from "./performance";
 
 export type BuildHearingRuntimeViewInput = {
   caseGraph: CaseGraph;
   trialState: TrialStateV3;
   playerActorId: string;
+  committedPerformances?: readonly HearingCommittedPerformance[];
 };
 
 function compareIds(left: string, right: string): number {
   return left.localeCompare(right);
+}
+
+function sameActor(
+  left: HearingCommittedPerformance["actor"],
+  right: HearingCommittedPerformance["actor"],
+): boolean {
+  return (
+    left.actorId === right.actorId &&
+    left.role === right.role &&
+    left.side === right.side &&
+    left.witnessId === right.witnessId
+  );
 }
 
 function uniqueVisibleIds(
@@ -308,6 +325,84 @@ export function buildHearingRuntimeView(
     sourceSegmentIds: visibleSourceSegmentIds,
   };
 
+  const semanticCueByTurnId = new Map<
+    string,
+    HearingCommittedPerformance
+  >();
+  let currentSemanticCue: HearingCommittedPerformance | null = null;
+  for (const candidate of input.committedPerformances ?? []) {
+    const performance = HearingCommittedPerformanceSchema.parse(candidate);
+    // Private model work is not part of the player-visible projection. Drop it
+    // before evaluating trial bindings so no private identifier can influence
+    // or escape through the public view/error surface.
+    if (
+      performance.kind === "negotiation_decision" ||
+      performance.kind === "jury_deliberation"
+    ) {
+      continue;
+    }
+    const committedHeadEventId =
+      trialState.eventIds[performance.head.stateVersion - 1];
+    if (
+      performance.context !== "courtroom" ||
+      performance.head.trialId !== trialState.trialId ||
+      performance.head.stateVersion > trialState.version ||
+      committedHeadEventId !== performance.head.lastEventId ||
+      !trialState.eventIds.includes(performance.source.eventId)
+    ) {
+      throw new Error(
+        `COMMITTED_PERFORMANCE_TRIAL_BINDING_INVALID:${performance.source.eventId}`,
+      );
+    }
+    if (
+      performance.evidenceIds.some(
+        (evidenceId) => !visibleEvidenceIds.has(evidenceId),
+      )
+    ) {
+      continue;
+    }
+    const turnId = performance.source.turnId;
+    if (turnId !== null) {
+      const turn = trialState.transcriptTurns[turnId];
+      if (
+        turn === undefined ||
+        turn.sourceEventId !== performance.source.eventId ||
+        !sameActor(turn.actor, performance.actor)
+      ) {
+        throw new Error(
+          `COMMITTED_PERFORMANCE_TURN_BINDING_INVALID:${performance.source.eventId}`,
+        );
+      }
+      if (semanticCueByTurnId.has(turnId)) {
+        throw new Error(`COMMITTED_PERFORMANCE_TURN_CONFLICT:${turnId}`);
+      }
+      semanticCueByTurnId.set(turnId, performance);
+      continue;
+    }
+    if (
+      performance.kind === "objection_ruling" &&
+      performance.head.stateVersion === trialState.version &&
+      performance.head.lastEventId === lastEventId
+    ) {
+      const matchesCanonicalRuling = Object.values(
+        trialState.objections,
+      ).some(
+        (objection) =>
+          objection.rulingEventId === performance.source.eventId &&
+          objection.interruptedResponseId === performance.source.responseId,
+      );
+      if (!matchesCanonicalRuling) {
+        throw new Error(
+          `COMMITTED_PERFORMANCE_RULING_BINDING_INVALID:${performance.source.eventId}`,
+        );
+      }
+      if (currentSemanticCue !== null) {
+        throw new Error("COMMITTED_PERFORMANCE_CURRENT_CONFLICT");
+      }
+      currentSemanticCue = performance;
+    }
+  }
+
   const transcript = orderedTurns.map((turn, index) => {
     const actor = trialState.actors[turn.actor.actorId];
     if (!actor) throw new Error(`TRANSCRIPT_ACTOR_NOT_FOUND:${turn.actor.actorId}`);
@@ -322,6 +417,7 @@ export function buildHearingRuntimeView(
       testimonyId: turn.testimonyId,
       status: turn.status,
       citations: filteredCitations(turn.citations, citationVisibility),
+      semanticCue: semanticCueByTurnId.get(turn.turnId) ?? null,
     };
   });
 
@@ -357,7 +453,7 @@ export function buildHearingRuntimeView(
     juryRecord.testimony.length > 0;
 
   return HearingRuntimeViewV1Schema.parse({
-    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
     case: {
       caseId: caseGraph.caseId,
       version: caseGraph.version,
@@ -482,6 +578,7 @@ export function buildHearingRuntimeView(
         : null,
     },
     transcript,
+    currentSemanticCue,
     permittedObjectionGrounds: [
       ...caseGraph.jurisdictionProfile.permittedObjectionGrounds,
     ],

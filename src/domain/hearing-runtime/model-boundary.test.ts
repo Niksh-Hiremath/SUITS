@@ -34,7 +34,7 @@ import {
   createOpponentPlannerRequestFixture,
 } from "../../server/courtroom-ai/opponent-planner.test-fixtures";
 import {
-  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
   type HearingRuntimeViewV1,
 } from "./schema";
 import {
@@ -95,7 +95,7 @@ const HASH_C = "c".repeat(64);
 
 function runtimeView(): HearingRuntimeViewV1 {
   return {
-    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
     case: {
       caseId: "case:model-boundary",
       version: 1,

@@ -658,8 +658,9 @@ export default defineSchema({
   }).index("by_call_attempt", ["callId", "attempt"]),
 
   // Presentation-only metadata is stored separately from material trial
-  // events. Rows are append-only, owner-bound, and valid only at one exact
-  // canonical projection head; raw model output and reasoning are never kept.
+  // events. Rows are append-only, owner-bound, and retain the exact canonical
+  // projection head at which they were accepted; raw model output and
+  // reasoning are never kept.
   courtroomCommittedPerformances: defineTable({
     performanceId: v.string(),
     ownerId: v.string(),
@@ -667,6 +668,11 @@ export default defineSchema({
     callId: v.string(),
     actionId: v.string(),
     eventId: v.string(),
+    // Optional only for online compatibility with v1 rows. Every v2 write
+    // populates and read-time integrity checks require these duplicates.
+    turnId: v.optional(v.union(v.string(), v.null())),
+    interruptId: v.optional(v.union(v.string(), v.null())),
+    outputHash: v.optional(v.string()),
     headStateVersion: v.number(),
     headLastEventId: v.string(),
     actorId: v.string(),
@@ -687,6 +693,7 @@ export default defineSchema({
     committedAt: v.number(),
   })
     .index("by_performance_id", ["performanceId"])
+    .index("by_owner_trial", ["ownerId", "trialId"])
     .index("by_owner_trial_head", [
       "ownerId",
       "trialId",

@@ -24,7 +24,7 @@ function view(
   answerTurnId?: string,
 ): HearingRuntimeViewV1 {
   return HearingRuntimeViewV1Schema.parse({
-    schemaVersion: "hearing-runtime-view.v1",
+    schemaVersion: "hearing-runtime-view.v2",
     case: {
       caseId: "case_recovery_queue",
       version: 1,

@@ -12,7 +12,7 @@ import {
 import {
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_PLAYER_COMMAND_SCHEMA_VERSION,
-  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
@@ -150,7 +150,7 @@ function modelRequiredPreparation(): HearingCommandPreparation {
 
 function runtimeView(): HearingRuntimeViewV1 {
   return HearingRuntimeViewV1Schema.parse({
-    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
     case: {
       caseId: "case:fictional:001",
       version: 1,

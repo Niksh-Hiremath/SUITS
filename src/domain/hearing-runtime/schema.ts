@@ -10,9 +10,12 @@ import {
   TrialPhaseSchema,
   TrialStatusSchema,
 } from "../trial-engine/schemas";
+import { HearingCommittedPerformanceSchema } from "./performance";
 
 export const HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1 =
   "hearing-runtime-view.v1" as const;
+export const HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2 =
+  "hearing-runtime-view.v2" as const;
 
 const IdentifierSchema = z.string().trim().min(1).max(256);
 const NonEmptyTextSchema = z.string().trim().min(1);
@@ -196,7 +199,7 @@ const PlayerViewSchema = z
   })
   .strict();
 
-const TranscriptTurnViewSchema = z
+const TranscriptTurnViewV1Schema = z
   .object({
     ordinal: z.number().int().positive(),
     turnId: IdentifierSchema,
@@ -208,33 +211,57 @@ const TranscriptTurnViewSchema = z
   })
   .strict();
 
-export const HearingRuntimeViewV1Schema = z
+const TranscriptTurnViewSchema = TranscriptTurnViewV1Schema.extend({
+  semanticCue: HearingCommittedPerformanceSchema.nullable().optional(),
+}).strict();
+
+const HearingRuntimeViewCommonShape = {
+  case: CaseViewSchema,
+  trial: TrialViewSchema,
+  activeAppearance: ActiveAppearanceViewSchema.nullable(),
+  activeQuestion: ActiveQuestionViewSchema.nullable(),
+  capabilities: HearingCapabilitiesSchema,
+  witnesses: z.array(WitnessRosterEntrySchema),
+  player: PlayerViewSchema,
+  permittedObjectionGrounds: z.array(
+    z.enum([
+      "relevance",
+      "hearsay",
+      "leading",
+      "speculation",
+      "foundation",
+      "asked_and_answered",
+      "argumentative",
+      "compound",
+      "privilege",
+    ]),
+  ),
+} as const;
+
+/** Strict legacy wire contract retained for explicit v1 compatibility checks. */
+export const HearingRuntimeViewLegacyV1Schema = z
   .object({
     schemaVersion: z.literal(HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1),
-    case: CaseViewSchema,
-    trial: TrialViewSchema,
-    activeAppearance: ActiveAppearanceViewSchema.nullable(),
-    activeQuestion: ActiveQuestionViewSchema.nullable(),
-    capabilities: HearingCapabilitiesSchema,
-    witnesses: z.array(WitnessRosterEntrySchema),
-    player: PlayerViewSchema,
-    transcript: z.array(TranscriptTurnViewSchema),
-    permittedObjectionGrounds: z.array(
-      z.enum([
-        "relevance",
-        "hearsay",
-        "leading",
-        "speculation",
-        "foundation",
-        "asked_and_answered",
-        "argumentative",
-        "compound",
-        "privilege",
-      ]),
-    ),
+    ...HearingRuntimeViewCommonShape,
+    transcript: z.array(TranscriptTurnViewV1Schema),
   })
   .strict();
 
-export type HearingRuntimeViewV1 = z.infer<
-  typeof HearingRuntimeViewV1Schema
+export const HearingRuntimeViewV2Schema = z
+  .object({
+    schemaVersion: z.literal(HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2),
+    ...HearingRuntimeViewCommonShape,
+    transcript: z.array(TranscriptTurnViewSchema),
+    currentSemanticCue: HearingCommittedPerformanceSchema.nullable().optional(),
+  })
+  .strict();
+
+export type HearingRuntimeViewLegacyV1 = z.infer<
+  typeof HearingRuntimeViewLegacyV1Schema
 >;
+export type HearingRuntimeViewV2 = z.infer<typeof HearingRuntimeViewV2Schema>;
+
+/** @deprecated Source alias; the current wire contract is v2. */
+export const HearingRuntimeViewV1Schema = HearingRuntimeViewV2Schema;
+/** @deprecated Source alias; the current wire contract is v2. */
+export type HearingRuntimeViewV1 = HearingRuntimeViewV2;

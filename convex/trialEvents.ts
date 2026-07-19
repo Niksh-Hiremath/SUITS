@@ -38,9 +38,11 @@ import {
 import {
   HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION,
   HearingCommittedPerformanceSchema,
+  HearingCommittedPerformanceV1Schema,
   normalizeRoleSemanticPerformance,
   normalizeWitnessSemanticPerformance,
   type HearingCommittedPerformance,
+  type HearingCommittedPerformanceV1,
   type HearingPerformanceKind,
   type HearingSemanticPerformance,
 } from "../src/domain/hearing-runtime/performance";
@@ -329,6 +331,7 @@ type PersistCommittedPerformanceInput = Readonly<{
   context: HearingCommittedPerformance["context"];
   turnId: string | null;
   outputSchemaVersion: string;
+  outputHash: string;
   evidenceIds: readonly string[];
   semantic: HearingSemanticPerformance;
 }>;
@@ -346,6 +349,150 @@ function publicPerformanceTurnId(action: TrialActionV3): string | null {
     return (speech as Record<string, unknown>).turnId as string;
   }
   return null;
+}
+
+function acceptedPerformanceOutputHash(
+  trace: CourtroomModelCallTrace,
+): string {
+  if (trace.status !== "accepted" || trace.outputHash === null) {
+    throw new Error("COURTROOM_COMMITTED_PERFORMANCE_OUTPUT_HASH_REQUIRED");
+  }
+  return trace.outputHash;
+}
+
+type StoredCommittedPerformance =
+  | HearingCommittedPerformance
+  | HearingCommittedPerformanceV1;
+
+function parseStoredCommittedPerformance(
+  performanceJson: string,
+): StoredCommittedPerformance {
+  const input = parseJsonObject(performanceJson, "performanceJson");
+  const current = HearingCommittedPerformanceSchema.safeParse(input);
+  if (current.success) return current.data;
+  return HearingCommittedPerformanceV1Schema.parse(input);
+}
+
+function upgradeStoredCommittedPerformance(
+  performance: StoredCommittedPerformance,
+  outputHash: string,
+): HearingCommittedPerformance {
+  if (
+    performance.schemaVersion ===
+    HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION
+  ) {
+    return performance;
+  }
+  const semantic =
+    performance.kind === "witness_answer"
+      ? {
+          kind: "witness" as const,
+          emotion: performance.semantic.emotion,
+          intensity: performance.semantic.intensity,
+          delivery: performance.semantic.speakingStyle,
+          gesture: performance.semantic.gesture,
+          gazeTarget: performance.semantic.gazeTarget,
+        }
+      : { kind: "role" as const, ...performance.semantic };
+  return HearingCommittedPerformanceSchema.parse({
+    ...performance,
+    schemaVersion: HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION,
+    source: { ...performance.source, outputHash },
+    semantic,
+  });
+}
+
+function committedPerformanceRowMatches(
+  row: Doc<"courtroomCommittedPerformances">,
+  stored: StoredCommittedPerformance,
+  current: HearingCommittedPerformance,
+): boolean {
+  const isCurrent =
+    stored.schemaVersion === HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION;
+  return (
+    row.performanceId === current.source.eventId &&
+    row.eventId === current.source.eventId &&
+    row.actionId === current.source.actionId &&
+    row.callId === current.source.callId &&
+    (!isCurrent || row.turnId !== undefined) &&
+    (row.turnId === undefined || row.turnId === current.source.turnId) &&
+    (!isCurrent || row.interruptId !== undefined) &&
+    (row.interruptId === undefined ||
+      row.interruptId === current.source.interruptId) &&
+    (!isCurrent || row.outputHash !== undefined) &&
+    (row.outputHash === undefined || row.outputHash === current.source.outputHash) &&
+    row.headStateVersion === current.head.stateVersion &&
+    row.headLastEventId === current.head.lastEventId &&
+    row.actorId === current.actor.actorId &&
+    row.kind === current.kind &&
+    row.context === current.context &&
+    row.schemaVersion === stored.schemaVersion
+  );
+}
+
+function committedPerformanceProvenanceMatches(
+  performance: HearingCommittedPerformance,
+  sourceEvent: Doc<"trialEvents">,
+  modelTrace: CourtroomModelCallTrace,
+): boolean {
+  const expected = {
+    witness_answer: {
+      callClass: "role_responder",
+      task: "witness_answer",
+      eventTypes: ["ANSWER_QUESTION"],
+    },
+    counsel_response: {
+      callClass: "role_responder",
+      task: "counsel_response",
+      eventTypes: [
+        "ASK_QUESTION",
+        "MOVE_TO_STRIKE",
+        "END_EXAMINATION",
+        "GIVE_CLOSING",
+      ],
+    },
+    judge_response: {
+      callClass: "role_responder",
+      task: "judge_response",
+      eventTypes: ["STRIKE_TESTIMONY", "DENY_STRIKE_MOTION"],
+    },
+    objection_ruling: {
+      callClass: "objection_resolver",
+      task: "resolve_objection",
+      eventTypes: ["RULE_ON_OBJECTION"],
+    },
+    negotiation_decision: {
+      callClass: "negotiation_agent",
+      task: "evaluate_settlement",
+      eventTypes: [
+        "COUNTER_SETTLEMENT",
+        "ACCEPT_SETTLEMENT",
+        "REJECT_SETTLEMENT",
+      ],
+    },
+    jury_deliberation: {
+      callClass: "role_responder",
+      task: "jury_deliberation",
+      eventTypes: ["DELIBERATE"],
+    },
+  } as const satisfies Record<
+    HearingPerformanceKind,
+    Readonly<{
+      callClass: CourtroomModelCallTrace["callClass"];
+      task: CourtroomModelCallTrace["task"];
+      eventTypes: readonly Doc<"trialEvents">["eventType"][];
+    }>
+  >;
+  const binding = expected[performance.kind];
+  return (
+    modelTrace.callClass === binding.callClass &&
+    modelTrace.task === binding.task &&
+    (binding.eventTypes as readonly string[]).includes(sourceEvent.eventType) &&
+    sameIdentifierSet(
+      performance.evidenceIds,
+      modelTrace.acceptedCitations.evidenceIds,
+    )
+  );
 }
 
 /**
@@ -392,6 +539,7 @@ async function persistCommittedPerformance(
       interruptId: input.action.interruptId,
       model: input.action.modelMetadata.model,
       outputSchemaVersion: input.outputSchemaVersion,
+      outputHash: input.outputHash,
     },
     actor: input.action.actor,
     evidenceIds: [...new Set(input.evidenceIds)],
@@ -421,6 +569,9 @@ async function persistCommittedPerformance(
     callId: input.callId,
     actionId: input.action.actionId,
     eventId: input.eventId,
+    turnId: input.turnId,
+    interruptId: input.action.interruptId,
+    outputHash: input.outputHash,
     headStateVersion: state.version,
     headLastEventId,
     actorId: input.action.actor.actorId,
@@ -4022,6 +4173,7 @@ export const appendGeneratedForOwner = internalMutation({
         context: "courtroom",
         turnId: action.payload.turnId,
         outputSchemaVersion: generation.output.schemaVersion,
+        outputHash: acceptedPerformanceOutputHash(generation.trace),
         evidenceIds: generation.trace.acceptedCitations.evidenceIds,
         semantic: normalizeWitnessSemanticPerformance(
           generation.output.performance,
@@ -4243,6 +4395,7 @@ export const appendCounselTurnForOwner = internalMutation({
         context: "courtroom",
         turnId: publicPerformanceTurnId(action),
         outputSchemaVersion: generation.output.schemaVersion,
+        outputHash: acceptedPerformanceOutputHash(generation.trace),
         evidenceIds: generation.trace.acceptedCitations.evidenceIds,
         semantic: normalizeRoleSemanticPerformance(
           generation.output.performance,
@@ -4328,6 +4481,7 @@ export const appendJudgeResponseForOwner = internalMutation({
         context: "courtroom",
         turnId: publicPerformanceTurnId(action),
         outputSchemaVersion: generation.output.schemaVersion,
+        outputHash: acceptedPerformanceOutputHash(generation.trace),
         evidenceIds: generation.trace.acceptedCitations.evidenceIds,
         semantic: normalizeRoleSemanticPerformance(
           generation.output.performance,
@@ -4479,6 +4633,7 @@ export const appendObjectionRulingForOwner = internalMutation({
         context: "courtroom",
         turnId: null,
         outputSchemaVersion: generation.output.schemaVersion,
+        outputHash: acceptedPerformanceOutputHash(generation.trace),
         evidenceIds: generation.trace.acceptedCitations.evidenceIds,
         semantic: normalizeRoleSemanticPerformance(
           generation.output.performance,
@@ -4935,33 +5090,209 @@ export const readCommittedPerformanceForOwnerHead = internalQuery({
     }
     const row = rows[0];
     if (row === undefined) return null;
-    const performance = HearingCommittedPerformanceSchema.parse(
-      parseJsonObject(row.performanceJson, "performanceJson"),
+    const storedPerformance = parseStoredCommittedPerformance(
+      row.performanceJson,
     );
     const sourceEvent = await ctx.db
       .query("trialEvents")
       .withIndex("by_event_id", (index) =>
-        index.eq("eventId", performance.source.eventId),
+        index.eq("eventId", storedPerformance.source.eventId),
       )
       .unique();
+    const modelCall = await ctx.db
+      .query("courtroomModelCalls")
+      .withIndex("by_call_id", (index) =>
+        index.eq("callId", storedPerformance.source.callId),
+      )
+      .unique();
+    const modelTrace = modelCall
+      ? CourtroomModelCallTraceSchema.parse(
+          parseJsonObject(modelCall.traceJson, "traceJson"),
+        )
+      : null;
+    const performance =
+      modelTrace?.outputHash === null || modelTrace?.outputHash === undefined
+        ? null
+        : upgradeStoredCommittedPerformance(
+            storedPerformance,
+            modelTrace.outputHash,
+          );
     if (
+      performance === null ||
       performance.head.trialId !== args.trialId ||
       performance.head.stateVersion !== args.stateVersion ||
       performance.head.lastEventId !== args.lastEventId ||
-      row.performanceId !== performance.source.eventId ||
-      row.actionId !== performance.source.actionId ||
-      row.callId !== performance.source.callId ||
-      row.actorId !== performance.actor.actorId ||
-      row.kind !== performance.kind ||
-      row.context !== performance.context ||
-      row.schemaVersion !== performance.schemaVersion ||
+      row.ownerId !== args.ownerId ||
+      row.trialId !== args.trialId ||
+      !committedPerformanceRowMatches(row, storedPerformance, performance) ||
       sourceEvent === null ||
       sourceEvent.trialId !== args.trialId ||
-      sourceEvent.actionId !== performance.source.actionId
+      sourceEvent.actionId !== performance.source.actionId ||
+      sourceEvent.actorId !== performance.actor.actorId ||
+      (sourceEvent.responseId ?? null) !== performance.source.responseId ||
+      (sourceEvent.interruptId ?? null) !== performance.source.interruptId ||
+      modelCall === null ||
+      modelCall.ownerId !== args.ownerId ||
+      modelCall.trialId !== args.trialId ||
+      modelCall.callId !== performance.source.callId ||
+      modelCall.responseId !== performance.source.responseId ||
+      modelCall.actorId !== performance.actor.actorId ||
+      modelCall.status !== "accepted" ||
+      modelCall.model !== performance.source.model ||
+      modelCall.outputSchemaVersion !== performance.source.outputSchemaVersion ||
+      modelTrace === null ||
+      modelTrace.callId !== performance.source.callId ||
+      modelTrace.trialId !== args.trialId ||
+      modelTrace.responseId !== performance.source.responseId ||
+      modelTrace.actorId !== performance.actor.actorId ||
+      modelTrace.status !== "accepted" ||
+      modelTrace.model !== performance.source.model ||
+      modelTrace.outputSchemaVersion !== performance.source.outputSchemaVersion ||
+      modelTrace.outputHash !== performance.source.outputHash ||
+      modelTrace.committedActionId !== performance.source.actionId ||
+      modelTrace.committedEventId !== performance.source.eventId ||
+      !committedPerformanceProvenanceMatches(
+        performance,
+        sourceEvent,
+        modelTrace,
+      )
     ) {
       throw new Error("COURTROOM_COMMITTED_PERFORMANCE_RECORD_INVALID");
     }
-    return row.performanceJson;
+    return canonicalJson(performance);
+  },
+});
+
+/**
+ * Reads the bounded public-performance ledger for a browser projection. Only
+ * cues belonging to public courtroom speech/rulings are returned; private
+ * strategy, settlement reasoning, jury artifacts, and raw outputs are not
+ * queryable through this boundary.
+ */
+export const readPublicPerformancesForOwnerTrial = internalQuery({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    expectedStateVersion: v.number(),
+    expectedLastEventId: v.string(),
+  },
+  handler: async (ctx, args): Promise<string[] | null> => {
+    assertIdentifier(args.ownerId, "ownerId");
+    assertIdentifier(args.trialId, "trialId");
+    assertNonNegativeInteger(args.expectedStateVersion, "expectedStateVersion");
+    assertIdentifier(args.expectedLastEventId, "expectedLastEventId");
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+        .unique(),
+      args.ownerId,
+    );
+    const state = await loadActiveHead(ctx, projection);
+    if (
+      state.version !== args.expectedStateVersion ||
+      state.eventIds.at(-1) !== args.expectedLastEventId
+    ) {
+      return null;
+    }
+    const rows = await ctx.db
+      .query("courtroomCommittedPerformances")
+      .withIndex("by_owner_trial", (index) =>
+        index.eq("ownerId", args.ownerId).eq("trialId", args.trialId),
+      )
+      .take(MAX_REPLAY_EVENTS + 1);
+    if (rows.length > MAX_REPLAY_EVENTS) {
+      throw new Error("COURTROOM_COMMITTED_PERFORMANCE_LIMIT_EXCEEDED");
+    }
+    const publicKinds = new Set<HearingPerformanceKind>([
+      "witness_answer",
+      "counsel_response",
+      "judge_response",
+      "objection_ruling",
+    ]);
+    const result: string[] = [];
+    for (const row of rows) {
+      const storedPerformance = parseStoredCommittedPerformance(
+        row.performanceJson,
+      );
+      const sourceEvent = await ctx.db
+        .query("trialEvents")
+        .withIndex("by_event_id", (index) =>
+          index.eq("eventId", storedPerformance.source.eventId),
+        )
+        .unique();
+      const modelCall = await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", storedPerformance.source.callId),
+        )
+        .unique();
+      const modelTrace = modelCall
+        ? CourtroomModelCallTraceSchema.parse(
+            parseJsonObject(modelCall.traceJson, "traceJson"),
+          )
+        : null;
+      const performance =
+        modelTrace?.outputHash === null || modelTrace?.outputHash === undefined
+          ? null
+          : upgradeStoredCommittedPerformance(
+              storedPerformance,
+              modelTrace.outputHash,
+            );
+      if (performance === null) {
+        throw new Error("COURTROOM_COMMITTED_PERFORMANCE_RECORD_INVALID");
+      }
+      const headIndex = performance.head.stateVersion - 1;
+      if (
+        row.ownerId !== args.ownerId ||
+        row.trialId !== args.trialId ||
+        !committedPerformanceRowMatches(row, storedPerformance, performance) ||
+        performance.head.trialId !== args.trialId ||
+        performance.head.stateVersion > state.version ||
+        state.eventIds[headIndex] !== performance.head.lastEventId ||
+        !state.eventIds.includes(performance.source.eventId) ||
+        sourceEvent === null ||
+        sourceEvent.trialId !== args.trialId ||
+        sourceEvent.actionId !== performance.source.actionId ||
+        sourceEvent.actorId !== performance.actor.actorId ||
+        (sourceEvent.responseId ?? null) !== performance.source.responseId ||
+        (sourceEvent.interruptId ?? null) !== performance.source.interruptId ||
+        modelCall === null ||
+        modelCall.ownerId !== args.ownerId ||
+        modelCall.trialId !== args.trialId ||
+        modelCall.callId !== performance.source.callId ||
+        modelCall.responseId !== performance.source.responseId ||
+        modelCall.actorId !== performance.actor.actorId ||
+        modelCall.status !== "accepted" ||
+        modelCall.model !== performance.source.model ||
+        modelCall.outputSchemaVersion !== performance.source.outputSchemaVersion ||
+        modelTrace === null ||
+        modelTrace.callId !== performance.source.callId ||
+        modelTrace.trialId !== args.trialId ||
+        modelTrace.responseId !== performance.source.responseId ||
+        modelTrace.actorId !== performance.actor.actorId ||
+        modelTrace.status !== "accepted" ||
+        modelTrace.model !== performance.source.model ||
+        modelTrace.outputSchemaVersion !== performance.source.outputSchemaVersion ||
+        modelTrace.outputHash !== performance.source.outputHash ||
+        modelTrace.committedActionId !== performance.source.actionId ||
+        modelTrace.committedEventId !== performance.source.eventId ||
+        !committedPerformanceProvenanceMatches(
+          performance,
+          sourceEvent,
+          modelTrace,
+        )
+      ) {
+        throw new Error("COURTROOM_COMMITTED_PERFORMANCE_RECORD_INVALID");
+      }
+      if (
+        performance.context === "courtroom" &&
+        publicKinds.has(performance.kind)
+      ) {
+        result.push(canonicalJson(performance));
+      }
+    }
+    return result;
   },
 });
 

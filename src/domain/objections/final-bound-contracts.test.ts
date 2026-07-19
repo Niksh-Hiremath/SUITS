@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+  HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
   type HearingRuntimeViewV1,
 } from "../hearing-runtime/schema";
 import {
@@ -52,7 +52,7 @@ function hearingView(
 ): HearingRuntimeViewV1 {
   const version = options.version ?? 20;
   return {
-    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
+    schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V2,
     case: {
       caseId: "case:final-bound",
       version: 1,

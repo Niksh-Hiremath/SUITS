@@ -8,7 +8,7 @@ import {
 
 function committedPerformance() {
   return {
-    schemaVersion: "hearing-committed-performance.v1" as const,
+    schemaVersion: "hearing-committed-performance.v2" as const,
     kind: "objection_ruling" as const,
     context: "courtroom" as const,
     head: {
@@ -25,6 +25,7 @@ function committedPerformance() {
       interruptId: "interrupt:objection",
       model: "gpt-5.6-luna" as const,
       outputSchemaVersion: "objection-resolver.ruling.output.v1",
+      outputHash: "a".repeat(64),
     },
     actor: {
       actorId: "actor:judge",
@@ -34,6 +35,7 @@ function committedPerformance() {
     },
     evidenceIds: ["evidence:email"],
     semantic: {
+      kind: "role" as const,
       activity: "ruling" as const,
       emotion: "neutral" as const,
       intensity: 0.72,
@@ -55,10 +57,10 @@ describe("committed hearing performance", () => {
         gazeTarget: "questioning_counsel",
       }),
     ).toEqual({
-      activity: "speaking",
+      kind: "witness",
       emotion: "nervous",
       intensity: 0.61,
-      speakingStyle: "hesitant",
+      delivery: "hesitant",
       gesture: "look_away",
       gazeTarget: "questioning_counsel",
     });
@@ -73,6 +75,10 @@ describe("committed hearing performance", () => {
       gesture: "indicate_evidence",
       speakingStyle: "firm",
     });
+    expect(common.kind).toBe("role");
+    if (common.kind !== "role") {
+      throw new Error("Expected a role semantic cue");
+    }
     expect(common.activity).toBe("presenting");
     expect(
       HearingCommittedPerformanceSchema.safeParse({
@@ -83,6 +89,12 @@ describe("committed hearing performance", () => {
           role: "opposing_counsel",
           side: "opposing",
           witnessId: null,
+        },
+        source: {
+          ...committedPerformance().source,
+          turnId: "turn:opposing",
+          responseId: null,
+          interruptId: null,
         },
         semantic: common,
       }).success,

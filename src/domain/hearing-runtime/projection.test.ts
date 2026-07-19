@@ -21,7 +21,11 @@ import {
   deriveTrialActorBindings,
 } from "./actors";
 import { buildHearingRuntimeView } from "./projection";
-import { HearingRuntimeViewV1Schema } from "./schema";
+import { HearingCommittedPerformanceSchema } from "./performance";
+import {
+  HearingRuntimeViewLegacyV1Schema,
+  HearingRuntimeViewV1Schema,
+} from "./schema";
 
 const BASE_TIME = Date.parse("2026-07-19T06:00:00.000Z");
 
@@ -179,6 +183,8 @@ describe("V3 hearing runtime projection", () => {
       trialState: harness.state,
       playerActorId: userCounsel.actorId,
     });
+    expect(view.schemaVersion).toBe("hearing-runtime-view.v2");
+    expect(HearingRuntimeViewLegacyV1Schema.safeParse(view).success).toBe(false);
     expect(view.activeAppearance?.examinationLeg).toMatchObject({
       kind: "direct",
       ownerSide: "user",
@@ -476,5 +482,164 @@ describe("V3 hearing runtime projection", () => {
       eventIds: [questionTurn.sourceEventId],
       sourceSegmentIds: [],
     });
+  });
+
+  it("attaches only exact visible turn-bound semantic cues", () => {
+    const harness = createHarness();
+    const actors = enterRinaQuestion(harness);
+    harness.commit(
+      "REQUEST_RESPONSE",
+      {
+        responseId: "response:rina:performance",
+        actorId: actors.rina.actorId,
+        purpose: "answer_question",
+      },
+      actors.system,
+    );
+    harness.commit(
+      "ANSWER_QUESTION",
+      {
+        responseId: "response:rina:performance",
+        questionId: "question:rina:complaint",
+        witnessId: "witness_rina_shah",
+        testimonyId: "testimony:rina:performance",
+        turnId: "turn:rina:performance",
+        text: "I sent the complaint email that morning.",
+        factIds: ["fact_complaint_sent"],
+        evidenceIds: [],
+      },
+      actors.rina,
+    );
+    const answerTurn = harness.state.transcriptTurns["turn:rina:performance"];
+    const sourceEventId = answerTurn.sourceEventId;
+    const cue = HearingCommittedPerformanceSchema.parse({
+      schemaVersion: "hearing-committed-performance.v2",
+      kind: "witness_answer",
+      context: "courtroom",
+      head: {
+        trialId: harness.state.trialId,
+        stateVersion: harness.state.version,
+        lastEventId: harness.state.eventIds.at(-1),
+      },
+      source: {
+        callId: "call:rina:performance",
+        actionId: sourceEventId.slice("event:".length),
+        eventId: sourceEventId,
+        turnId: answerTurn.turnId,
+        responseId: "response:rina:performance",
+        interruptId: null,
+        model: "gpt-5.6-luna",
+        outputSchemaVersion: "role-responder.witness-answer.output.v1",
+        outputHash: "a".repeat(64),
+      },
+      actor: actors.rina,
+      evidenceIds: [],
+      semantic: {
+        kind: "witness",
+        emotion: "nervous",
+        intensity: 0.63,
+        gazeTarget: "questioning_counsel",
+        gesture: "look_away",
+        delivery: "hesitant",
+      },
+    });
+    const view = buildHearingRuntimeView({
+      caseGraph: harness.caseGraph,
+      trialState: harness.state,
+      playerActorId: actors.userCounsel.actorId,
+      committedPerformances: [cue],
+    });
+    expect(
+      view.transcript.find(({ turnId }) => turnId === answerTurn.turnId)
+        ?.semanticCue,
+    ).toEqual(cue);
+
+    const hiddenEvidenceCue = HearingCommittedPerformanceSchema.parse({
+      ...cue,
+      evidenceIds: ["evidence_draft_metadata"],
+      semantic: { ...cue.semantic, gesture: "none", gazeTarget: "judge" },
+    });
+    const redacted = buildHearingRuntimeView({
+      caseGraph: harness.caseGraph,
+      trialState: harness.state,
+      playerActorId: actors.userCounsel.actorId,
+      committedPerformances: [hiddenEvidenceCue],
+    });
+    expect(
+      redacted.transcript.find(({ turnId }) => turnId === answerTurn.turnId)
+        ?.semanticCue,
+    ).toBeNull();
+    expect(JSON.stringify(redacted)).not.toContain("evidence_draft_metadata");
+
+    const jury = harness.actor(
+      (actor) => actor.role === "jury",
+      "JURY_NOT_FOUND",
+    );
+    const privateOnly = buildHearingRuntimeView({
+      caseGraph: harness.caseGraph,
+      trialState: harness.state,
+      playerActorId: actors.userCounsel.actorId,
+      committedPerformances: [
+        HearingCommittedPerformanceSchema.parse({
+          ...cue,
+          kind: "negotiation_decision",
+          context: "private_settlement",
+          source: {
+            ...cue.source,
+            callId: "call:private-settlement-canary",
+            turnId: null,
+          },
+          actor: actors.userCounsel,
+          semantic: {
+            kind: "role",
+            activity: "speaking",
+            emotion: "neutral",
+            intensity: 0.2,
+            gesture: "none",
+            gazeTarget: "judge",
+            speakingStyle: "formal",
+          },
+        }),
+        HearingCommittedPerformanceSchema.parse({
+          ...cue,
+          kind: "jury_deliberation",
+          source: {
+            ...cue.source,
+            callId: "call:private-jury-canary",
+            turnId: null,
+          },
+          actor: jury,
+          semantic: {
+            kind: "role",
+            activity: "thinking",
+            emotion: "neutral",
+            intensity: 0.2,
+            gesture: "none",
+            gazeTarget: "judge",
+            speakingStyle: "measured",
+          },
+        }),
+      ],
+    });
+    expect(JSON.stringify(privateOnly)).not.toContain("private-settlement-canary");
+    expect(JSON.stringify(privateOnly)).not.toContain("private-jury-canary");
+
+    const otherWitness = harness.actor(
+      (actor) => actor.witnessId === "witness_theo_morgan",
+      "THEO_NOT_FOUND",
+    );
+    expect(() =>
+      buildHearingRuntimeView({
+        caseGraph: harness.caseGraph,
+        trialState: harness.state,
+        playerActorId: actors.userCounsel.actorId,
+        committedPerformances: [
+          HearingCommittedPerformanceSchema.parse({
+            ...cue,
+            actor: otherWitness,
+          }),
+        ],
+      }),
+    ).toThrow("COMMITTED_PERFORMANCE_TURN_BINDING_INVALID");
   });
 });
