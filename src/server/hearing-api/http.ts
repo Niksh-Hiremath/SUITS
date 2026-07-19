@@ -7,6 +7,7 @@ import {
   RequestBodyLimitError,
   readBoundedRequestBody,
 } from "../case-api";
+import { CourtroomCommandOrchestrationError } from "./courtroom-command";
 import { HearingCommandOrchestrationError } from "./witness-command";
 
 const MAX_HEARING_REQUEST_BYTES = 32 * 1024;
@@ -113,6 +114,21 @@ export function hearingRouteError(
         ? "The witness response was cancelled. Retry the pending question."
         : "The witness could not answer right now. Retry the pending question.",
     );
+  }
+  if (error instanceof CourtroomCommandOrchestrationError) {
+    const status =
+      error.category === "cancelled"
+        ? 499
+        : error.category === "generation_failed"
+          ? 503
+          : 500;
+    const message =
+      error.category === "cancelled"
+        ? "The courtroom response was cancelled. Retry the pending action."
+        : error.category === "generation_failed"
+          ? "The courtroom participant could not respond right now. Retry the pending action."
+          : "The courtroom action could not finish safely. Reload the hearing before retrying.";
+    return hearingJsonError(status, error.code, message);
   }
   return hearingJsonError(500, "HEARING_REQUEST_FAILED", fallbackMessage);
 }

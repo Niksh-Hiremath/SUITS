@@ -6,6 +6,7 @@ import {
   hearingRouteError,
   parseHearingJson,
 } from "./http";
+import { CourtroomCommandOrchestrationError } from "./courtroom-command";
 import { HearingCommandOrchestrationError } from "./witness-command";
 
 describe("hearing HTTP boundary", () => {
@@ -83,6 +84,41 @@ describe("hearing HTTP boundary", () => {
         message:
           "The witness could not answer right now. Retry the pending question.",
       },
+    });
+  });
+
+  it.each([
+    {
+      code: "HEARING_MODEL_GENERATION_CANCELLED" as const,
+      status: 499,
+      message: "The courtroom response was cancelled. Retry the pending action.",
+    },
+    {
+      code: "HEARING_MODEL_GENERATION_FAILED" as const,
+      status: 503,
+      message:
+        "The courtroom participant could not respond right now. Retry the pending action.",
+    },
+    {
+      code: "HEARING_MODEL_LOOP_EXHAUSTED" as const,
+      status: 500,
+      message:
+        "The courtroom action could not finish safely. Reload the hearing before retrying.",
+    },
+  ])("maps $code to a bounded courtroom response", async ({ code, status, message }) => {
+    const response = hearingRouteError(
+      new CourtroomCommandOrchestrationError({
+        code,
+        task: code === "HEARING_MODEL_LOOP_EXHAUSTED" ? null : "opponent_plan",
+        terminalTracePersistence:
+          code === "HEARING_MODEL_LOOP_EXHAUSTED" ? null : "recorded",
+      }),
+      "The hearing could not be updated.",
+    );
+
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toEqual({
+      error: { code, message },
     });
   });
 });
