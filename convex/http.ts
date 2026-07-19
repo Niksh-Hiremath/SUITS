@@ -12,7 +12,9 @@ import {
   type CourtroomModelCallTrace,
 } from "../src/domain/courtroom-ai";
 import {
+  HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
+  HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
   HearingWitnessGenerationPrecommitSchema,
@@ -190,8 +192,18 @@ const prepareHearingCommandReference = makeFunctionReference<
 const commitWitnessGenerationReference = makeFunctionReference<
   "action",
   { ownerId: string; trialId: string; generationJson: string },
-  HearingRuntimeViewV1
+  HearingCommandPreparation
 >("hearingRuntime:commitWitnessGeneration");
+const commitOpponentPlanGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitOpponentPlanGeneration");
+const commitCounselGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitCounselGeneration");
 const recordTerminalModelCallReference = makeFunctionReference<
   "mutation",
   { ownerId: string; traceJson: string },
@@ -222,7 +234,48 @@ const HearingServiceWitnessCommitRequestSchema = z
     trialId: z.string().trim().min(1).max(256),
     generation: HearingWitnessGenerationPrecommitSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceOpponentPlanCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingOpponentPlanPrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceCounselResponseCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingCounselResponsePrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
 const UnsuccessfulCourtroomModelCallTraceSchema =
   CourtroomModelCallTraceSchema.refine(
     (trace) =>
@@ -450,7 +503,43 @@ const commitWitnessGeneration = httpAction(async (ctx, request) => {
       trialId: body.trialId,
       generationJson: JSON.stringify(body.generation),
     });
-    return caseServiceJson(HearingRuntimeViewV1Schema.parse(result));
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const commitOpponentPlanGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceOpponentPlanCommitRequestSchema,
+    );
+    const result = await ctx.runAction(commitOpponentPlanGenerationReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      generationJson: JSON.stringify(body.generation),
+    });
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const commitCounselGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceCounselResponseCommitRequestSchema,
+    );
+    const result = await ctx.runAction(commitCounselGenerationReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      generationJson: JSON.stringify(body.generation),
+    });
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
   } catch (error) {
     return caseServiceErrorResponse(error);
   }
@@ -498,6 +587,8 @@ http.route({ path: "/service/cases/owned/list", method: "POST", handler: listOwn
 http.route({ path: "/service/hearings/start", method: "POST", handler: startHearing });
 http.route({ path: "/service/hearings/command/prepare", method: "POST", handler: prepareHearingCommand });
 http.route({ path: "/service/hearings/command/commit", method: "POST", handler: commitWitnessGeneration });
+http.route({ path: "/service/hearings/opponent-plan/commit", method: "POST", handler: commitOpponentPlanGeneration });
+http.route({ path: "/service/hearings/counsel-response/commit", method: "POST", handler: commitCounselGeneration });
 http.route({ path: "/service/hearings/model-call/terminal", method: "POST", handler: recordTerminalModelCall });
 http.route({ path: "/service/hearings/read", method: "POST", handler: readHearing });
 
