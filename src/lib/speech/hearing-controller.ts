@@ -1,7 +1,25 @@
-import type {
+import {
+  HearingRuntimeViewV1Schema,
   HearingPlayerIntent,
-  HearingRuntimeViewV1,
+  type HearingRuntimeViewV1,
 } from "@/domain/hearing-runtime";
+import {
+  FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
+  FinalBoundInterruptionRequestSchema,
+  FinalBoundInterruptionResponseSchema,
+  type FinalBoundInterruptionRequest,
+  type FinalBoundInterruptionResponse,
+} from "@/domain/objections/final-bound-contracts";
+import {
+  CACHED_OBJECTION_CLIP_ID,
+  PARTIAL_OBJECTION_COORDINATOR_SCHEMA_VERSION,
+  PartialObjectionCoordinator,
+  type CachedObjectionReaction,
+  type PartialObjectionCoordinatorError,
+  type PartialObjectionDeliveryFence,
+  type PartialObjectionEnvelope,
+  type PartialObjectionHead,
+} from "@/domain/objections/partial-coordinator";
 
 import {
   BrowserAudioCaptureController,
@@ -53,6 +71,11 @@ const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 100;
 const SPEAKER_TEST_CLIP_ID = "courtroom.sustained.v1";
 const SPEAKER_TEST_PHRASE = "Sustained. Local courtroom audio is ready.";
+const SUSTAINED_CLIP_ID = "courtroom.sustained.v1";
+const OVERRULED_CLIP_ID = "courtroom.overruled.v1";
+const OBJECTION_ACTOR_ID = "actor.opposing_counsel.objection";
+const JUDGE_ACTOR_ID = "actor.judge";
+const MAX_RECENT_SAME_LEG_QUESTIONS = 32;
 const TRANSCRIPT_DIVERGED_MESSAGE =
   "The courtroom transcript changed unexpectedly; earlier turns will not be replayed.";
 
@@ -107,6 +130,15 @@ export type HearingFinalSubmission = Readonly<{
   text: string;
   intent: HearingPlayerIntent;
 }>;
+
+/**
+ * Injected protected transport. The controller never owns credentials or a
+ * remote endpoint, and treats the returned value as untrusted until parsed.
+ */
+export type HearingFinalBoundInterruptionPort = (
+  request: FinalBoundInterruptionRequest,
+  signal: AbortSignal,
+) => Promise<unknown>;
 
 export interface HearingSpeechClientPort {
   subscribe(listener: (event: SpeechClientEvent) => void): () => void;
@@ -170,6 +202,7 @@ export type HearingControllerOptions = Readonly<{
   getView: () => HearingRuntimeViewV1 | null;
   getActivity: () => Readonly<{ busy: boolean; pending: boolean }>;
   commitFinal: (submission: HearingFinalSubmission) => Promise<void>;
+  interruptFinal?: HearingFinalBoundInterruptionPort;
   clientId?: string;
   idFactory?: (prefix: string) => string;
   onStateChange?: (snapshot: HearingControllerSnapshot) => void;
@@ -209,6 +242,21 @@ type RecordingState = {
   commitStarted: boolean;
   postCommitRecovery: HearingControllerError | null;
   stopPromise: Promise<void> | null;
+  partialGeneration: number | null;
+  partialHead: PartialObjectionHead | null;
+  partialSourceView: HearingRuntimeViewV1 | null;
+  partialInterruption: PartialInterruptionState | null;
+};
+
+type PartialInterruptionState = {
+  readonly generation: number;
+  readonly head: PartialObjectionHead;
+  readonly reaction: CachedObjectionReaction;
+  envelope: PartialObjectionEnvelope | null;
+  finalRevision: number | null;
+  finalText: string | null;
+  durableResponse: FinalBoundInterruptionResponse | null;
+  reactionPlayback: Promise<void> | null;
 };
 
 type PlaybackJobState = {
@@ -235,6 +283,12 @@ type SpeechUnit = Readonly<{
   clipId?: string;
 }>;
 
+function activePartialInterruption(
+  recording: RecordingState,
+): PartialInterruptionState | null {
+  return recording.partialInterruption;
+}
+
 const SAFE_MESSAGES = Object.freeze({
   CLOSED: "The local hearing audio controller is closed.",
   NOT_READY: "Local courtroom audio is not ready.",
@@ -258,6 +312,12 @@ const SAFE_MESSAGES = Object.freeze({
   BUSY: "Another local courtroom audio operation is already active.",
   BARGED_IN: "Courtroom speech was interrupted by microphone input.",
   CLOSE_FAILED: "Local courtroom audio could not be fully released.",
+  INTERRUPTION_FAILED:
+    "The mid-question objection could not be resolved safely. Please repeat the question.",
+  INTERRUPTION_STALE:
+    "The courtroom changed while the mid-question objection was being resolved.",
+  REACTION_UNAVAILABLE:
+    "The cached courtroom objection reaction is unavailable.",
 });
 
 function createDeferredResult(): DeferredResult {
@@ -384,6 +444,51 @@ function sameBaseline(
   );
 }
 
+function headFromView(view: HearingRuntimeViewV1): PartialObjectionHead {
+  return Object.freeze({
+    trialId: view.trial.trialId,
+    stateVersion: view.trial.version,
+    lastEventId: view.trial.lastEventId,
+  });
+}
+
+function sameHead(
+  expected: PartialObjectionHead,
+  supplied: PartialObjectionHead,
+): boolean {
+  return (
+    expected.trialId === supplied.trialId &&
+    expected.stateVersion === supplied.stateVersion &&
+    expected.lastEventId === supplied.lastEventId
+  );
+}
+
+function viewMatchesHead(
+  view: HearingRuntimeViewV1 | null,
+  head: PartialObjectionHead,
+): boolean {
+  return view !== null && sameHead(headFromView(view), head);
+}
+
+function recentSameLegQuestionTexts(
+  view: HearingRuntimeViewV1,
+): readonly string[] {
+  const answeredCount = view.activeAppearance?.examinationLeg?.answeredQuestionCount;
+  if (answeredCount === undefined || answeredCount <= 0) return Object.freeze([]);
+  const limit = Math.min(answeredCount, MAX_RECENT_SAME_LEG_QUESTIONS);
+  return Object.freeze(
+    view.transcript
+      .filter(
+        (turn) =>
+          turn.status === "active" &&
+          turn.actor.actorId === view.player.actorId &&
+          turn.actor.role === view.player.actorRole,
+      )
+      .slice(-limit)
+      .map((turn) => turn.text),
+  );
+}
+
 function controllerError(cause: unknown): HearingControllerError {
   if (cause instanceof HearingControllerError) return cause;
   if (
@@ -423,12 +528,14 @@ export class HearingController {
   private readonly playback: HearingAudioPlaybackPort;
   private readonly finalTimeoutMs: number;
   private readonly ttsTimeoutMs: number;
+  private readonly partialObjections: PartialObjectionCoordinator<FinalBoundInterruptionResponse> | null;
   private readonly listeners = new Set<
     (snapshot: HearingControllerSnapshot) => void
   >();
 
   private snapshotValue: HearingControllerSnapshot;
   private generation = 0;
+  private partialInterruptionGeneration = 0;
   private playbackFence = 0;
   private unsubscribeClient: (() => void) | null = null;
   private recording: RecordingState | null = null;
@@ -498,6 +605,19 @@ export class HearingController {
       captureStatus: this.capture.state.status,
       playbackStatus: this.playback.status,
     });
+    this.partialObjections =
+      options.interruptFinal === undefined
+        ? null
+        : new PartialObjectionCoordinator<FinalBoundInterruptionResponse>({
+            modelDispatch: "after_final_seal",
+            requestModelCandidate: (envelope, signal) =>
+              this.requestFinalBoundInterruption(envelope, signal),
+            onCachedReaction: (reaction, signal) =>
+              this.startCachedObjectionReaction(reaction, signal),
+            onModelResult: (envelope, result, fence) =>
+              this.deliverFinalBoundInterruption(envelope, result, fence),
+            onError: (error) => this.handlePartialObjectionError(error),
+          });
   }
 
   get snapshot(): HearingControllerSnapshot {
@@ -615,6 +735,7 @@ export class HearingController {
       throw new HearingControllerError(selection.code, selection.message);
     }
     this.baseline = view;
+    this.partialObjections?.invalidateHead(headFromView(view));
   }
 
   async adoptView(
@@ -640,6 +761,7 @@ export class HearingController {
     // Adopt the durable head before phrase construction: an irreparable model
     // turn must be reported once, never replayed or allowed to deadlock later heads.
     this.baseline = next;
+    this.partialObjections?.invalidateHead(headFromView(next));
     const units: SpeechUnit[] = [];
     try {
       for (const turn of selection.turns) {
@@ -659,6 +781,10 @@ export class HearingController {
   async startRecording(mode: HearingVoiceInputMode): Promise<void> {
     this.requirePreparedForRecording();
     const context = this.freezeAndValidate(mode);
+    const interruptionView =
+      mode === "question" && this.partialObjections !== null
+        ? this.currentViewForContext(context)
+        : null;
     const generation = this.generation;
     this.setSnapshot({
       lifecycle: "preparing",
@@ -674,6 +800,14 @@ export class HearingController {
       await this.capture.start();
       this.assertGeneration(generation);
       const utteranceId = this.createId("utterance");
+      const partialGeneration =
+        interruptionView === null ? null : ++this.partialInterruptionGeneration;
+      const partialSourceView =
+        interruptionView === null
+          ? null
+          : HearingRuntimeViewV1Schema.parse(interruptionView);
+      const partialHead =
+        partialSourceView === null ? null : headFromView(partialSourceView);
       const recording: RecordingState = {
         generation,
         utteranceId,
@@ -686,7 +820,44 @@ export class HearingController {
         commitStarted: false,
         postCommitRecovery: null,
         stopPromise: null,
+        partialGeneration,
+        partialHead,
+        partialSourceView,
+        partialInterruption: null,
       };
+      if (
+        interruptionView !== null &&
+        partialSourceView !== null &&
+        partialGeneration !== null &&
+        partialHead !== null &&
+        !this.partialObjections?.openUtterance({
+          schemaVersion: PARTIAL_OBJECTION_COORDINATOR_SCHEMA_VERSION,
+          generation: partialGeneration,
+          head: partialHead,
+          utteranceId,
+          detectorContext: {
+            speechKind: "question",
+            examinationLeg: context.examinationKind,
+            permittedGrounds: Object.freeze([
+              ...partialSourceView.permittedObjectionGrounds,
+            ]),
+            recentQuestionTexts:
+              recentSameLegQuestionTexts(partialSourceView),
+            evidenceFoundationMissing: false,
+            topicRelation: "unknown",
+            privilegeContext: "unknown",
+            thirdPartyStatementPurpose: "unknown",
+            thirdPartyStatementException: "unknown",
+            argumentativeContext: "unknown",
+            personalKnowledgeContext: "unknown",
+          },
+        })
+      ) {
+        throw new HearingControllerError(
+          "INTERRUPTION_FAILED",
+          SAFE_MESSAGES.INTERRUPTION_FAILED,
+        );
+      }
       this.client.startUtterance({
         utteranceId,
         sampleRateHz: CAPTURE_SAMPLE_RATE_HZ,
@@ -830,6 +1001,7 @@ export class HearingController {
     this.unsubscribeClient?.();
     this.unsubscribeClient = null;
     this.frameForwarding = false;
+    this.partialObjections?.close();
     const recording = this.recording;
     this.recording = null;
     const playbackJob = this.activePlaybackJob;
@@ -948,7 +1120,12 @@ export class HearingController {
     if (generation !== this.generation || this.closed) return;
     switch (event.type) {
       case "stt_partial":
-        this.handlePartial(event.utteranceId, event.revision, event.text);
+        this.handlePartial(
+          event.utteranceId,
+          event.revision,
+          event.text,
+          event.confidence ?? null,
+        );
         return;
       case "stt_final":
         this.handleFinal(event.utteranceId, event.revision, event.text);
@@ -993,6 +1170,7 @@ export class HearingController {
     utteranceId: string,
     revision: number,
     text: string,
+    confidence: number | null,
   ): void {
     const recording = this.recording;
     if (
@@ -1000,12 +1178,43 @@ export class HearingController {
       recording.generation !== this.generation ||
       recording.utteranceId !== utteranceId ||
       recording.finalHandled ||
+      recording.partialInterruption !== null ||
       revision <= recording.lastRevision
     ) {
       return;
     }
     recording.lastRevision = revision;
     this.setSnapshot({ partialText: text });
+    if (
+      this.partialObjections === null ||
+      recording.partialGeneration === null ||
+      recording.partialHead === null
+    ) {
+      return;
+    }
+    const currentView = this.options.getView();
+    if (!viewMatchesHead(currentView, recording.partialHead)) {
+      if (currentView !== null) {
+        this.partialObjections.invalidateHead(headFromView(currentView));
+      }
+      return;
+    }
+    const result = this.partialObjections.acceptPartial({
+      generation: recording.partialGeneration,
+      head: recording.partialHead,
+      utteranceId,
+      revision,
+      text,
+      confidence,
+    });
+    const partialInterruption = activePartialInterruption(recording);
+    if (
+      result.envelope !== null &&
+      partialInterruption !== null &&
+      partialInterruption.generation === result.envelope.generation
+    ) {
+      partialInterruption.envelope = result.envelope;
+    }
   }
 
   private handleFinal(
@@ -1022,6 +1231,55 @@ export class HearingController {
       revision < recording.lastRevision
     ) {
       return;
+    }
+    const partialInterruption = recording.partialInterruption;
+    if (
+      partialInterruption !== null &&
+      recording.partialGeneration !== null &&
+      recording.partialHead !== null
+    ) {
+      let normalizedFinal: string;
+      try {
+        normalizedFinal = normalizeText(text, "question");
+      } catch (cause) {
+        void this.failRecording(recording, this.finalError(cause));
+        return;
+      }
+      partialInterruption.finalRevision = revision;
+      partialInterruption.finalText = normalizedFinal;
+      recording.lastRevision = revision;
+      recording.finalHandled = true;
+      this.frameForwarding = false;
+      const sealed = this.partialObjections?.sealFinalCandidate({
+        generation: recording.partialGeneration,
+        head: recording.partialHead,
+        utteranceId,
+        revision,
+      });
+      if (sealed !== true) {
+        void this.failRecording(
+          recording,
+          new HearingControllerError(
+            "INTERRUPTION_STALE",
+            SAFE_MESSAGES.INTERRUPTION_STALE,
+          ),
+        );
+        return;
+      }
+      recording.finalReceived.resolve(null);
+      this.setSnapshot({ lifecycle: "processing", partialText: "" });
+      return;
+    }
+    if (
+      recording.partialGeneration !== null &&
+      recording.partialHead !== null
+    ) {
+      this.partialObjections?.finalize({
+        generation: recording.partialGeneration,
+        head: recording.partialHead,
+        utteranceId,
+        revision,
+      });
     }
     recording.lastRevision = revision;
     recording.finalHandled = true;
@@ -1108,6 +1366,510 @@ export class HearingController {
     await this.options.commitFinal(Object.freeze({ context, text, intent }));
   }
 
+  private startCachedObjectionReaction(
+    reaction: CachedObjectionReaction,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const recording = this.recording;
+    if (
+      recording === null ||
+      recording.generation !== this.generation ||
+      recording.mode !== "question" ||
+      recording.finalHandled ||
+      recording.partialGeneration !== reaction.generation ||
+      recording.partialHead === null ||
+      recording.utteranceId !== reaction.utteranceId ||
+      recording.partialInterruption !== null ||
+      this.closed
+    ) {
+      return Promise.reject(
+        new HearingControllerError(
+          "INTERRUPTION_STALE",
+          SAFE_MESSAGES.INTERRUPTION_STALE,
+        ),
+      );
+    }
+    const partialInterruption: PartialInterruptionState = {
+      generation: reaction.generation,
+      head: recording.partialHead,
+      reaction,
+      envelope: null,
+      finalRevision: null,
+      finalText: null,
+      durableResponse: null,
+      reactionPlayback: null,
+    };
+    recording.partialInterruption = partialInterruption;
+
+    // This is the synchronous safety fence: no capture callback after the
+    // detector match can forward another PCM frame to the local companion.
+    this.frameForwarding = false;
+    this.setSnapshot({ lifecycle: "processing", partialText: "" });
+    this.beginAutomaticInterruptionStop(recording);
+
+    if (
+      !(
+        this.snapshotValue.capabilities?.cachedClipIds.includes(
+          CACHED_OBJECTION_CLIP_ID,
+        ) ?? false
+      )
+    ) {
+      return Promise.reject(
+        new HearingControllerError(
+          "REACTION_UNAVAILABLE",
+          SAFE_MESSAGES.REACTION_UNAVAILABLE,
+        ),
+      );
+    }
+    return this.dispatchInterruptionClip(
+      recording,
+      CACHED_OBJECTION_CLIP_ID,
+      OBJECTION_ACTOR_ID,
+      signal,
+      (completion) => {
+        partialInterruption.reactionPlayback = completion;
+      },
+    );
+  }
+
+  private beginAutomaticInterruptionStop(recording: RecordingState): void {
+    if (recording.stopPromise !== null) return;
+    const pending = Promise.resolve().then(() =>
+      this.stopRecordingInternal(recording),
+    );
+    recording.stopPromise = pending;
+    void pending.catch(() => {
+      // stopRecordingInternal has already retained the safe controller state.
+    });
+  }
+
+  private async requestFinalBoundInterruption(
+    envelope: PartialObjectionEnvelope,
+    signal: AbortSignal,
+  ): Promise<FinalBoundInterruptionResponse> {
+    const recording = this.recording;
+    const partialInterruption = recording?.partialInterruption ?? null;
+    if (
+      recording === null ||
+      partialInterruption === null ||
+      recording.generation !== this.generation ||
+      recording.partialGeneration !== envelope.generation ||
+      recording.partialHead === null ||
+      recording.utteranceId !== envelope.utteranceId ||
+      partialInterruption.envelope?.interruptId !== envelope.interruptId ||
+      partialInterruption.finalRevision === null ||
+      partialInterruption.finalText === null ||
+      !sameHead(recording.partialHead, envelope.head) ||
+      signal.aborted ||
+      this.closed
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    if (partialInterruption.durableResponse !== null) {
+      return partialInterruption.durableResponse;
+    }
+    if (!viewMatchesHead(this.options.getView(), envelope.head)) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    const interruptFinal = this.options.interruptFinal;
+    if (interruptFinal === undefined) {
+      throw new HearingControllerError(
+        "INTERRUPTION_FAILED",
+        SAFE_MESSAGES.INTERRUPTION_FAILED,
+      );
+    }
+    const request = FinalBoundInterruptionRequestSchema.parse({
+      schemaVersion: FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
+      head: envelope.head,
+      utterance: {
+        generation: envelope.generation,
+        utteranceId: envelope.utteranceId,
+      },
+      trigger: {
+        revision: envelope.revision,
+        text: envelope.candidate.partialText,
+        confidence: envelope.candidate.sttConfidence,
+      },
+      final: {
+        revision: partialInterruption.finalRevision,
+        text: partialInterruption.finalText,
+      },
+    });
+    recording.commitStarted = true;
+    const response = FinalBoundInterruptionResponseSchema.parse(
+      await interruptFinal(request, signal),
+    );
+    if (
+      response.view.trial.trialId !== envelope.head.trialId ||
+      response.view.trial.version <= envelope.head.stateVersion ||
+      response.view.trial.lastEventId === envelope.head.lastEventId
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    partialInterruption.durableResponse = response;
+    return response;
+  }
+
+  private async deliverFinalBoundInterruption(
+    envelope: PartialObjectionEnvelope,
+    response: FinalBoundInterruptionResponse,
+    fence: PartialObjectionDeliveryFence,
+  ): Promise<void> {
+    const recording = this.recording;
+    const partialInterruption = recording?.partialInterruption ?? null;
+    if (
+      recording === null ||
+      partialInterruption === null ||
+      recording.generation !== this.generation ||
+      recording.partialGeneration !== envelope.generation ||
+      recording.utteranceId !== envelope.utteranceId ||
+      recording.partialSourceView === null ||
+      partialInterruption.finalRevision !== fence.expectedRevision ||
+      partialInterruption.durableResponse !== response ||
+      !fence.isCurrent() ||
+      fence.signal.aborted ||
+      this.closed
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    const currentView = this.options.getView();
+    if (
+      !viewMatchesHead(currentView, envelope.head) &&
+      !viewMatchesHead(currentView, headFromView(response.view))
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+
+    const reactionPlayback = partialInterruption.reactionPlayback;
+    if (reactionPlayback === null) {
+      throw new HearingControllerError(
+        "REACTION_UNAVAILABLE",
+        SAFE_MESSAGES.REACTION_UNAVAILABLE,
+      );
+    }
+    await reactionPlayback;
+    if (!fence.isCurrent() || fence.signal.aborted) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+
+    let rulingPlayback: Promise<void> | null = null;
+    await this.dispatchInterruptionClip(
+      recording,
+      response.ruling === "sustained"
+        ? SUSTAINED_CLIP_ID
+        : OVERRULED_CLIP_ID,
+      JUDGE_ACTOR_ID,
+      fence.signal,
+      (completion) => {
+        rulingPlayback = completion;
+      },
+    );
+    if (rulingPlayback === null) {
+      throw new HearingControllerError(
+        "REACTION_UNAVAILABLE",
+        SAFE_MESSAGES.REACTION_UNAVAILABLE,
+      );
+    }
+    await rulingPlayback;
+    if (!fence.isCurrent() || fence.signal.aborted) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+
+    await this.speakResumedWitnessDelta(
+      recording,
+      recording.partialSourceView,
+      response,
+      fence,
+    );
+    if (!fence.isCurrent() || fence.signal.aborted) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+
+    this.baseline = response.view;
+    this.recording = null;
+    recording.completion.resolve(null);
+    if (recording.postCommitRecovery !== null) {
+      this.setRecoverable(recording.postCommitRecovery);
+    } else {
+      this.setSnapshot({
+        lifecycle: "ready",
+        code: null,
+        message: null,
+        partialText: "",
+        activeMode: null,
+      });
+    }
+  }
+
+  private async speakResumedWitnessDelta(
+    recording: RecordingState,
+    sourceView: HearingRuntimeViewV1,
+    response: FinalBoundInterruptionResponse,
+    fence: PartialObjectionDeliveryFence,
+  ): Promise<void> {
+    if (response.ruling !== "overruled") return;
+    const selection = selectSpeakableTranscriptDelta(
+      sourceView,
+      response.view,
+      "command",
+    );
+    if (!selection.ok) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+    const witnessTurns = selection.turns.filter(
+      (turn) => turn.actor.role === "witness" && turn.status === "active",
+    );
+    for (const turn of witnessTurns) {
+      const actor = safeActorId(turn.actor);
+      for (const phrase of splitSpeechPhrases(turn.text)) {
+        if (!fence.isCurrent() || fence.signal.aborted) {
+          throw new HearingControllerError(
+            "INTERRUPTION_STALE",
+            SAFE_MESSAGES.INTERRUPTION_STALE,
+          );
+        }
+        let phrasePlayback: Promise<void> | null = null;
+        await this.dispatchInterruptionSpeechUnit(
+          recording,
+          Object.freeze({ actor, text: phrase }),
+          fence.signal,
+          (completion) => {
+            phrasePlayback = completion;
+          },
+        );
+        if (phrasePlayback === null) {
+          throw new HearingControllerError(
+            "PLAYBACK_FAILED",
+            SAFE_MESSAGES.PLAYBACK_FAILED,
+          );
+        }
+        await phrasePlayback;
+      }
+    }
+  }
+
+  private handlePartialObjectionError(
+    error: PartialObjectionCoordinatorError,
+  ): void {
+    const recording = this.recording;
+    if (
+      recording === null ||
+      recording.partialInterruption === null ||
+      recording.generation !== this.generation ||
+      this.closed
+    ) {
+      return;
+    }
+    if (
+      (error.stage === "model_candidate" || error.stage === "model_result") &&
+      this.partialObjections?.retrySealedCandidate()
+    ) {
+      return;
+    }
+    void this.failRecording(
+      recording,
+      new HearingControllerError(
+        error.stage === "model_result"
+          ? "INTERRUPTION_STALE"
+          : "INTERRUPTION_FAILED",
+        error.stage === "model_result"
+          ? SAFE_MESSAGES.INTERRUPTION_STALE
+          : SAFE_MESSAGES.INTERRUPTION_FAILED,
+      ),
+    );
+  }
+
+  private async dispatchInterruptionClip(
+    recording: RecordingState,
+    clipId: string,
+    actor: string,
+    signal: AbortSignal,
+    onCompletion: (completion: Promise<void>) => void,
+  ): Promise<void> {
+    if (
+      !(
+        this.snapshotValue.capabilities?.cachedClipIds.includes(clipId) ??
+        false
+      )
+    ) {
+      throw new HearingControllerError(
+        "REACTION_UNAVAILABLE",
+        SAFE_MESSAGES.REACTION_UNAVAILABLE,
+      );
+    }
+    return this.dispatchInterruptionSpeechUnit(
+      recording,
+      Object.freeze({ actor, clipId }),
+      signal,
+      onCompletion,
+    );
+  }
+
+  private async dispatchInterruptionSpeechUnit(
+    recording: RecordingState,
+    unit: SpeechUnit,
+    signal: AbortSignal,
+    onCompletion: (completion: Promise<void>) => void,
+  ): Promise<void> {
+    if (this.activePlaybackJob !== null) {
+      throw new HearingControllerError("BUSY", SAFE_MESSAGES.BUSY);
+    }
+    const generation = recording.generation;
+    const playbackFence = ++this.playbackFence;
+    const responseId = this.createId("response");
+    await this.playback.activateResponse(responseId);
+    this.assertInterruptionPlaybackFence(
+      recording,
+      generation,
+      playbackFence,
+      signal,
+    );
+    this.activePlaybackResponseId = responseId;
+    const identity = Object.freeze({
+      jobId: this.createId("job"),
+      responseId,
+      actor: assertSpeechIdentifier(unit.actor),
+      sequence: 0,
+    });
+    const job: PlaybackJobState = {
+      generation,
+      playbackFence,
+      identity,
+      completion: createDeferredResult(),
+      started: false,
+    };
+    this.activePlaybackJob = job;
+    const abort = (): void => {
+      this.cancelInterruptionPlayback(job);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    const completion = this.monitorInterruptionPlayback(job, signal, abort);
+    void completion.catch(() => {
+      // The coordinator delivery/retry path observes this same promise.
+    });
+    onCompletion(completion);
+    try {
+      this.client.synthesize(
+        unit.text === undefined
+          ? {
+              ...identity,
+              clipId: unit.clipId ?? CACHED_OBJECTION_CLIP_ID,
+              isFinal: true,
+            }
+          : { ...identity, text: unit.text, isFinal: true },
+      );
+    } catch (cause) {
+      job.completion.resolve(controllerError(cause));
+      throw controllerError(cause);
+    }
+  }
+
+  private async monitorInterruptionPlayback(
+    job: PlaybackJobState,
+    signal: AbortSignal,
+    abort: () => void,
+  ): Promise<void> {
+    try {
+      const error = await this.waitForResult(
+        job.completion.promise,
+        this.ttsTimeoutMs,
+        new HearingControllerError(
+          "PLAYBACK_TIMEOUT",
+          SAFE_MESSAGES.PLAYBACK_TIMEOUT,
+        ),
+      );
+      if (error !== null) throw error;
+      if (signal.aborted) {
+        throw new HearingControllerError(
+          "INTERRUPTION_STALE",
+          SAFE_MESSAGES.INTERRUPTION_STALE,
+        );
+      }
+    } finally {
+      signal.removeEventListener("abort", abort);
+      if (this.matchPlaybackJob(job.identity) === job) {
+        this.activePlaybackJob = null;
+        if (this.activePlaybackResponseId === job.identity.responseId) {
+          this.activePlaybackResponseId = null;
+        }
+      }
+    }
+  }
+
+  private cancelInterruptionPlayback(job: PlaybackJobState): void {
+    if (this.matchPlaybackJob(job.identity) !== job) return;
+    ++this.playbackFence;
+    this.activePlaybackJob = null;
+    this.activePlaybackResponseId = null;
+    job.completion.resolve(
+      new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      ),
+    );
+    try {
+      this.playback.bargeIn();
+    } catch {
+      // The playback fence above remains authoritative for late audio.
+    }
+    try {
+      this.client.cancelSynthesis({
+        scope: "response",
+        responseId: job.identity.responseId,
+        reason: "interruption_stale",
+      });
+    } catch {
+      // The local playback fence still prevents stale frames from being used.
+    }
+  }
+
+  private assertInterruptionPlaybackFence(
+    recording: RecordingState,
+    generation: number,
+    playbackFence: number,
+    signal: AbortSignal,
+  ): void {
+    this.assertGeneration(generation);
+    if (
+      signal.aborted ||
+      playbackFence !== this.playbackFence ||
+      this.recording !== recording ||
+      recording.partialInterruption === null
+    ) {
+      throw new HearingControllerError(
+        "INTERRUPTION_STALE",
+        SAFE_MESSAGES.INTERRUPTION_STALE,
+      );
+    }
+  }
+
   private async failRecording(
     recording: RecordingState,
     error: HearingControllerError,
@@ -1118,6 +1880,23 @@ export class HearingController {
       this.closed
     ) {
       return;
+    }
+    if (
+      recording.partialInterruption !== null &&
+      recording.partialInterruption.finalRevision === null &&
+      recording.partialGeneration !== null &&
+      recording.partialHead !== null &&
+      recording.lastRevision > 0
+    ) {
+      this.partialObjections?.finalize({
+        generation: recording.partialGeneration,
+        head: recording.partialHead,
+        utteranceId: recording.utteranceId,
+        revision: recording.lastRevision,
+      });
+    }
+    if (this.activePlaybackJob !== null) {
+      this.abortPlayback(error, true);
     }
     this.frameForwarding = false;
     recording.finalHandled = true;
@@ -1528,6 +2307,24 @@ export class HearingController {
       throw new HearingControllerError(validation.code, validation.message);
     }
     return context;
+  }
+
+  private currentViewForContext(
+    context: HearingVoiceContext,
+  ): HearingRuntimeViewV1 {
+    const view = this.options.getView();
+    if (
+      view === null ||
+      view.trial.trialId !== context.trialId ||
+      view.trial.version !== context.stateVersion ||
+      view.trial.lastEventId !== context.lastEventId
+    ) {
+      throw new HearingControllerError(
+        "STALE_FINAL",
+        SAFE_MESSAGES.STALE_FINAL,
+      );
+    }
+    return view;
   }
 
   private createId(prefix: string): string {

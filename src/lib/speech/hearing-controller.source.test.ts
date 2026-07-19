@@ -47,4 +47,32 @@ describe("hearing speech controller privacy boundary", () => {
     const outsideHandler = `${source.slice(0, handlerStart)}${source.slice(handlerEnd)}`;
     expect(outsideHandler).not.toMatch(/\.sendPcmFrame\s*\(/u);
   });
+
+  it("keeps the final-bound interruption transport injected and actorless", () => {
+    expect(source).toContain("interruptFinal?: HearingFinalBoundInterruptionPort");
+    expect(source).toContain("FinalBoundInterruptionRequestSchema.parse({");
+    expect(source).toContain("FinalBoundInterruptionResponseSchema.parse(");
+
+    const requestStart = source.indexOf(
+      "private async requestFinalBoundInterruption(",
+    );
+    const requestEnd = source.indexOf(
+      "private async deliverFinalBoundInterruption(",
+      requestStart,
+    );
+    expect(requestStart).toBeGreaterThan(-1);
+    expect(requestEnd).toBeGreaterThan(requestStart);
+    const requestBoundary = source.slice(requestStart, requestEnd);
+    expect(requestBoundary).toContain("trigger:");
+    expect(requestBoundary).toContain("final:");
+    expect(requestBoundary).not.toMatch(
+      /ownerId|speakerActorId|objectorActorId|modelMetadata|frame\.pcm/u,
+    );
+    expect(requestBoundary).not.toMatch(/\bfetch\s*\(/u);
+
+    const partialStart = source.indexOf("private handlePartial(");
+    const partialEnd = source.indexOf("private handleFinal(", partialStart);
+    const partialHandler = source.slice(partialStart, partialEnd);
+    expect(partialHandler).not.toContain("interruptFinal(");
+  });
 });
