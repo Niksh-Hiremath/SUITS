@@ -47,7 +47,8 @@ export default defineConfig({
           timeout: 120_000,
         },
         {
-          command: "npm run dev -- --hostname 127.0.0.1 --port 3100",
+          command:
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-e2e-next.ps1",
           url: LOCAL_BASE_URL,
           env: {
             ...process.env,
