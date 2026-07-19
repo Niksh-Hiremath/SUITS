@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
+from .capacity import BoundedLeasePool, CapacityLease, CapacitySnapshot
 from .config import SpeechSettings
 from .protocol import (
     CapabilitiesEvent,
@@ -20,9 +22,12 @@ from .providers import (
     UnavailableTtsProvider,
 )
 from .providers.base import (
+    AudioChunk,
     ProviderStatus,
     SttProvider,
+    StreamingSttSession,
     SynthesizedPhrase,
+    TranscriptHypothesis,
     TtsProvider,
 )
 from .tts_lane import TtsLaneSnapshot, TtsProviderLane
@@ -90,6 +95,71 @@ def _provider_capability(status: ProviderStatus) -> ProviderCapability:
     )
 
 
+class SttSessionCapacityError(RuntimeError):
+    """Raised when all process-level recognizer slots are already leased."""
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeCapacitySnapshot:
+    """Connection and recognizer admission state for diagnostics and tests."""
+
+    connections: CapacitySnapshot
+    stt_sessions: CapacitySnapshot
+
+
+class _LeasedStreamingSttSession:
+    """Return recognizer capacity exactly once on either terminal operation."""
+
+    def __init__(
+        self,
+        *,
+        session: StreamingSttSession,
+        lease: CapacityLease,
+    ) -> None:
+        self._session = session
+        self._lease = lease
+        self._terminal: Literal["finished", "cancelled", "quarantined"] | None = None
+        self._terminal_lock = asyncio.Lock()
+
+    async def push_audio(self, chunk: AudioChunk) -> tuple[TranscriptHypothesis, ...]:
+        if self._terminal is not None:
+            raise RuntimeError("STT session is already terminal")
+        return await self._session.push_audio(chunk)
+
+    async def finish(self) -> TranscriptHypothesis:
+        async with self._terminal_lock:
+            if self._terminal is not None:
+                raise RuntimeError("STT session is already terminal")
+            try:
+                result = await self._session.finish()
+            except asyncio.CancelledError:
+                self._terminal = "quarantined"
+                raise
+            except BaseException:
+                self._terminal = "finished"
+                self._lease.release()
+                raise
+            self._terminal = "finished"
+            self._lease.release()
+            return result
+
+    async def cancel(self) -> None:
+        async with self._terminal_lock:
+            if self._terminal is not None:
+                return
+            try:
+                await self._session.cancel()
+            except asyncio.CancelledError:
+                self._terminal = "quarantined"
+                raise
+            except BaseException:
+                self._terminal = "cancelled"
+                self._lease.release()
+                raise
+            self._terminal = "cancelled"
+            self._lease.release()
+
+
 class SpeechRuntime:
     """Process-level providers and immutable hardware discovery."""
 
@@ -107,6 +177,8 @@ class SpeechRuntime:
             provider=self.tts_provider,
             call_timeout_seconds=settings.tts_max_phrase_duration_ms / 1_000,
         )
+        self._connection_pool = BoundedLeasePool(limit=settings.max_connections)
+        self._stt_session_pool = BoundedLeasePool(limit=settings.max_connections)
         self.cuda = detect_cuda(fake_mode=settings.mode == "fake")
         self.cached_clip_ids: tuple[str, ...] = ()
         self._load_lock = asyncio.Lock()
@@ -118,6 +190,31 @@ class SpeechRuntime:
     @property
     def tts_lane_snapshot(self) -> TtsLaneSnapshot:
         return self._tts_lane.snapshot
+
+    @property
+    def capacity_snapshot(self) -> RuntimeCapacitySnapshot:
+        return RuntimeCapacitySnapshot(
+            connections=self._connection_pool.snapshot,
+            stt_sessions=self._stt_session_pool.snapshot,
+        )
+
+    def try_acquire_connection(self) -> CapacityLease | None:
+        """Claim one WebSocket slot immediately, or reject process overload."""
+
+        return self._connection_pool.try_acquire()
+
+    async def create_stt_session(self, *, sample_rate_hz: int) -> StreamingSttSession:
+        """Create one capacity-bound recognizer session without waiting for a slot."""
+
+        lease = self._stt_session_pool.try_acquire()
+        if lease is None:
+            raise SttSessionCapacityError("local STT recognizer capacity is exhausted")
+        try:
+            session = await self.stt_provider.create_session(sample_rate_hz=sample_rate_hz)
+        except BaseException:
+            lease.release()
+            raise
+        return _LeasedStreamingSttSession(session=session, lease=lease)
 
     async def synthesize_phrase(
         self,
