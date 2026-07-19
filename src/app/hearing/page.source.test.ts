@@ -48,6 +48,13 @@ describe("V3 hearing page boundary", () => {
       'path: "/service/hearings/command/commit"',
     );
     expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/opponent-plan/commit"',
+    );
+    expect(sources.commandRoute).toContain(
+      'path: "/service/hearings/counsel-response/commit"',
+    );
+    expect(sources.commandRoute).toContain("orchestrateCourtroomCommand");
+    expect(sources.commandRoute).toContain(
       'path: "/service/hearings/model-call/terminal"',
     );
     expect(sources.convexHttp).toContain('>("hearingRuntime:start")');
@@ -57,6 +64,12 @@ describe("V3 hearing page boundary", () => {
     );
     expect(sources.convexHttp).toContain(
       '>("hearingRuntime:commitWitnessGeneration")',
+    );
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:commitOpponentPlanGeneration")',
+    );
+    expect(sources.convexHttp).toContain(
+      '>("hearingRuntime:commitCounselGeneration")',
     );
     expect(sources.convexHttp).not.toContain(
       '>("hearingRuntime:command")',
