@@ -46,7 +46,7 @@ export const HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION =
 export const HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION =
   "hearing-counsel-response-precommit.v1" as const;
 const HEARING_OPPONENT_PLANNER_PROMPT_VERSION =
-  "opponent-planner.prompt.v1" as const;
+  "opponent-planner.prompt.v2" as const;
 const HEARING_COUNSEL_RESPONSE_PROMPT_VERSION =
   "role-responder.counsel.prompt.v1" as const;
 

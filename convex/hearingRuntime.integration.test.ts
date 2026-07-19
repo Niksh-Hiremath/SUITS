@@ -444,7 +444,7 @@ function acceptedCounselTrace(input: Readonly<{
   callClass: "opponent_planner" | "role_responder";
   task: "plan_opponent" | "counsel_response";
   promptVersion:
-    | "opponent-planner.prompt.v1"
+    | "opponent-planner.prompt.v2"
     | "role-responder.counsel.prompt.v1";
   outputSchemaVersion:
     | typeof OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION
@@ -625,7 +625,7 @@ async function fakeOpponentPlanGeneration(
     startedAt,
     callClass: "opponent_planner",
     task: "plan_opponent",
-    promptVersion: "opponent-planner.prompt.v1",
+    promptVersion: "opponent-planner.prompt.v2",
     outputSchemaVersion: output.schemaVersion,
   });
   return HearingOpponentPlanPrecommitSchema.parse({

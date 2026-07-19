@@ -666,7 +666,7 @@ function planGeneration(
     modelMetadata: {
       model: "gpt-5.6-luna",
       requestId,
-      promptVersion: "opponent-planner.prompt.v1",
+      promptVersion: "opponent-planner.prompt.v2",
       schemaVersion: OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
       latencyMs: 720,
       inputTokens: usage.inputTokens,
@@ -690,7 +690,7 @@ function planGeneration(
       provider: "openai-responses",
       model: "gpt-5.6-luna",
       providerProtocolVersion: "courtroom-model-provider.v1",
-      promptVersion: "opponent-planner.prompt.v1",
+      promptVersion: "opponent-planner.prompt.v2",
       outputSchemaVersion: OPPONENT_PLANNER_OUTPUT_SCHEMA_VERSION,
       knowledgeScope: {
         knowledgeSchemaVersion: "knowledge-view.opponent-planner.v1",

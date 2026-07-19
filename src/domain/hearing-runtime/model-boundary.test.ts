@@ -51,7 +51,7 @@ const RESPONSE_ID = "response:witness-answer:001";
 const PROVIDER_REQUEST_ID = "request:openai:001";
 const PROVIDER_RESPONSE_ID = "response:openai:001";
 const PROMPT_VERSION = "role-responder.witness-answer.prompt.v1";
-const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v1";
+const OPPONENT_PROMPT_VERSION = "opponent-planner.prompt.v2";
 const COUNSEL_PROMPT_VERSION = "role-responder.counsel.prompt.v1";
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -1007,8 +1007,8 @@ describe("hearing command model boundary", () => {
 
   it("rejects a mutually matching but unsupported planner prompt version", () => {
     const envelope = validOpponentPlanPrecommit();
-    envelope.trace.promptVersion = "opponent-planner.prompt.v2";
-    envelope.modelMetadata.promptVersion = "opponent-planner.prompt.v2";
+    envelope.trace.promptVersion = "opponent-planner.prompt.v3";
+    envelope.modelMetadata.promptVersion = "opponent-planner.prompt.v3";
 
     expect(
       HearingOpponentPlanPrecommitSchema.safeParse(envelope).success,
