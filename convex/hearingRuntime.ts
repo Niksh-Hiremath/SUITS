@@ -10,6 +10,7 @@ import {
 import {
   CounselResponseRequestSchema,
   DebriefGeneratorRequestSchema,
+  JudgeResponseRequestSchema,
   JuryResponseRequestSchema,
   NegotiationAgentRequestSchema,
   ObjectionRulingRequestSchema,
@@ -17,6 +18,7 @@ import {
   WitnessAnswerRequestSchema,
   validateCounselResponseOutput,
   validateDebriefGeneratorOutput,
+  validateJudgeResponseOutput,
   validateJuryResponseOutput,
   validateNegotiationAgentOutput,
   validateObjectionRulingOutput,
@@ -26,6 +28,7 @@ import {
   type CounselResponseRequest,
   type CourtroomModelCallTrace,
   type DebriefGeneratorRequest,
+  type JudgeResponseRequest,
   type JuryResponseRequest,
   type NegotiationAgentRequest,
   type ObjectionRulingRequest,
@@ -37,6 +40,7 @@ import {
   HearingCommandPreparationSchema,
   HearingCaseSelectorSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingNegotiationPrecommitSchema,
   HearingObjectionRulingPrecommitSchema,
@@ -48,6 +52,7 @@ import {
   assertPersistedOpponentDirectiveBinding,
   buildHearingRuntimeView,
   createPersistedOpponentDirective,
+  deriveOpponentStrikeableTestimonyIds,
   deriveTrialActorBindings,
   findOutstandingRephraseTarget,
   parsePersistedOpponentDirective,
@@ -56,6 +61,7 @@ import {
   type HearingCommandPreparation,
   type HearingCaseSelector,
   type HearingDebriefGeneratorPrecommit,
+  type HearingJudgeResponsePrecommit,
   type HearingJuryResponsePrecommit,
   type HearingNegotiationPrecommit,
   type HearingObjectionRulingPrecommit,
@@ -238,6 +244,17 @@ const appendCounselTurnForOwnerReference = makeFunctionReference<
   }>,
   ActionReceipt
 >("trialEvents:appendCounselTurnForOwner");
+
+const appendJudgeResponseForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    actionJson: string;
+    generationJson: string;
+    writeSnapshot?: boolean;
+  }>,
+  ActionReceipt
+>("trialEvents:appendJudgeResponseForOwner");
 
 const appendJuryGenerationForOwnerReference = makeFunctionReference<
   "mutation",
@@ -466,6 +483,16 @@ const loadGeneratedCounselTurnReference = makeFunctionReference<
     continuationActionJson: string | null;
   }> | null
 >("hearingRuntime:loadGeneratedCounselTurnForOwner");
+
+const loadGeneratedJudgeResponseReference = makeFunctionReference<
+  "query",
+  Readonly<{
+    ownerId: string;
+    trialId: string;
+    actionId: string;
+  }>,
+  Readonly<{ actionJson: string }> | null
+>("hearingRuntime:loadGeneratedJudgeResponseForOwner");
 
 const loadFinalTrialAuditReference = makeFunctionReference<
   "query",
@@ -824,6 +851,7 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
       ![
         "UPDATE_OPPOSING_STRATEGY",
         "ASK_QUESTION",
+        "MOVE_TO_STRIKE",
         "END_EXAMINATION",
         "GIVE_CLOSING",
       ].includes(event.eventType)
@@ -852,6 +880,41 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
       actionJson: storedEventActionJson(event),
       continuationActionJson: continuation,
     };
+  },
+});
+
+/** Reconstruct one committed generic judge ruling for exact replay. */
+export const loadGeneratedJudgeResponseForOwner = internalQuery({
+  args: { ownerId: v.string(), trialId: v.string(), actionId: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Readonly<{ actionJson: string }> | null> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const projection = await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+      .unique();
+    if (!projection || projection.ownerId !== ownerId) {
+      throw new Error("TRIAL_NOT_FOUND");
+    }
+    const event = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_action", (index) =>
+        index.eq("trialId", args.trialId).eq("actionId", args.actionId),
+      )
+      .unique();
+    if (!event) return null;
+    if (
+      event.source !== "ai" ||
+      event.actorRole !== "judge" ||
+      event.model === undefined ||
+      (event.eventType !== "STRIKE_TESTIMONY" &&
+        event.eventType !== "DENY_STRIKE_MOTION")
+    ) {
+      throw new Error("JUDGE_GENERATION_INVALID");
+    }
+    return { actionJson: storedEventActionJson(event) };
   },
 });
 
@@ -1269,6 +1332,7 @@ function freshModelCallId(
   prefix:
     | "opponent"
     | "counsel"
+    | "judge"
     | "objection"
     | "negotiation"
     | "jury"
@@ -1285,6 +1349,7 @@ function isFreshModelCallId(
   prefix:
     | "opponent"
     | "counsel"
+    | "judge"
     | "objection"
     | "negotiation"
     | "jury"
@@ -1977,6 +2042,15 @@ function canonicalOpponentPlannerRequest(
           )
           .map((evidence) => evidence.evidenceId)
           .sort((left, right) => left.localeCompare(right));
+  const strikeableTestimonyIds =
+    material.mode === "examination"
+      ? deriveOpponentStrikeableTestimonyIds({
+          state: input.state,
+          publicTestimonyIds: knowledgeView.publicRecord.testimony.map(
+            (testimony) => testimony.testimonyId,
+          ),
+        })
+      : [];
 
   return OpponentPlannerRequestSchema.parse({
     schemaVersion: "opponent-planner.request.v1",
@@ -2011,7 +2085,7 @@ function canonicalOpponentPlannerRequest(
       presentableEvidenceIds,
       offerableEvidenceIds: [],
       foundationTestimonyIds: [],
-      strikeableTestimonyIds: [],
+      strikeableTestimonyIds,
       permittedObjectionGrounds: [],
       canObject: false,
       canRequestNegotiation: false,
@@ -2186,6 +2260,160 @@ function traceMatchesCounselResponseRequest(
     trace.expectedLastEventId === request.expectedLastEventId &&
     sameOrderedIds(trace.inputEventIds, [request.expectedLastEventId]) &&
     counselScopeMatchesTrace(trace, request)
+  );
+}
+
+function canonicalJudgeResponseRequest(
+  input: Readonly<{
+    graph: CaseGraphV1;
+    state: TrialStateV3;
+    actor: ActorRef;
+    callId?: string;
+    decisionId?: string;
+  }>,
+): JudgeResponseRequest | null {
+  const pendingMotions = Object.values(input.state.strikeMotions).filter(
+    (motion) => motion.status === "pending",
+  );
+  if (pendingMotions.length === 0) return null;
+  const motion = pendingMotions[0];
+  const headEventId = lastEventId(input.state);
+  if (
+    pendingMotions.length !== 1 ||
+    motion === undefined ||
+    motion.sourceEventId !== headEventId ||
+    input.actor.role !== "judge" ||
+    input.actor.side !== "neutral" ||
+    motion.testimonyIds.some((testimonyId) => {
+      const testimony = input.state.testimony[testimonyId];
+      return (
+        testimony === undefined ||
+        testimony.status !== "active" ||
+        input.state.transcriptTurns[testimony.turnId]?.status !== "active"
+      );
+    })
+  ) {
+    throw new Error("JUDGE_GENERATION_STALE");
+  }
+  const motionTurns = input.state.transcriptTurnIds
+    .map((turnId) => input.state.transcriptTurns[turnId])
+    .filter((turn) => turn?.sourceEventId === motion.sourceEventId);
+  const motionTurn = motionTurns[0];
+  if (
+    motionTurns.length !== 1 ||
+    motionTurn === undefined ||
+    motionTurn.actor.actorId !== motion.movedByActorId ||
+    motionTurn.testimonyId !== null ||
+    motionTurn.status !== "active"
+  ) {
+    throw new Error("JUDGE_GENERATION_INVALID");
+  }
+  const scopedKnowledgeView = buildKnowledgeView(
+    {
+      caseGraph: input.graph,
+      trial: input.state,
+      currentExchangeTurnId: motionTurn.turnId,
+    },
+    input.actor.actorId,
+  );
+  if (scopedKnowledgeView.actorRole !== "judge") {
+    throw new Error("JUDGE_GENERATION_INVALID");
+  }
+  // A public ruling may cite the jury-considerable record, never raw packet
+  // provenance. Removing source identifiers from this request also makes an
+  // attempted source-segment citation fail deterministic output validation.
+  const knowledgeView = {
+    ...scopedKnowledgeView,
+    publicRecord: {
+      ...scopedKnowledgeView.publicRecord,
+      facts: scopedKnowledgeView.publicRecord.facts.map((fact) => ({
+        ...fact,
+        sourceSegmentIds: [],
+      })),
+      evidence: scopedKnowledgeView.publicRecord.evidence.map((evidence) => ({
+        ...evidence,
+        sourceSegmentIds: [],
+      })),
+    },
+  };
+  const material = {
+    trialId: input.state.trialId,
+    stateVersion: input.state.version,
+    lastEventId: headEventId,
+    actorId: input.actor.actorId,
+    motionId: motion.motionId,
+    testimonyIds: motion.testimonyIds,
+  };
+  const decisionId = stableRuntimeId("decision:judge-strike", material);
+  if (input.decisionId !== undefined && input.decisionId !== decisionId) {
+    throw new Error("JUDGE_GENERATION_STALE");
+  }
+  const callMaterial = { decisionId, material };
+  const callId = input.callId ?? freshModelCallId("judge", callMaterial);
+  if (!isFreshModelCallId(callId, "judge", callMaterial)) {
+    throw new Error("JUDGE_GENERATION_INVALID");
+  }
+  return JudgeResponseRequestSchema.parse({
+    schemaVersion: "role-responder.judge.request.v1",
+    callId,
+    decisionId,
+    trialId: input.state.trialId,
+    expectedStateVersion: input.state.version,
+    expectedLastEventId: headEventId,
+    actorId: input.actor.actorId,
+    directive: {
+      kind: "rule_on_strike_motion",
+      triggerEventId: headEventId,
+      motionId: motion.motionId,
+      testimonyIds: [...motion.testimonyIds],
+      permittedRulings: ["granted", "denied"],
+    },
+    knowledgeView,
+  });
+}
+
+function traceMatchesJudgeResponseRequest(
+  envelope: HearingJudgeResponsePrecommit,
+  request: JudgeResponseRequest,
+): boolean {
+  const trace = envelope.trace;
+  const view = request.knowledgeView;
+  const sourceSegmentIds = [
+    ...view.publicRecord.facts.flatMap((fact) => fact.sourceSegmentIds),
+    ...view.publicRecord.evidence.flatMap(
+      (evidence) => evidence.sourceSegmentIds,
+    ),
+  ];
+  return (
+    envelope.decisionId === request.decisionId &&
+    envelope.expectedStateVersion === request.expectedStateVersion &&
+    envelope.expectedLastEventId === request.expectedLastEventId &&
+    trace.trialId === request.trialId &&
+    trace.callId === request.callId &&
+    trace.responseId === null &&
+    trace.actorId === request.actorId &&
+    trace.actorRole === "judge" &&
+    trace.expectedStateVersion === request.expectedStateVersion &&
+    trace.expectedLastEventId === request.expectedLastEventId &&
+    sameOrderedIds(trace.inputEventIds, [request.expectedLastEventId]) &&
+    trace.knowledgeScope.knowledgeSchemaVersion === view.schemaVersion &&
+    trace.knowledgeScope.knowledgeViewHash ===
+      sha256Utf8(JSON.stringify(view)) &&
+    trace.knowledgeScope.stateVersion === view.stateVersion &&
+    trace.knowledgeScope.factCount === view.publicRecord.facts.length &&
+    trace.knowledgeScope.evidenceCount === view.publicRecord.evidence.length &&
+    trace.knowledgeScope.testimonyCount === view.publicRecord.testimony.length &&
+    trace.knowledgeScope.priorStatementCount === 0 &&
+    trace.knowledgeScope.sourceSegmentCount ===
+      new Set(sourceSegmentIds).size &&
+    trace.knowledgeScope.publicRecordEventCount ===
+      new Set(
+        view.publicRecord.testimony.map(
+          (testimony) => testimony.transcriptEventId,
+        ),
+      ).size &&
+    trace.knowledgeScope.currentExchangeCount ===
+      (view.currentExchange === null ? 0 : 1)
   );
 }
 
@@ -3018,6 +3246,18 @@ async function canonicalContinuation(
       request,
     });
   }
+  const judgeRequest = canonicalJudgeResponseRequest({
+    graph: head.graph,
+    state: head.state,
+    actor: actorByRole(head.state, "judge", "neutral"),
+  });
+  if (judgeRequest !== null) {
+    return HearingCommandPreparationSchema.parse({
+      schemaVersion: "hearing-command-preparation.v1",
+      status: "model_required",
+      request: judgeRequest,
+    });
+  }
   const activeQuestion = head.state.activeQuestionId
     ? head.state.questions[head.state.activeQuestionId]
     : undefined;
@@ -3663,6 +3903,13 @@ async function prepareCommandHandler(
     parseJson(args.commandJson, "hearing_player_command"),
   );
   const head = await loadHead(ctx, ownerId, args.trialId);
+  if (
+    Object.values(head.state.strikeMotions).some(
+      (motion) => motion.status === "pending",
+    )
+  ) {
+    throw new Error("STRIKE_RULING_PENDING");
+  }
   switch (commandInput.intent.type) {
     case "call_witness":
       await callWitness(ctx, ownerId, args.trialId, commandInput, head.state);
@@ -3723,6 +3970,23 @@ async function prepareCommandHandler(
 export const prepareCommand = internalAction({
   args: { ownerId: v.string(), trialId: v.string(), commandJson: v.string() },
   handler: prepareCommandHandler,
+});
+
+/** Secret-only recovery boundary that never accepts a browser-selected actor. */
+export const prepareContinuation = internalAction({
+  args: { ownerId: v.string(), trialId: v.string() },
+  handler: async (ctx, args): Promise<HearingCommandPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const head = await loadHead(ctx, ownerId, args.trialId);
+    if (head.state.activeInterruption?.status === "active") {
+      return HearingCommandPreparationSchema.parse({
+        schemaVersion: "hearing-command-preparation.v1",
+        status: "completed",
+        view: head.view,
+      });
+    }
+    return await canonicalContinuation(ctx, ownerId, args.trialId);
+  },
 });
 
 async function scopedFinalBoundContinuation(
@@ -4669,7 +4933,12 @@ function counselContinuationForAction(
     action: TrialActionV3;
   }>,
 ): TrialActionV3 | null {
-  if (input.action.type === "GIVE_CLOSING") return null;
+  if (
+    input.action.type === "GIVE_CLOSING" ||
+    input.action.type === "MOVE_TO_STRIKE"
+  ) {
+    return null;
+  }
   const appearance = activeAppearance(input.state);
   if (input.action.type === "ASK_QUESTION") {
     const witnessActor = Object.values(input.state.actors).find(
@@ -4797,6 +5066,7 @@ export const commitCounselGeneration = internalAction({
       if (
         !existingAction.success ||
         (existingAction.data.type !== "ASK_QUESTION" &&
+          existingAction.data.type !== "MOVE_TO_STRIKE" &&
           existingAction.data.type !== "END_EXAMINATION" &&
           existingAction.data.type !== "GIVE_CLOSING")
       ) {
@@ -4875,6 +5145,40 @@ export const commitCounselGeneration = internalAction({
           testimonyIds: response.testimonyIds,
         },
       });
+    } else if (response.action.kind === "move_to_strike") {
+      if (request.appearance === null) return invalidCounselGeneration();
+      action = actionFromIntent({
+        actionId,
+        trialId: args.trialId,
+        expectedStateVersion: request.expectedStateVersion,
+        actor,
+        source: "ai",
+        requestedAt: envelope.trace.completedAt,
+        causationId: request.expectedLastEventId,
+        modelMetadata: envelope.modelMetadata,
+        type: "MOVE_TO_STRIKE",
+        payload: {
+          motionId: stableRuntimeId("motion:counsel-strike", {
+            trialId: args.trialId,
+            decisionId: request.decisionId,
+          }),
+          testimonyIds: response.action.testimonyIds,
+          reason: response.action.reason,
+          speech: {
+            turnId: stableRuntimeId("turn:counsel-strike", {
+              trialId: args.trialId,
+              decisionId: request.decisionId,
+            }),
+            text: response.text,
+            citations: {
+              ...emptyCourtroomCitations(),
+              factIds: response.factIds,
+              evidenceIds: response.evidenceIds,
+              testimonyIds: response.testimonyIds,
+            },
+          },
+        },
+      });
     } else if (response.action.kind === "end_examination") {
       if (request.appearance === null) return invalidCounselGeneration();
       action = actionFromIntent({
@@ -4944,6 +5248,177 @@ export const commitCounselGeneration = internalAction({
       ownerId,
       JSON.stringify(action),
       continuation === null ? null : JSON.stringify(continuation),
+      envelope,
+    );
+    return await canonicalContinuation(ctx, ownerId, args.trialId);
+  },
+});
+
+function invalidJudgeGeneration(): never {
+  throw new Error("JUDGE_GENERATION_INVALID");
+}
+
+async function appendJudgeGeneration(
+  ctx: ActionCtx,
+  ownerId: string,
+  actionJson: string,
+  generation: HearingJudgeResponsePrecommit,
+): Promise<void> {
+  try {
+    await ctx.runMutation(appendJudgeResponseForOwnerReference, {
+      ownerId,
+      actionJson,
+      generationJson: JSON.stringify(generation),
+      writeSnapshot: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("STALE")) {
+      throw new Error("JUDGE_GENERATION_STALE");
+    }
+    if (
+      message.includes("CONFLICT") ||
+      message.includes("GENERATION") ||
+      message.includes("MODEL_CALL")
+    ) {
+      return invalidJudgeGeneration();
+    }
+    throw error;
+  }
+}
+
+/** Commit one generic Luna judge ruling and resume canonical procedure. */
+export const commitJudgeGeneration = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args): Promise<HearingCommandPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    let generationInput: unknown;
+    try {
+      generationInput = parseJson(
+        args.generationJson,
+        "judge_generation_precommit",
+      );
+    } catch {
+      return invalidJudgeGeneration();
+    }
+    const parsed = HearingJudgeResponsePrecommitSchema.safeParse(
+      generationInput,
+    );
+    if (!parsed.success || parsed.data.trialId !== args.trialId) {
+      return invalidJudgeGeneration();
+    }
+    const envelope = parsed.data;
+    const actionId = stableRuntimeId("action:judge-strike-ruling", {
+      trialId: args.trialId,
+      decisionId: envelope.decisionId,
+    });
+    const existing = await ctx.runQuery(loadGeneratedJudgeResponseReference, {
+      ownerId,
+      trialId: args.trialId,
+      actionId,
+    });
+    if (existing !== null) {
+      await appendJudgeGeneration(
+        ctx,
+        ownerId,
+        existing.actionJson,
+        envelope,
+      );
+      return await canonicalContinuation(ctx, ownerId, args.trialId);
+    }
+
+    const head = await loadHead(ctx, ownerId, args.trialId);
+    const actor = actorByRole(head.state, "judge", "neutral");
+    const request = canonicalJudgeResponseRequest({
+      graph: head.graph,
+      state: head.state,
+      actor,
+      callId: envelope.callId,
+      decisionId: envelope.decisionId,
+    });
+    if (
+      request === null ||
+      envelope.trace.completedAt === null ||
+      !traceMatchesJudgeResponseRequest(envelope, request)
+    ) {
+      return invalidJudgeGeneration();
+    }
+    const validation = validateJudgeResponseOutput(request, envelope.output);
+    if (
+      !validation.accepted ||
+      request.directive.kind !== "rule_on_strike_motion" ||
+      validation.response.sourceSegmentIds.length !== 0
+    ) {
+      return invalidJudgeGeneration();
+    }
+    const response = validation.response;
+    const rulingAction = response.action;
+    if (rulingAction.kind !== "rule_on_strike_motion") {
+      return invalidJudgeGeneration();
+    }
+    const citations = {
+      ...emptyCourtroomCitations(),
+      factIds: response.factIds,
+      evidenceIds: response.evidenceIds,
+      testimonyIds: response.testimonyIds,
+      sourceSegmentIds: response.sourceSegmentIds,
+    };
+    const speech = {
+      turnId: stableRuntimeId("turn:judge-strike-ruling", {
+        trialId: args.trialId,
+        decisionId: request.decisionId,
+      }),
+      text: response.text,
+      citations,
+    };
+    const action =
+      rulingAction.ruling === "granted"
+        ? actionFromIntent({
+            actionId,
+            trialId: args.trialId,
+            expectedStateVersion: request.expectedStateVersion,
+            actor,
+            source: "ai",
+            requestedAt: envelope.trace.completedAt,
+            causationId: request.expectedLastEventId,
+            modelMetadata: envelope.modelMetadata,
+            type: "STRIKE_TESTIMONY",
+            payload: {
+              motionId: request.directive.motionId,
+              testimonyIds: request.directive.testimonyIds,
+              factIds: stableUnique(
+                request.directive.testimonyIds.flatMap(
+                  (testimonyId) =>
+                    head.state.testimony[testimonyId]?.factIds ?? [],
+                ),
+              ),
+              speech,
+            },
+          })
+        : actionFromIntent({
+            actionId,
+            trialId: args.trialId,
+            expectedStateVersion: request.expectedStateVersion,
+            actor,
+            source: "ai",
+            requestedAt: envelope.trace.completedAt,
+            causationId: request.expectedLastEventId,
+            modelMetadata: envelope.modelMetadata,
+            type: "DENY_STRIKE_MOTION",
+            payload: {
+              motionId: request.directive.motionId,
+              reason: rulingAction.reason,
+              speech,
+            },
+          });
+    await appendJudgeGeneration(
+      ctx,
+      ownerId,
+      JSON.stringify(action),
       envelope,
     );
     return await canonicalContinuation(ctx, ownerId, args.trialId);

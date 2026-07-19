@@ -7,6 +7,7 @@ import {
   HEARING_COMMAND_PREPARATION_SCHEMA_VERSION,
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
@@ -14,6 +15,7 @@ import {
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingNegotiationPrecommitSchema,
   HearingObjectionRulingPrecommitSchema,
@@ -39,9 +41,12 @@ import { generateCounselResponse } from "@/server/courtroom-ai/counsel-response"
 import { generateDebrief } from "@/server/courtroom-ai/debrief-generator";
 import { ScriptedCourtroomModelProvider } from "@/server/courtroom-ai/fake-provider";
 import {
+  createJudgeResponseOutputFixture,
+  createJudgeResponseRequestFixture,
   createObjectionRulingOutputFixture,
   createObjectionRulingRequestFixture,
 } from "@/server/courtroom-ai/judicial-response.test-fixtures";
+import { generateJudgeResponse } from "@/server/courtroom-ai/judge-response";
 import {
   createNegotiationAgentOutputFixture,
   createNegotiationAgentRequestFixture,
@@ -56,7 +61,9 @@ import { generateOpponentPlan } from "@/server/courtroom-ai/opponent-planner";
 import { generateJuryResponse } from "@/server/courtroom-ai/jury-response";
 import {
   HearingServiceCounselResponseCommitRequestSchema,
+  HearingServiceContinuationPrepareRequestSchema,
   HearingServiceDebriefCommitRequestSchema,
+  HearingServiceJudgeResponseCommitRequestSchema,
   HearingServiceJuryResponseCommitRequestSchema,
   HearingServiceFinalBoundInterruptionPrepareRequestSchema,
   HearingServiceFinalBoundInterruptionClaimRequestSchema,
@@ -134,6 +141,32 @@ async function validCounselResponsePrecommit() {
     expectedStateVersion: request.expectedStateVersion,
     expectedLastEventId: request.expectedLastEventId,
     planBinding: request.planBinding,
+    output: generated.output,
+    modelMetadata: generated.modelMetadata,
+    trace: generated.trace,
+  });
+}
+
+async function validJudgeResponsePrecommit() {
+  const request = createJudgeResponseRequestFixture();
+  const generated = await generateJudgeResponse({
+    request,
+    provider: new ScriptedCourtroomModelProvider([
+      {
+        type: "output",
+        output: createJudgeResponseOutputFixture(),
+        requestId: "request:http-judge-response:001",
+        responseId: "response:http-judge-response:001",
+      },
+    ]),
+  });
+  return HearingJudgeResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
     output: generated.output,
     modelMetadata: generated.modelMetadata,
     trace: generated.trace,
@@ -247,6 +280,26 @@ async function validDebriefPrecommit() {
 }
 
 describe("secret hearing model-loop HTTP boundary", () => {
+  it("accepts only an actorless continuation request", () => {
+    const body = {
+      ownerId: OWNER_ID,
+      trialId: "trial_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    expect(HearingServiceContinuationPrepareRequestSchema.parse(body)).toEqual(
+      body,
+    );
+    for (const forged of [
+      { ...body, actorId: "actor:browser-selected" },
+      { ...body, command: { intent: "browser-selected" } },
+      { ...body, privateDirective: { raw: true } },
+    ]) {
+      expect(
+        HearingServiceContinuationPrepareRequestSchema.safeParse(forged)
+          .success,
+      ).toBe(false);
+    }
+  });
+
   it("accepts only an actorless exact final-bound interruption request", () => {
     const request = FinalBoundInterruptionRequestSchema.parse({
       schemaVersion: FINAL_BOUND_INTERRUPTION_REQUEST_SCHEMA_VERSION,
@@ -354,6 +407,7 @@ describe("secret hearing model-loop HTTP boundary", () => {
   it("accepts only strict owner- and trial-bound generation precommits", async () => {
     const opponentGeneration = await validOpponentPlanPrecommit();
     const counselGeneration = await validCounselResponsePrecommit();
+    const judgeGeneration = await validJudgeResponsePrecommit();
     const objectionGeneration = await validObjectionRulingPrecommit();
     const negotiationGeneration = await validNegotiationPrecommit();
     const juryGeneration = await validJuryResponsePrecommit();
@@ -367,6 +421,11 @@ describe("secret hearing model-loop HTTP boundary", () => {
       ownerId: OWNER_ID,
       trialId: counselGeneration.trialId,
       generation: counselGeneration,
+    };
+    const judgeBody = {
+      ownerId: OWNER_ID,
+      trialId: judgeGeneration.trialId,
+      generation: judgeGeneration,
     };
     const juryBody = {
       ownerId: OWNER_ID,
@@ -396,6 +455,9 @@ describe("secret hearing model-loop HTTP boundary", () => {
       HearingServiceCounselResponseCommitRequestSchema.parse(counselBody),
     ).toEqual(counselBody);
     expect(
+      HearingServiceJudgeResponseCommitRequestSchema.parse(judgeBody),
+    ).toEqual(judgeBody);
+    expect(
       HearingServiceJuryResponseCommitRequestSchema.parse(juryBody),
     ).toEqual(juryBody);
     expect(
@@ -420,6 +482,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
       }).success,
     ).toBe(false);
     expect(
+      HearingServiceJudgeResponseCommitRequestSchema.safeParse({
+        ...judgeBody,
+        generation: counselGeneration,
+      }).success,
+    ).toBe(false);
+    expect(
       HearingServiceObjectionRulingCommitRequestSchema.safeParse({
         ...objectionBody,
         generation: negotiationGeneration,
@@ -435,6 +503,7 @@ describe("secret hearing model-loop HTTP boundary", () => {
     for (const [schema, body] of [
       [HearingServiceOpponentPlanCommitRequestSchema, opponentBody],
       [HearingServiceCounselResponseCommitRequestSchema, counselBody],
+      [HearingServiceJudgeResponseCommitRequestSchema, judgeBody],
       [HearingServiceObjectionRulingCommitRequestSchema, objectionBody],
       [HearingServiceNegotiationCommitRequestSchema, negotiationBody],
       [HearingServiceJuryResponseCommitRequestSchema, juryBody],
@@ -489,10 +558,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     for (const expected of [
       '>("hearingRuntime:commitOpponentPlanGeneration")',
       '>("hearingRuntime:commitCounselGeneration")',
+      '>("hearingRuntime:commitJudgeGeneration")',
       '>("hearingRuntime:commitObjectionRulingGeneration")',
       '>("hearingRuntime:commitNegotiationGeneration")',
       '>("hearingRuntime:commitJuryGeneration")',
       '>("hearingRuntime:commitDebriefGeneration")',
+      '>("hearingRuntime:prepareContinuation")',
       '>("hearingRuntime:prepareFinalBoundInterruption")',
       '>("hearingRuntime:resumeFinalBoundInterruption")',
       '>("hearingRuntime:claimFinalBoundInterruption")',
@@ -502,10 +573,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
       '>("hearingRuntime:commitClaimedFinalBoundWitness")',
       'path: "/service/hearings/opponent-plan/commit", method: "POST"',
       'path: "/service/hearings/counsel-response/commit", method: "POST"',
+      'path: "/service/hearings/judge-response/commit", method: "POST"',
       'path: "/service/hearings/objection-ruling/commit", method: "POST"',
       'path: "/service/hearings/negotiation/commit", method: "POST"',
       'path: "/service/hearings/jury-response/commit", method: "POST"',
       'path: "/service/hearings/debrief/commit", method: "POST"',
+      'path: "/service/hearings/continuation/prepare", method: "POST"',
       'path: "/service/hearings/interruption/prepare", method: "POST"',
       'path: "/service/hearings/interruption/resume", method: "POST"',
       'path: "/service/hearings/interruption/claim", method: "POST"',
@@ -521,6 +594,24 @@ describe("secret hearing model-loop HTTP boundary", () => {
       source,
       "const commitWitnessGeneration = httpAction",
       "const commitOpponentPlanGeneration = httpAction",
+    );
+    const continuationSection = sourceSection(
+      source,
+      "const prepareHearingContinuation = httpAction",
+      "const prepareFinalBoundInterruption = httpAction",
+    );
+    expect(continuationSection).toContain("authorizeCaseServiceRequest(");
+    expect(continuationSection).toContain(
+      "HearingServiceContinuationPrepareRequestSchema",
+    );
+    expect(continuationSection).toContain(
+      "ctx.runAction(\n      prepareHearingContinuationReference",
+    );
+    expect(continuationSection).toContain(
+      "HearingCommandPreparationSchema.parse(result)",
+    );
+    expect(continuationSection).not.toMatch(
+      /actorId|commandJson|stateJson|graphJson|privateDirective/u,
     );
     const finalBoundSection = sourceSection(
       source,
@@ -594,6 +685,11 @@ describe("secret hearing model-loop HTTP boundary", () => {
     const counselSection = sourceSection(
       source,
       "const commitCounselGeneration = httpAction",
+      "const commitJudgeGeneration = httpAction",
+    );
+    const judgeSection = sourceSection(
+      source,
+      "const commitJudgeGeneration = httpAction",
       "const commitObjectionRulingGeneration = httpAction",
     );
     const objectionSection = sourceSection(
@@ -621,6 +717,7 @@ describe("secret hearing model-loop HTTP boundary", () => {
       witnessSection,
       opponentSection,
       counselSection,
+      judgeSection,
       objectionSection,
       negotiationSection,
       jurySection,
@@ -639,6 +736,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     );
     expect(counselSection).toContain(
       "HearingServiceCounselResponseCommitRequestSchema",
+    );
+    expect(judgeSection).toContain(
+      "HearingServiceJudgeResponseCommitRequestSchema",
+    );
+    expect(judgeSection).toContain(
+      "ctx.runAction(commitJudgeGenerationReference",
     );
     expect(objectionSection).toContain(
       "HearingServiceObjectionRulingCommitRequestSchema",
@@ -667,6 +770,11 @@ describe("secret hearing model-loop HTTP boundary", () => {
       DURABLE_SERVICE_SOURCE_PATH,
       "utf8",
     );
+    const judgeDurableSection = sourceSection(
+      durableServiceSource,
+      "commitJudgeResponse:",
+      "commitObjectionRuling:",
+    );
     const objectionDurableSection = sourceSection(
       durableServiceSource,
       "commitObjectionRuling:",
@@ -680,10 +788,17 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(objectionDurableSection).toContain(
       'path: "/service/hearings/objection-ruling/commit"',
     );
+    expect(judgeDurableSection).toContain(
+      'path: "/service/hearings/judge-response/commit"',
+    );
     expect(negotiationDurableSection).toContain(
       'path: "/service/hearings/negotiation/commit"',
     );
-    for (const section of [objectionDurableSection, negotiationDurableSection]) {
+    for (const section of [
+      judgeDurableSection,
+      objectionDurableSection,
+      negotiationDurableSection,
+    ]) {
       expect(section).toContain("body: { ownerId, trialId, generation }");
       expect(section).toContain(
         "responseSchema: HearingCommandPreparationSchema",

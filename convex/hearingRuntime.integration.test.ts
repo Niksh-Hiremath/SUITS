@@ -13,6 +13,8 @@ import {
   COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
   DEBRIEF_GENERATOR_OUTPUT_SCHEMA_VERSION,
   DebriefGeneratorModelOutputSchema,
+  JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+  JudgeRoleResponseModelOutputSchema,
   JURY_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
   JuryRoleResponseModelOutputSchema,
   NEGOTIATION_AGENT_OUTPUT_SCHEMA_VERSION,
@@ -28,6 +30,7 @@ import {
   type CounselResponseRequest,
   type DebriefCitationSet,
   type DebriefGeneratorRequest,
+  type JudgeResponseRequest,
   type JuryRoleResponseModelOutput,
   type JuryResponseRequest,
   type NegotiationAgentRequest,
@@ -37,6 +40,7 @@ import {
 import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
@@ -47,6 +51,7 @@ import {
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
   HearingDebriefGeneratorPrecommitSchema,
+  HearingJudgeResponsePrecommitSchema,
   HearingJuryResponsePrecommitSchema,
   HearingNegotiationPrecommitSchema,
   HearingObjectionRulingPrecommitSchema,
@@ -57,17 +62,20 @@ import {
   debriefGeneratorOutputCitations,
   hashCounselResponseModelOutput,
   hashDebriefGeneratorModelOutput,
+  hashJudgeResponseModelOutput,
   hashJuryResponseModelOutput,
   hashOpponentPlannerModelOutput,
   hashWitnessAnswerModelOutput,
   isHearingCounselResponseModelRequiredPreparation,
   isHearingDebriefGeneratorModelRequiredPreparation,
+  isHearingJudgeResponseModelRequiredPreparation,
   isHearingJuryResponseModelRequiredPreparation,
   isHearingNegotiationModelRequiredPreparation,
   isHearingObjectionRulingModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   juryResponseOutputCitations,
+  judgeResponseOutputCitations,
   hashNegotiationAgentModelOutput,
   hashObjectionRulingModelOutput,
   negotiationAgentOutputCitations,
@@ -78,6 +86,7 @@ import {
   type HearingCounselResponsePrecommit,
   type HearingCommandPreparation,
   type HearingDebriefGeneratorPrecommit,
+  type HearingJudgeResponsePrecommit,
   type HearingJuryResponsePrecommit,
   type HearingNegotiationPrecommit,
   type HearingObjectionRulingPrecommit,
@@ -122,6 +131,11 @@ const prepareCommandReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string; commandJson: string }>,
   HearingCommandPreparation
 >("hearingRuntime:prepareCommand");
+const prepareContinuationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:prepareContinuation");
 const commitWitnessGenerationReference = makeFunctionReference<
   "action",
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
@@ -137,6 +151,11 @@ const commitCounselGenerationReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
   HearingCommandPreparation
 >("hearingRuntime:commitCounselGeneration");
+const commitJudgeGenerationReference = makeFunctionReference<
+  "action",
+  Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
+  HearingCommandPreparation
+>("hearingRuntime:commitJudgeGeneration");
 const commitObjectionRulingGenerationReference = makeFunctionReference<
   "action",
   Readonly<{ ownerId: string; trialId: string; generationJson: string }>,
@@ -661,7 +680,7 @@ function acceptedCounselTrace(
 async function fakeOpponentPlanGeneration(
   preparation: HearingCommandPreparation,
   startedAt: string,
-  move: "question" | "end" = "end",
+  move: "question" | "strike" | "end" = "end",
 ): Promise<HearingOpponentPlanPrecommit> {
   if (!isHearingOpponentPlanModelRequiredPreparation(preparation)) {
     throw new Error("Expected opponent planner preparation");
@@ -676,7 +695,12 @@ async function fakeOpponentPlanGeneration(
     ? request.knowledgeView.publicRecord.evidence[0]?.evidenceId
     : request.opportunities.presentableEvidenceIds[0];
   const testimonyId =
-    request.knowledgeView.publicRecord.testimony[0]?.testimonyId;
+    move === "strike"
+      ? request.opportunities.strikeableTestimonyIds[0]
+      : request.knowledgeView.publicRecord.testimony[0]?.testimonyId;
+  if (move === "strike" && !testimonyId) {
+    throw new Error("Fixture requires strikeable public testimony");
+  }
   if ((move === "question" || isClosing) && !factId && !evidenceId && !testimonyId) {
     throw new Error("Fixture requires grounding for an opponent question");
   }
@@ -723,6 +747,16 @@ async function fakeOpponentPlanGeneration(
               citations,
             },
           ]
+        : move === "strike"
+          ? [
+              {
+                kind: "move_to_strike",
+                testimonyIds: [testimonyId],
+                rationale:
+                  "The identified answer lacks adequate foundation and should leave the active record.",
+                citations,
+              },
+            ]
         : [
             {
               kind: "no_action",
@@ -889,7 +923,9 @@ function emptyCourtroomCitations() {
   };
 }
 
-function judgeKnowledgeScope(request: ObjectionRulingRequest) {
+function judgeKnowledgeScope(
+  request: ObjectionRulingRequest | JudgeResponseRequest,
+) {
   const record = request.knowledgeView.publicRecord;
   return {
     knowledgeSchemaVersion: request.knowledgeView.schemaVersion,
@@ -1257,12 +1293,15 @@ function debriefKnowledgeScope(request: DebriefGeneratorRequest) {
 }
 
 function acceptedFinalTrace(input: Readonly<{
-  request: JuryResponseRequest | DebriefGeneratorRequest;
-  actorRole: "jury" | "debrief";
+  request: JudgeResponseRequest | JuryResponseRequest | DebriefGeneratorRequest;
+  actorRole: "judge" | "jury" | "debrief";
   callClass: "role_responder" | "debrief_generator";
-  task: "jury_deliberation" | "generate_debrief";
+  task: "judge_response" | "jury_deliberation" | "generate_debrief";
   model: "gpt-5.6-luna" | "gpt-5.6-terra";
-  promptVersion: "role-responder.jury.prompt.v1" | "debrief-generator.prompt.v1";
+  promptVersion:
+    | "role-responder.judge.prompt.v1"
+    | "role-responder.jury.prompt.v1"
+    | "debrief-generator.prompt.v1";
   outputSchemaVersion: string;
   outputHash: string;
   outputCharacterCount: number;
@@ -1364,6 +1403,80 @@ function acceptedFinalTrace(input: Readonly<{
       validationFailureCount: 0,
     },
   };
+}
+
+function fakeJudgeGeneration(
+  preparation: HearingCommandPreparation,
+  startedAt: string,
+  ruling: "granted" | "denied",
+): HearingJudgeResponsePrecommit {
+  if (!isHearingJudgeResponseModelRequiredPreparation(preparation)) {
+    throw new Error("Expected generic judge-response preparation");
+  }
+  const request = preparation.request;
+  if (request.directive.kind !== "rule_on_strike_motion") {
+    throw new Error("Fixture judge response requires a pending strike motion");
+  }
+  const citations = {
+    ...emptyCourtroomCitations(),
+    testimonyIds: [...request.directive.testimonyIds],
+  };
+  const output = JudgeRoleResponseModelOutputSchema.parse({
+    schemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    speechSegments: [
+      {
+        text:
+          ruling === "granted"
+            ? "The motion is granted, and the identified testimony is stricken."
+            : "The motion is denied; the identified testimony remains in the record.",
+        citations,
+      },
+    ],
+    proposedAction: {
+      kind: "rule_on_strike_motion",
+      ruling,
+      reason:
+        ruling === "granted"
+          ? "The answer lacks an adequate foundation."
+          : "The witness supplied an adequate personal-knowledge foundation.",
+    },
+    performance: {
+      activity: "ruling",
+      emotion: "neutral",
+      intensity: 0.5,
+      gazeTarget: "questioning_counsel",
+      gesture: "gavel",
+      speakingStyle: "formal",
+    },
+  });
+  const audit = acceptedFinalTrace({
+    request,
+    actorRole: "judge",
+    callClass: "role_responder",
+    task: "judge_response",
+    model: "gpt-5.6-luna",
+    promptVersion: "role-responder.judge.prompt.v1",
+    outputSchemaVersion: output.schemaVersion,
+    outputHash: hashJudgeResponseModelOutput(output),
+    outputCharacterCount: JSON.stringify(output).length,
+    proposedCitationCount: proposedCitationCount(
+      output.speechSegments.map((segment) => segment.citations),
+    ),
+    acceptedCitations: judgeResponseOutputCitations(output),
+    knowledgeScope: judgeKnowledgeScope(request),
+    startedAt,
+  });
+  return HearingJudgeResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    output,
+    modelMetadata: audit.modelMetadata,
+    trace: audit.trace,
+  });
 }
 
 async function fakeJuryGeneration(
@@ -1591,7 +1704,7 @@ async function commitModelPreparation(
   backend: TestBackend,
   preparation: HearingCommandPreparation,
   startedAt: string,
-  opponentMove: "question" | "end" = "end",
+  opponentMove: "question" | "strike" | "end" = "end",
   juryRecommendation?: JuryRoleResponseModelOutput["recommendation"],
 ): Promise<HearingCommandPreparation> {
   if (isHearingWitnessModelRequiredPreparation(preparation)) {
@@ -1622,6 +1735,16 @@ async function commitModelPreparation(
     const generation = await fakeCounselGeneration(preparation, startedAt);
     return HearingCommandPreparationSchema.parse(
       await backend.action(commitCounselGenerationReference, {
+        ownerId: OWNER_ID,
+        trialId: preparation.request.trialId,
+        generationJson: JSON.stringify(generation),
+      }),
+    );
+  }
+  if (isHearingJudgeResponseModelRequiredPreparation(preparation)) {
+    const generation = fakeJudgeGeneration(preparation, startedAt, "denied");
+    return HearingCommandPreparationSchema.parse(
+      await backend.action(commitJudgeGenerationReference, {
         ownerId: OWNER_ID,
         trialId: preparation.request.trialId,
         generationJson: JSON.stringify(generation),
@@ -2553,12 +2676,17 @@ describe("V3 hearing runtime facade", () => {
       activeExaminationKind: "cross",
       answeredQuestionCount: 0,
     });
+    const directTestimonyIds =
+      firstPlan.request.knowledgeView.publicRecord.testimony.map(
+        ({ testimonyId }) => testimonyId,
+      );
+    expect(directTestimonyIds).toHaveLength(1);
     expect(firstPlan.request.opportunities).toMatchObject({
       callableWitnessIds: [],
       questionableWitnessIds: ["witness_rina_shah"],
       offerableEvidenceIds: [],
       foundationTestimonyIds: [],
-      strikeableTestimonyIds: [],
+      strikeableTestimonyIds: directTestimonyIds,
       permittedObjectionGrounds: [],
       canObject: false,
       canRequestNegotiation: false,
@@ -2867,6 +2995,327 @@ describe("V3 hearing runtime facade", () => {
     expect(
       stored.calls.filter((call) => call.status === "accepted"),
     ).toHaveLength(6);
+  });
+
+  it.each(["granted", "denied"] as const)(
+    "persists an AI strike motion, atomically commits a %s judge ruling, and resumes planning",
+    async (ruling) => {
+      const backend = convexTest({ schema, modules });
+      const planPreparation = await prepareInitialOpponentCross(backend);
+      if (!isHearingOpponentPlanModelRequiredPreparation(planPreparation)) {
+        throw new Error("Expected opponent planner preparation");
+      }
+      const publicTestimonyIds =
+        planPreparation.request.knowledgeView.publicRecord.testimony.map(
+          ({ testimonyId }) => testimonyId,
+        );
+      expect(publicTestimonyIds).toHaveLength(1);
+      expect(
+        planPreparation.request.opportunities.strikeableTestimonyIds,
+      ).toEqual(publicTestimonyIds);
+      const testimonyId = publicTestimonyIds[0];
+      if (!testimonyId) throw new Error("Expected strikeable testimony");
+
+      const planGeneration = await fakeOpponentPlanGeneration(
+        planPreparation,
+        "2026-07-19T03:15:00.000Z",
+        "strike",
+      );
+      const counselPreparation = HearingCommandPreparationSchema.parse(
+        await backend.action(commitOpponentPlanGenerationReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          generationJson: JSON.stringify(planGeneration),
+        }),
+      );
+      if (!isHearingCounselResponseModelRequiredPreparation(counselPreparation)) {
+        throw new Error("A selected strike must require public counsel speech");
+      }
+      expect(counselPreparation.request.directive).toEqual({
+        kind: "move_to_strike",
+        testimonyIds: [testimonyId],
+        basis:
+          "The identified answer lacks adequate foundation and should leave the active record.",
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: [testimonyId],
+      });
+
+      const persistedPlan = HearingCommandPreparationSchema.parse(
+        await backend.action(commitOpponentPlanGenerationReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          generationJson: JSON.stringify(planGeneration),
+        }),
+      );
+      if (!isHearingCounselResponseModelRequiredPreparation(persistedPlan)) {
+        throw new Error("Exact plan replay must restore the strike directive");
+      }
+      expect(persistedPlan.request.directive).toEqual(
+        counselPreparation.request.directive,
+      );
+      expect(persistedPlan.request.callId).not.toBe(
+        counselPreparation.request.callId,
+      );
+
+      const counselGeneration = await fakeCounselGeneration(
+        counselPreparation,
+        "2026-07-19T03:15:01.000Z",
+      );
+      const judgePreparation = HearingCommandPreparationSchema.parse(
+        await backend.action(commitCounselGenerationReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          generationJson: JSON.stringify(counselGeneration),
+        }),
+      );
+      if (!isHearingJudgeResponseModelRequiredPreparation(judgePreparation)) {
+        throw new Error("Committed strike speech must require a judge ruling");
+      }
+      const judgeDirective = judgePreparation.request.directive;
+      if (judgeDirective.kind !== "rule_on_strike_motion") {
+        throw new Error("Expected a strike-motion judge directive");
+      }
+      expect(judgeDirective).toMatchObject({
+        kind: "rule_on_strike_motion",
+        triggerEventId: judgePreparation.request.expectedLastEventId,
+        testimonyIds: [testimonyId],
+        permittedRulings: ["granted", "denied"],
+      });
+      expect(
+        judgePreparation.request.knowledgeView.publicRecord.testimony.map(
+          (testimony) => testimony.testimonyId,
+        ),
+      ).toContain(testimonyId);
+      expect([
+        ...judgePreparation.request.knowledgeView.publicRecord.facts.flatMap(
+          ({ sourceSegmentIds }) => sourceSegmentIds,
+        ),
+        ...judgePreparation.request.knowledgeView.publicRecord.evidence.flatMap(
+          ({ sourceSegmentIds }) => sourceSegmentIds,
+        ),
+      ]).toEqual([]);
+      expect(judgePreparation.request.knowledgeView.currentExchange).toMatchObject({
+        speakerActorId: counselPreparation.request.actorId,
+        text: "Move to strike that answer for lack of foundation.",
+        factIds: [],
+        evidenceIds: [],
+      });
+
+      const beforeRuling = await backend.run(async (ctx) => ({
+        events: await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", planPreparation.request.trialId),
+          )
+          .collect(),
+        calls: await ctx.db.query("courtroomModelCalls").collect(),
+      }));
+      const motionEvent = beforeRuling.events.at(-1);
+      expect(motionEvent).toMatchObject({
+        eventType: "MOVE_TO_STRIKE",
+        actorRole: "opposing_counsel",
+        source: "ai",
+      });
+      expect(JSON.parse(motionEvent?.payloadJson ?? "null")).toMatchObject({
+        motionId: judgeDirective.motionId,
+        testimonyIds: [testimonyId],
+        speech: {
+          text: "Move to strike that answer for lack of foundation.",
+          citations: { testimonyIds: [testimonyId] },
+        },
+      });
+
+      const pendingView = HearingRuntimeViewV1Schema.parse(
+        await backend.action(readReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+        }),
+      );
+      await expect(
+        backend.action(prepareCommandReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          commandJson: JSON.stringify(
+            playerCommand(
+              pendingView,
+              "94949494-9494-4494-8494-949494949494",
+              "2026-07-19T03:15:01.500Z",
+              {
+                type: "finish_witness",
+                witnessId: "witness_rina_shah",
+                examinationKind: "cross",
+              },
+            ),
+          ),
+        }),
+      ).rejects.toThrow("STRIKE_RULING_PENDING");
+      const afterRejectedCommand = await backend.run(async (ctx) => ({
+        events: (await ctx.db.query("trialEvents").collect()).length,
+        calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      }));
+      expect(afterRejectedCommand).toEqual({
+        events: beforeRuling.events.length,
+        calls: beforeRuling.calls.length,
+      });
+
+      const judgeGeneration = fakeJudgeGeneration(
+        judgePreparation,
+        "2026-07-19T03:15:02.000Z",
+        ruling,
+      );
+      const continuation = HearingCommandPreparationSchema.parse(
+        await backend.action(commitJudgeGenerationReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          generationJson: JSON.stringify(judgeGeneration),
+        }),
+      );
+      if (!isHearingOpponentPlanModelRequiredPreparation(continuation)) {
+        throw new Error("A resolved strike motion must resume opponent planning");
+      }
+      expect(continuation.request.procedure).toMatchObject({
+        activeWitnessId: "witness_rina_shah",
+        activeExaminationKind: "cross",
+        answeredQuestionCount: 0,
+      });
+      expect(continuation.request.opportunities.strikeableTestimonyIds).toEqual(
+        [],
+      );
+
+      const afterRuling = await backend.run(async (ctx) => {
+        const projection = await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (index) =>
+            index.eq("trialId", planPreparation.request.trialId),
+          )
+          .unique();
+        if (!projection) throw new Error("Expected trial projection");
+        return {
+          state: TrialStateV3Schema.parse(JSON.parse(projection.stateJson)),
+          events: await ctx.db
+            .query("trialEvents")
+            .withIndex("by_trial_sequence", (index) =>
+              index.eq("trialId", planPreparation.request.trialId),
+            )
+            .collect(),
+          calls: await ctx.db.query("courtroomModelCalls").collect(),
+        };
+      });
+      expect(afterRuling.events).toHaveLength(beforeRuling.events.length + 1);
+      expect(afterRuling.calls).toHaveLength(beforeRuling.calls.length + 1);
+      const rulingEvent = afterRuling.events.at(-1);
+      expect(rulingEvent).toMatchObject({
+        eventType:
+          ruling === "granted" ? "STRIKE_TESTIMONY" : "DENY_STRIKE_MOTION",
+        actorRole: "judge",
+        source: "ai",
+      });
+      expect(
+        afterRuling.state.strikeMotions[judgeDirective.motionId],
+      ).toMatchObject({
+        testimonyIds: [testimonyId],
+        status: ruling,
+        rulingEventId: rulingEvent?.eventId,
+      });
+      const testimony = afterRuling.state.testimony[testimonyId];
+      expect(testimony.status).toBe(
+        ruling === "granted" ? "stricken" : "active",
+      );
+      expect(afterRuling.state.transcriptTurns[testimony.turnId].status).toBe(
+        ruling === "granted" ? "stricken" : "active",
+      );
+      const judgeCall = afterRuling.calls.find(
+        ({ callId }) => callId === judgeGeneration.callId,
+      );
+      expect(judgeCall).toMatchObject({
+        status: "accepted",
+        task: "judge_response",
+      });
+      expect(JSON.parse(judgeCall?.traceJson ?? "null")).toMatchObject({
+        committedActionId: rulingEvent?.actionId,
+        committedEventId: rulingEvent?.eventId,
+      });
+
+      const exactReplay = HearingCommandPreparationSchema.parse(
+        await backend.action(commitJudgeGenerationReference, {
+          ownerId: OWNER_ID,
+          trialId: planPreparation.request.trialId,
+          generationJson: JSON.stringify(judgeGeneration),
+        }),
+      );
+      if (!isHearingOpponentPlanModelRequiredPreparation(exactReplay)) {
+        throw new Error("Exact ruling replay must resume opponent planning");
+      }
+      expect(exactReplay.request.decisionId).toBe(
+        continuation.request.decisionId,
+      );
+      expect(exactReplay.request.callId).not.toBe(
+        continuation.request.callId,
+      );
+      const replayCounts = await backend.run(async (ctx) => ({
+        events: (await ctx.db.query("trialEvents").collect()).length,
+        calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      }));
+      expect(replayCounts).toEqual({
+        events: afterRuling.events.length,
+        calls: afterRuling.calls.length,
+      });
+    },
+  );
+
+  it("returns the current view without generic continuation during an active interruption", async () => {
+    const backend = convexTest({ schema, modules });
+    const rulingPreparation = await prepareUserObjectionRuling(backend);
+    const currentView = HearingRuntimeViewV1Schema.parse(
+      await backend.action(readReference, {
+        ownerId: OWNER_ID,
+        trialId: rulingPreparation.request.trialId,
+      }),
+    );
+    const before = await backend.run(async (ctx) => ({
+      events: (await ctx.db.query("trialEvents").collect()).length,
+      calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+    }));
+
+    const continuation = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareContinuationReference, {
+        ownerId: OWNER_ID,
+        trialId: rulingPreparation.request.trialId,
+      }),
+    );
+
+    expect(continuation).toEqual({
+      schemaVersion: "hearing-command-preparation.v1",
+      status: "completed",
+      view: currentView,
+    });
+    expect(
+      await backend.run(async (ctx) => ({
+        events: (await ctx.db.query("trialEvents").collect()).length,
+        calls: (await ctx.db.query("courtroomModelCalls").collect()).length,
+      })),
+    ).toEqual(before);
+  });
+
+  it("uses canonical continuation when no active interruption exists", async () => {
+    const backend = convexTest({ schema, modules });
+    const initial = await prepareInitialOpponentCross(backend);
+    if (!isHearingOpponentPlanModelRequiredPreparation(initial)) {
+      throw new Error("Expected initial opponent planner preparation");
+    }
+
+    const continuation = HearingCommandPreparationSchema.parse(
+      await backend.action(prepareContinuationReference, {
+        ownerId: OWNER_ID,
+        trialId: initial.request.trialId,
+      }),
+    );
+    if (!isHearingOpponentPlanModelRequiredPreparation(continuation)) {
+      throw new Error("Canonical continuation should resume opponent planning");
+    }
+    expect(continuation.request.decisionId).toBe(initial.request.decisionId);
+    expect(continuation.request.callId).not.toBe(initial.request.callId);
   });
 
   it("recovers an existing counsel question whose response continuation is missing", async () => {

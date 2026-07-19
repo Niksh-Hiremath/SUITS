@@ -438,6 +438,11 @@ describe("Convex case service boundary", () => {
       expect(claimError.status).toBe(409);
       expect(await claimError.json()).toEqual({ error: "CASE_COMPILE_CLAIM_REJECTED" });
     }
+    const strikeError = caseServiceErrorResponse(
+      new Error("prepare command failed: STRIKE_RULING_PENDING"),
+    );
+    expect(strikeError.status).toBe(409);
+    expect(await strikeError.json()).toEqual({ error: "STRIKE_RULING_PENDING" });
     expect(caseServiceErrorResponse(new CaseServiceBoundaryError("CASE_SERVICE_REQUEST_INVALID", 400)).status).toBe(400);
   });
 });
