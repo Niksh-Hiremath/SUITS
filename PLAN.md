@@ -552,7 +552,7 @@ Deliverables:
 
 Gate:
 
-- [ ] E2E fixture proves objection can interrupt before final STT, cancel active audio, obtain a validated ruling, and resume coherently.
+- [x] E2E fixture proves objection can interrupt before final STT, cancel active audio, obtain a validated ruling, and resume coherently.
 - [x] Late model/audio events cannot alter the committed post-ruling state.
 
 ### Milestone 7 — Animated courtroom
@@ -744,7 +744,7 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Milestone 3 complete.
 - [x] Milestone 4 complete.
 - [ ] Milestone 5 complete.
-- [ ] Milestone 6 complete.
+- [x] Milestone 6 complete.
 - [ ] Milestone 7 complete.
 - [ ] Milestone 8 complete.
 - [ ] Milestone 9 complete.
@@ -888,6 +888,13 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: Milestone 6 is not complete until the production-path Playwright fixture proves the cached objection reaction precedes final STT, active speech is cancelled, the validated ruling commits, and the response resumes coherently. No microphone permission or audible-output claim is made.
   - Commits: `e6fc244`, `88fd8dd`, `b1cea7e`, `58af82d`, `b1a867d`, `566b45c`, and `8bf4dfb`.
 
+- 2026-07-20 01:05 IST - Milestone 6 production-path browser gate complete
+  - Changed: added a Playwright harness that launches a dedicated loopback Python fake-speech companion and the real Next.js hearing through PowerShell, synchronizes the linked Convex development functions, retrieves the existing development service secret without printing or persisting it, and creates an ephemeral session secret. The fixture drives the real hearing page, owner session, protected interruption route, browser microphone capture, speech WebSocket, framed fake STT/TTS, Web Audio playback, and durable Convex ruling/resume path. It passively observes string control frames only and discards binary payloads from the test ledger.
+  - Regressions fixed: first-question capabilities and voice validation now accept the valid `available` examination leg; the framed fake TTS adapter truthfully advertises streaming support; and the server-only scripted final-bound provider remains fail-closed outside development/test, exact loopback hosts, and the named E2E scenario.
+  - Verified: the fixture proves rev-3 partial detection dispatches the cached objection request before rev-4 final STT, barge-in stops active Web Audio and sends `cancel_synthesis` before the new utterance, no microphone chunks are forwarded after the interrupt, the protected final-bound request contains the partial trigger plus exact final transcript, the strict response commits an overruled/resume head, every objection `AudioBufferSourceNode` ends naturally without `stop` before the judge ruling clip, the witness resumes with the validated exact answer, no fallback `/commands` request is made, and the browser reports no console/page errors. The full Playwright suite passed 2/2 with two workers; the focused controller/provider contract passed 50/50; scoped lint and strict TypeScript passed.
+  - Remaining: Milestone 6 is complete. The automated browser uses Chromium fake media and muted output, so it does not claim real microphone permission, human STT accuracy, speaker audibility, GPU inference, or the Milestone 5 hardware/privacy gate. Begin Milestone 7 animated-courtroom work while retaining the open Milestone 5 external-hardware checks.
+  - Commits: `73961a3`, `7f20752`, `e8271a6`, `f032844`, `9c8e7f2`, `7f9a7b8`, and `0dcf8c2`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -955,6 +962,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Reload recovery cannot enqueue both a pending ruling and its later complete continuation as independent audio jobs. The queue must retain the earliest controller baseline while replacing the pending adoption with the complete response before drain; cancellation/unmount and concurrent courtroom activity also need synchronous fences before canonical publication.
 - A generated strike ruling cannot safely rely on ordinary action idempotency alone. If replay is allowed to persist a new call ID, a schema-valid envelope can attach a second accepted audit to an already committed event. Replay must require the exact existing terminal trace for the original owner, trial, call, action, and event.
 - A pending judicial motion must be a procedure-wide serialization point. Allowing settlement or another player command to append first makes a head-bound ruling stale, so player commands now fail with `STRIKE_RULING_PENDING` and reload invokes an actorless protected continuation before accepting new work.
+- The production interruption path intentionally overlaps the protected ruling request with the short cached objection playback. The coordinator considers the local reaction dispatched once synthesis is queued, while the controller retains the true Web Audio completion and awaits natural drain before dispatching the judge ruling or resumed witness. Measuring drain before the HTTP request contradicts the low-latency runtime and its unit contract; source-identity tracking between exact objection and ruling synthesis markers is the deterministic browser assertion.
+- The first valid examination question exists while the leg is `available`, not yet `in_progress`. Projection and voice-policy checks that required only `in_progress` hid/rejected the first question even though the deterministic engine authorized it. Production-path E2E exposed both copies of that assumption.
 
 ## 15. Decisions
 
@@ -1022,6 +1031,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Offer AI strike motions only against active public testimony elicited by the player in the current direct or redirect leg. Consume the opportunity after one motion in the appearance, regardless of disposition, to keep planning bounded and prevent repetitive motions.
 - Materialize a generic judge strike decision as exactly one append-only ruling event with embedded speech and one terminal call audit in the same Convex transaction. Derive every action, motion, turn, fact-strike, and event identity server-side.
 - Treat pending generic judicial work like interrupted-speech recovery: expose only an owner/trial actorless continuation boundary, no browser-selected directive or actor, and return the current view without generic dispatch while a leased final-bound interruption remains active.
+- Let protected ruling evaluation overlap cached objection playback to preserve latency, but never let judge or witness audio overtake it: retain the exact playback-completion promise, require natural Web Audio drain, and only then synthesize the ruling and continuation.
+- Keep automated speech E2E hardware-independent and production-path: use Chromium fake media, muted output, a dedicated loopback fake companion, real framed WebSocket traffic, the real browser controller/BFF/Convex path, and a narrowly gated server-only decision provider. Do not grant real microphone permission or claim audible/GPU verification from this fixture.
 
 ## 16. Verification Evidence
 
@@ -1233,6 +1244,14 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run build` - exit 0 in 16.2 seconds; Next.js 16.2.10 compiled/typechecked and generated 19/19 pages; the route manifest includes `/api/hearings/[trialId]/continuation/recover`.
   - `npx convex dev --once` - exit 0; linked development deployment `cheery-bandicoot-36` reported functions ready in 7.56 seconds without a login prompt. No production deploy, microphone permission, audible playback, Playwright run, or live Luna strike decision was exercised in this checkpoint.
   - `git push origin main` - exit 0 through `8bf4dfb`; the pure opportunity selector, judge orchestration, atomic ruling/audit, persistence regressions, and protected reload recovery are on `origin/main`.
+
+- 2026-07-20 00:22-01:05 IST - Milestone 6 production-path Playwright verification
+  - `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts` - exit 0; one Chromium fixture passed in 38.2 seconds including server startup. Its PowerShell launcher ran `npx convex dev --once`; linked deployment `cheery-bandicoot-36` became ready in 6.77 seconds without a login prompt. The test exercised the real page/controller/WebSocket/Python fake-speech/protected-route/Convex chain and asserted partial-before-final dispatch, active playback stop, service cancellation, strict final-bound schema, durable head advancement, natural reaction-audio drain before ruling audio, exact resumed testimony, no command fallback, and an empty browser error list.
+  - `npm run test:e2e` - exit 0; both `preflight.smoke.spec.ts` and `hearing-objection.spec.ts` passed with two Chromium workers in 37.9 seconds. The synchronized Convex deployment became ready in 6.26 seconds; the dedicated fake speech WebSocket accepted the hearing connection.
+  - `npm test -- src/lib/speech/hearing-controller.test.ts src/server/hearing-api/e2e-final-bound-provider.test.ts` - exit 0; two files and 50 tests passed, including the intentional ruling-request/playback overlap and the loopback/development-only provider gate.
+  - `npm run typecheck`, `npx eslint playwright.config.ts tests/e2e/hearing-objection.spec.ts`, and `git diff --check` - exit 0.
+  - Chromium used `--use-fake-device-for-media-stream`, `--use-fake-ui-for-media-stream`, `--autoplay-policy=no-user-gesture-required`, and `--mute-audio`. This is production-path orchestration proof, not real microphone, audible speaker, CUDA, or live-Luna evidence; those claims remain explicitly open under their own gates.
+  - `git push origin main` - exit 0 through `0dcf8c2`; the isolated speech/Next harness, fail-closed decision fixture, first-question fixes, fake streaming-capability correction, and browser acceptance test are on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
