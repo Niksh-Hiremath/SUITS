@@ -230,6 +230,16 @@ liveDescribe("live Luna courtroom runtime", () => {
           witnessId,
           examinationKind: "direct",
         });
+        expect(view.activeAppearance).toMatchObject({
+          witnessId,
+          stage: "redirect",
+        });
+        await execute({
+          type: "finish_witness",
+          witnessId,
+          examinationKind: "redirect",
+        });
+        expect(view.activeAppearance).toBeNull();
       }
 
       const reloaded = await callConvexCaseService({
