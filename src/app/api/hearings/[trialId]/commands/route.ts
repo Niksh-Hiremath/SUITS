@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   HearingCommandPreparationSchema,
   HearingPlayerCommandSchema,
-  HearingRuntimeViewV1Schema,
 } from "@/domain/hearing-runtime";
 import {
   CASE_OWNER_COOKIE_NAME,
@@ -20,10 +19,10 @@ import {
   parseHearingJson,
 } from "@/server/hearing-api/http";
 import {
-  HearingCommandOrchestrationError,
-  orchestrateHearingCommand,
-  type HearingCommandDurableService,
-} from "@/server/hearing-api/witness-command";
+  CourtroomCommandOrchestrationError,
+  orchestrateCourtroomCommand,
+  type CourtroomCommandDurableService,
+} from "@/server/hearing-api/courtroom-command";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -93,7 +92,7 @@ export async function POST(
   try {
     const ownerId = ownerSession.ownerId;
     const trialId = parsedTrialId.data;
-    const durableService: HearingCommandDurableService = {
+    const durableService: CourtroomCommandDurableService = {
       prepare: async (command, signal) =>
         await callConvexCaseService({
           path: "/service/hearings/command/prepare",
@@ -101,11 +100,25 @@ export async function POST(
           responseSchema: HearingCommandPreparationSchema,
           signal,
         }),
-      commit: async (generation, signal) =>
+      commitWitness: async (generation, signal) =>
         await callConvexCaseService({
           path: "/service/hearings/command/commit",
           body: { ownerId, trialId, generation },
-          responseSchema: HearingRuntimeViewV1Schema,
+          responseSchema: HearingCommandPreparationSchema,
+          signal,
+        }),
+      commitOpponentPlan: async (generation, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/opponent-plan/commit",
+          body: { ownerId, trialId, generation },
+          responseSchema: HearingCommandPreparationSchema,
+          signal,
+        }),
+      commitCounselResponse: async (generation, signal) =>
+        await callConvexCaseService({
+          path: "/service/hearings/counsel-response/commit",
+          body: { ownerId, trialId, generation },
+          responseSchema: HearingCommandPreparationSchema,
           signal,
         }),
       recordTerminalTrace: async (trace, signal) => {
@@ -117,7 +130,7 @@ export async function POST(
         });
       },
     };
-    const view = await orchestrateHearingCommand({
+    const view = await orchestrateCourtroomCommand({
       command: body,
       provider: new EnvironmentCourtroomModelProvider(),
       durableService,
@@ -129,10 +142,11 @@ export async function POST(
   } catch (error) {
     console.error("hearing_command_failed", {
       name: error instanceof Error ? error.name : "UnknownError",
-      ...(error instanceof HearingCommandOrchestrationError
+      ...(error instanceof CourtroomCommandOrchestrationError
         ? {
             code: error.code,
             category: error.category,
+            task: error.task,
             terminalTracePersistence: error.terminalTracePersistence,
           }
         : {}),
