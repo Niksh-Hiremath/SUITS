@@ -14,6 +14,7 @@ import {
 } from "../src/domain/courtroom-ai";
 import {
   HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HearingCommittedPerformanceSchema,
   HearingJudgeResponsePrecommitSchema,
   hashJudgeResponseModelOutput,
   judgeResponseOutputCitations,
@@ -1346,6 +1347,12 @@ describe("atomic generated judge-response append", () => {
             index.eq("callId", generation.callId),
           )
           .collect(),
+        performances: await ctx.db
+          .query("courtroomCommittedPerformances")
+          .withIndex("by_performance_id", (index) =>
+            index.eq("performanceId", first.eventIds[0] ?? "missing"),
+          )
+          .collect(),
         snapshots: await ctx.db
           .query("trialSnapshots")
           .withIndex("by_trial_version", (index) =>
@@ -1357,6 +1364,7 @@ describe("atomic generated judge-response append", () => {
       expect(persisted.receipts).toHaveLength(9);
       expect(persisted.calls).toHaveLength(1);
       expect(persisted.attempts).toHaveLength(1);
+      expect(persisted.performances).toHaveLength(1);
       expect(persisted.snapshots.at(-1)).toMatchObject({ stateVersion: 9 });
       expect(persisted.projection).toMatchObject({
         ownerId: OWNER_ID,
@@ -1405,6 +1413,26 @@ describe("atomic generated judge-response append", () => {
         status: "accepted",
         committedActionId: trialAction.actionId,
         committedEventId: first.eventIds[0],
+      });
+      expect(
+        HearingCommittedPerformanceSchema.parse(
+          JSON.parse(persisted.performances[0]?.performanceJson ?? "null"),
+        ),
+      ).toMatchObject({
+        kind: "judge_response",
+        head: {
+          trialId: fixture.trialId,
+          stateVersion: 9,
+          lastEventId: first.eventIds[0],
+        },
+        source: {
+          callId: generation.callId,
+          actionId: trialAction.actionId,
+          eventId: first.eventIds[0],
+          turnId: expect.stringContaining("turn:judge-strike-ruling:"),
+        },
+        actor: ACTORS.judge,
+        semantic: generation.output.performance,
       });
     },
   );

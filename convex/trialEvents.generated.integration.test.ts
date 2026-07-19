@@ -1612,6 +1612,12 @@ describe("atomic opponent-plan and counsel-turn append", () => {
           index.eq("callId", generationInput.callId),
         )
         .collect(),
+      performances: await ctx.db
+        .query("courtroomCommittedPerformances")
+        .withIndex("by_performance_id", (index) =>
+          index.eq("performanceId", eventId(primary.actionId)),
+        )
+        .collect(),
     }));
     expect(persisted.projection).toMatchObject({
       stateVersion: 11,
@@ -1638,6 +1644,27 @@ describe("atomic opponent-plan and counsel-turn append", () => {
     ).toMatchObject({
       committedActionId: primary.actionId,
       committedEventId: eventId(primary.actionId),
+    });
+    expect(persisted.performances).toHaveLength(1);
+    expect(
+      HearingCommittedPerformanceSchema.parse(
+        JSON.parse(persisted.performances[0]?.performanceJson ?? "null"),
+      ),
+    ).toMatchObject({
+      kind: "counsel_response",
+      head: {
+        trialId: TRIAL_ID,
+        stateVersion: 11,
+        lastEventId: eventId(continuation.actionId),
+      },
+      source: {
+        callId: generationInput.callId,
+        actionId: primary.actionId,
+        eventId: eventId(primary.actionId),
+        turnId: primary.payload.turnId,
+      },
+      actor: ACTORS.opposingCounsel,
+      semantic: generationInput.output.performance,
     });
   });
 

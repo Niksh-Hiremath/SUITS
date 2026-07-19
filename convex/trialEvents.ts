@@ -38,6 +38,7 @@ import {
 import {
   HEARING_COMMITTED_PERFORMANCE_SCHEMA_VERSION,
   HearingCommittedPerformanceSchema,
+  normalizeRoleSemanticPerformance,
   normalizeWitnessSemanticPerformance,
   type HearingCommittedPerformance,
   type HearingPerformanceKind,
@@ -331,6 +332,21 @@ type PersistCommittedPerformanceInput = Readonly<{
   evidenceIds: readonly string[];
   semantic: HearingSemanticPerformance;
 }>;
+
+function publicPerformanceTurnId(action: TrialActionV3): string | null {
+  const payload = action.payload as unknown as Record<string, unknown>;
+  if (typeof payload.turnId === "string") return payload.turnId;
+  const speech = payload.speech;
+  if (
+    typeof speech === "object" &&
+    speech !== null &&
+    !Array.isArray(speech) &&
+    typeof (speech as Record<string, unknown>).turnId === "string"
+  ) {
+    return (speech as Record<string, unknown>).turnId as string;
+  }
+  return null;
+}
 
 /**
  * Atomically records one presentation-only proposal at the exact post-bundle
@@ -4217,6 +4233,23 @@ export const appendCounselTurnForOwner = internalMutation({
       });
     }
 
+    if (!receipt.replayed) {
+      await persistCommittedPerformance(ctx, {
+        ownerId: args.ownerId,
+        action,
+        eventId: committedEventId,
+        callId: generation.callId,
+        kind: "counsel_response",
+        context: "courtroom",
+        turnId: publicPerformanceTurnId(action),
+        outputSchemaVersion: generation.output.schemaVersion,
+        evidenceIds: generation.trace.acceptedCitations.evidenceIds,
+        semantic: normalizeRoleSemanticPerformance(
+          generation.output.performance,
+        ),
+      });
+    }
+
     const committedTrace = CourtroomModelCallTraceSchema.parse({
       ...generation.trace,
       committedActionId: action.actionId,
@@ -4285,6 +4318,22 @@ export const appendJudgeResponseForOwner = internalMutation({
       action,
       eventId: committedEventId,
     });
+    if (!receipt.replayed) {
+      await persistCommittedPerformance(ctx, {
+        ownerId: args.ownerId,
+        action,
+        eventId: committedEventId,
+        callId: generation.callId,
+        kind: "judge_response",
+        context: "courtroom",
+        turnId: publicPerformanceTurnId(action),
+        outputSchemaVersion: generation.output.schemaVersion,
+        evidenceIds: generation.trace.acceptedCitations.evidenceIds,
+        semantic: normalizeRoleSemanticPerformance(
+          generation.output.performance,
+        ),
+      });
+    }
     const committedTrace = CourtroomModelCallTraceSchema.parse({
       ...generation.trace,
       committedActionId: action.actionId,
@@ -4420,6 +4469,22 @@ export const appendObjectionRulingForOwner = internalMutation({
     if (primaryReceipt === null) return invalidObjectionRuling();
     const primaryAction = actions[0];
     if (!primaryAction) return invalidObjectionRuling();
+    if (!primaryReceipt.replayed) {
+      await persistCommittedPerformance(ctx, {
+        ownerId: args.ownerId,
+        action: primaryAction,
+        eventId: eventIdForGeneratedAction(primaryAction.actionId),
+        callId: generation.callId,
+        kind: "objection_ruling",
+        context: "courtroom",
+        turnId: null,
+        outputSchemaVersion: generation.output.schemaVersion,
+        evidenceIds: generation.trace.acceptedCitations.evidenceIds,
+        semantic: normalizeRoleSemanticPerformance(
+          generation.output.performance,
+        ),
+      });
+    }
     const committedTrace = CourtroomModelCallTraceSchema.parse({
       ...generation.trace,
       committedActionId: primaryAction.actionId,
