@@ -848,6 +848,12 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: none for provider installation or synthetic real-model execution. Browser microphone permission and audible playback have not yet been exercised.
   - Commits: `a17de38`, `d86ba5b`, `57d86e9`, `1fad5f0`, `bd26311`, `89ded49`, `830450e`, `a6d282a`, and `6697ac2`.
 
+- 2026-07-19 15:39–16:00 IST — Milestone 5 browser transport and audio-pipeline checkpoint
+  - Changed: added cumulative STT credit revisions bound to an utterance and accepted-through sequence; an exact-loopback `suits.speech.v1` browser client; fail-closed handshake, generation, response, and acknowledgement fencing; an explicitly armed AudioWorklet that resamples to transferable 16 kHz mono PCM; eight-frame worklet credits; bounded playback scheduling with pressure signals, timing metadata, cancellation/barge-in, and output-latency-aware audible completion; and explicit browser speech environment defaults. Raw PCM has no persistence, fetch, analytics, logging, Convex, or OpenAI path in these modules.
+  - Verified: the Python service passed Ruff format/check, strict mypy over all 20 source modules, `uv lock --check`, and 175 tests. The seven browser speech test files passed 50 tests; scoped ESLint and root strict TypeScript passed. Independent audits found and corrected stale absolute-credit snapshots, worklet-to-main queue growth, startup sequence loss, observer-owned resource leaks, cancelled playback gaps, close/activation races, and failed-resume `AudioContext` leaks before commit.
+  - Remaining: integrate the framework-independent hearing speech controller and preflight UI; remove the production composer; exercise the production browser against the fake service; then record a real microphone utterance, audible playback, and a raw-audio boundary audit. No browser microphone, speaker, or visual proof is claimed by this checkpoint.
+  - Commits: `fc1f785`, `b35da01`, `08a3029`, and `59e46f3`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -903,6 +909,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Transformers 5.13.1 Nemotron raw-audio feature extraction requires `librosa` and a one-dimensional NumPy array; a Python tuple passes static protocol tests but fails the real feature extractor on `.shape`. The adapter now creates `np.float32` windows lazily and never imports the optional stack in fake/default CI mode.
 - The Transformers Nemotron streaming implementation mutates model-instance streaming fields, so sharing one model across simultaneous generation sessions risks transcript cross-contamination. The adapter and configuration enforce one physical native STT session, use tokenized lane release, and require process restart after unconfirmed termination.
 - Concurrent Kokoro and Nemotron CUDA initialization failed nondeterministically on Windows even though their steady-state allocation was about 1.5 GiB and both fit the 12,227 MiB GPU. Loading TTS and then STT sequentially was stable; the runtime preserves shared-call coalescing while serializing physical initialization.
+- An absolute STT availability snapshot is unsafe when unrelated TTS activity can publish flow control between a browser send and service admission. Monotonic flow revisions plus utterance identity and a cumulative accepted-through sequence let the browser subtract locally sent-but-unacknowledged PCM without double-crediting or guessing from event timing.
+- AudioWorklet messages can outpace main-thread consumption even when the speech WebSocket is bounded. The microphone processor therefore needs its own fixed in-flight frame credits and must remain unarmed until the controller has adopted every cleanup resource; otherwise startup sequence zero can be dropped on an already-running `AudioContext`.
 
 ## 15. Decisions
 
@@ -956,6 +964,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Pin the speech extras as two mutually exclusive uv profiles: `local-cpu` uses the official PyTorch CPU index and `local-cuda` uses the official CUDA 13.0 index. Both include the exact Kokoro package, Transformers 5.13.x, `librosa`, and the offline English wheel; the default `dev` sync remains lightweight and must not install real providers.
 - Keep large model transfer behind `setup-local-speech.ps1 -DownloadModels` with exact repository revisions and literal file allowlists. Provider `load()` calls must use explicit local snapshots, `local_files_only=True` where applicable, and must never repair a missing cache by contacting a hub.
 - Count the 2026-07-19 real-model closed loop as provider/STT/TTS evidence only. It is not microphone, browser playback, mid-sentence objection, or end-to-end courtroom proof; those gates remain open until exercised through the production browser path.
+- Reconcile browser microphone capacity from cumulative service watermarks, never by replacing locally debited credits with a later absolute snapshot. Reject impossible watermark identities or sequences and ignore stale revisions.
+- Keep capture and playback bounded independently of the WebSocket: arm the worklet only after browser resources are owned, allow at most eight unacknowledged worklet frames, acknowledge TTS only after playback accepts a frame, and use the browser output-latency estimate before reporting audible completion.
 
 ## 16. Verification Evidence
 
@@ -1123,6 +1133,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `uv lock --check`, `uv run ruff format src tests`, `uv run ruff check src tests`, `uv run mypy --strict src`, `uv run pytest -q`, and `git diff --check` — exit 0; all 20 source modules passed strict typing and 172 tests passed. The only warning is Starlette TestClient's upstream `httpx` deprecation.
   - Failed attempts retained as discoveries rather than passes: missing `en_core_web_sm` caused Misaki to install at first real load; missing `librosa` blocked Nemotron; tuple PCM windows caused the real processor to raise `AttributeError`; and concurrent CUDA provider construction made Kokoro loading nondeterministic. Explicit locked dependencies, fail-closed offline preflight, NumPy windows, terminal padding/revision regressions, and serialized TTS-then-STT loading corrected each issue before the passing smoke.
   - No real browser microphone or audible playback was exercised. This evidence does not close the microphone/browser gate, the raw-audio-to-Convex/OpenAI audit, or Milestone 6 mid-sentence interruption.
+
+- 2026-07-19 15:39–16:00 IST — Milestone 5 browser transport and audio-pipeline verification
+  - `cd services/speech; uv run ruff format --check src tests; uv run ruff check src tests; uv run mypy --strict src; uv run pytest -q; uv lock --check` — exit 0; 38 files were already formatted, Ruff passed, all 20 source modules passed strict typing, 175 tests passed, and 146 locked packages resolved. The only warning is Starlette TestClient's upstream `httpx` deprecation.
+  - `npx vitest run src/lib/speech` — exit 0; seven test files and 50 tests passed for protocol parsing, exact loopback transport, cumulative STT credit reconciliation, terminal debit retention, TTS acknowledgements, armed worklet resampling/credits, capture cleanup, playback pressure/timing/cancellation, and audible drain fencing.
+  - `npx eslint src/lib/speech public/worklets/suits-mic-processor.js` and `npx tsc --noEmit --pretty false` — exit 0.
+  - `git push origin main` — exit 0 through `59e46f3`; the cumulative service protocol, browser client, browser audio pipeline, and environment defaults are on `origin/main`.
+  - Browser microphone permission, real audible speaker output, visual preflight, and the production-path raw-audio audit were not exercised and remain open.
 
 ## 17. Blocked external prerequisites
 
