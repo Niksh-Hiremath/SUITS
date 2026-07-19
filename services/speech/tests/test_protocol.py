@@ -11,6 +11,7 @@ from suits_speech.protocol import (
     CancelSynthesisControl,
     CapabilitiesEvent,
     CudaCapability,
+    FlowControlEvent,
     HelloControl,
     Metric,
     MetricsEvent,
@@ -277,6 +278,53 @@ def test_server_events_round_trip_without_embedding_audio() -> None:
     capabilities_wire = json.loads(dump_message(capabilities))
     assert "protocol" not in capabilities_wire["providers"][0]
     assert "protocol" not in capabilities_wire["cuda"]
+
+
+def test_flow_control_requires_a_cumulative_stt_watermark() -> None:
+    event = FlowControlEvent(
+        stt_credit_revision=1,
+        stt_utterance_id=None,
+        stt_accepted_through_sequence=-1,
+        stt_available_frames=8,
+        stt_available_bytes=5_120,
+        tts_window_bytes=5_760,
+        tts_outstanding_bytes=0,
+    )
+
+    payload = json.loads(dump_message(event))
+    assert payload == {
+        "protocol": PROTOCOL_VERSION,
+        "type": "flow_control",
+        "sttCreditRevision": 1,
+        "sttUtteranceId": None,
+        "sttAcceptedThroughSequence": -1,
+        "sttAvailableFrames": 8,
+        "sttAvailableBytes": 5_120,
+        "ttsWindowBytes": 5_760,
+        "ttsOutstandingBytes": 0,
+    }
+    assert parse_server_event(dump_message(event)) == event
+
+    missing_identity = dict(payload)
+    missing_identity.pop("sttUtteranceId")
+    with pytest.raises(ValidationError):
+        parse_server_event(json.dumps(missing_identity))
+
+    invalid_revision = dict(payload)
+    invalid_revision["sttCreditRevision"] = 0
+    with pytest.raises(ValidationError):
+        parse_server_event(json.dumps(invalid_revision))
+
+    with pytest.raises(ValidationError, match="null sttUtteranceId"):
+        FlowControlEvent(
+            stt_credit_revision=2,
+            stt_utterance_id=None,
+            stt_accepted_through_sequence=0,
+            stt_available_frames=7,
+            stt_available_bytes=4_480,
+            tts_window_bytes=5_760,
+            tts_outstanding_bytes=0,
+        )
 
 
 def test_metric_rejects_non_finite_wire_values() -> None:

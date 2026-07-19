@@ -142,6 +142,7 @@ class SpeechConnection:
         self._hello_received = False
         self._closed = False
         self._state_lock = asyncio.Lock()
+        self._flow_control_lock = asyncio.Lock()
         self._pending_audio_header: AudioChunkControl | None = None
         self._outbound: deque[_OutboundBatch] = deque()
         self._outbound_ready = asyncio.Event()
@@ -153,6 +154,9 @@ class SpeechConnection:
         self._used_utterance_ids: set[str] = set()
         self._utterance_terminals: dict[str, Literal["final", "cancelled", "failed"]] = {}
         self._utterance_order: deque[str] = deque()
+        self._stt_credit_revision = 0
+        self._stt_credit_utterance_id: str | None = None
+        self._stt_accepted_through_sequence = -1
         self._input_credits = InputCreditWindow(
             max_frames=self._settings.stt_input_max_frames,
             max_bytes=self._settings.stt_input_max_bytes,
@@ -442,32 +446,35 @@ class SpeechConnection:
                 return
 
             rejection: tuple[str, str] | None = None
-            async with self._state_lock:
-                if self._closed:
-                    return
-                if self._read_active_utterance_locked() is not None:
-                    rejection = (
-                        "UTTERANCE_ACTIVE",
-                        "only one microphone utterance may be active",
-                    )
-                elif control.utterance_id in self._used_utterance_ids:
-                    rejection = (
-                        "UTTERANCE_REUSED",
-                        "utteranceId cannot be reused in one speech session",
-                    )
-                else:
-                    self._utterance_epoch += 1
-                    self._remember_utterance(control.utterance_id)
-                    active = _Utterance(
-                        utterance_id=control.utterance_id,
-                        epoch=self._utterance_epoch,
-                        sample_rate_hz=control.sample_rate_hz,
-                        stt_session=stt_session,
-                        vad=EnergyVad(end_silence_ms=control.end_of_utterance_silence_ms),
-                    )
-                    self._active_utterance = active
-                    self._spawn_idle_watch_locked(active)
-                    adopted = True
+            async with self._flow_control_lock:
+                async with self._state_lock:
+                    if self._closed:
+                        return
+                    if self._read_active_utterance_locked() is not None:
+                        rejection = (
+                            "UTTERANCE_ACTIVE",
+                            "only one microphone utterance may be active",
+                        )
+                    elif control.utterance_id in self._used_utterance_ids:
+                        rejection = (
+                            "UTTERANCE_REUSED",
+                            "utteranceId cannot be reused in one speech session",
+                        )
+                    else:
+                        self._utterance_epoch += 1
+                        self._remember_utterance(control.utterance_id)
+                        active = _Utterance(
+                            utterance_id=control.utterance_id,
+                            epoch=self._utterance_epoch,
+                            sample_rate_hz=control.sample_rate_hz,
+                            stt_session=stt_session,
+                            vad=EnergyVad(end_silence_ms=control.end_of_utterance_silence_ms),
+                        )
+                        self._active_utterance = active
+                        self._stt_credit_utterance_id = control.utterance_id
+                        self._stt_accepted_through_sequence = -1
+                        self._spawn_idle_watch_locked(active)
+                        adopted = True
             if rejection is not None:
                 await self._send_error(
                     code=rejection[0],
@@ -561,46 +568,48 @@ class SpeechConnection:
 
         backpressure = False
         duration_exceeded = False
-        async with self._state_lock:
-            active = self._active_utterance
-            if (
-                active is None
-                or active.utterance_id != header.utterance_id
-                or active.status not in {"listening", "finalizing"}
-                or active.next_sequence != header.sequence
-            ):
-                await self._send_error(
-                    code="STALE_AUDIO_FRAME",
-                    message="binary PCM no longer belongs to the active utterance",
-                    utterance_id=header.utterance_id,
-                )
-                return
-            duration_exceeded = (
-                active.accepted_duration_ms + header.duration_ms
-                > self._settings.stt_max_utterance_ms
-            )
-            if not duration_exceeded:
-                try:
-                    await self._input_credits.reserve(
+        async with self._flow_control_lock:
+            async with self._state_lock:
+                active = self._active_utterance
+                if (
+                    active is None
+                    or active.utterance_id != header.utterance_id
+                    or active.status not in {"listening", "finalizing"}
+                    or active.next_sequence != header.sequence
+                ):
+                    await self._send_error(
+                        code="STALE_AUDIO_FRAME",
+                        message="binary PCM no longer belongs to the active utterance",
                         utterance_id=header.utterance_id,
-                        sequence=header.sequence,
-                        byte_length=len(pcm_s16le),
                     )
-                    frame = _SttFrame(
-                        utterance=active,
-                        epoch=active.epoch,
-                        sequence=header.sequence,
-                        duration_ms=header.duration_ms,
-                        pcm_s16le=pcm_s16le,
-                    )
-                    self._stt_frames.put_nowait(frame)
-                except (InputBackpressureError, asyncio.QueueFull):
-                    backpressure = True
-                if not backpressure:
-                    active.next_sequence += 1
-                    active.pending_frames += 1
-                    active.accepted_duration_ms += header.duration_ms
-                    active.last_audio_at = time.monotonic()
+                    return
+                duration_exceeded = (
+                    active.accepted_duration_ms + header.duration_ms
+                    > self._settings.stt_max_utterance_ms
+                )
+                if not duration_exceeded:
+                    try:
+                        await self._input_credits.reserve(
+                            utterance_id=header.utterance_id,
+                            sequence=header.sequence,
+                            byte_length=len(pcm_s16le),
+                        )
+                        frame = _SttFrame(
+                            utterance=active,
+                            epoch=active.epoch,
+                            sequence=header.sequence,
+                            duration_ms=header.duration_ms,
+                            pcm_s16le=pcm_s16le,
+                        )
+                        self._stt_frames.put_nowait(frame)
+                    except (InputBackpressureError, asyncio.QueueFull):
+                        backpressure = True
+                    if not backpressure:
+                        active.next_sequence += 1
+                        active.pending_frames += 1
+                        active.accepted_duration_ms += header.duration_ms
+                        active.last_audio_at = time.monotonic()
+                        self._stt_accepted_through_sequence = header.sequence
         if duration_exceeded:
             await self._cancel_active_utterance(
                 utterance_id=header.utterance_id,
@@ -1600,18 +1609,26 @@ class SpeechConnection:
         await self._send_flow_control()
 
     async def _send_flow_control(self) -> None:
-        if self._closed or not self._hello_received:
-            return
-        credits = await self._input_credits.snapshot()
-        outstanding = await self._ack_window.outstanding_bytes()
-        await self._send_event(
-            FlowControlEvent(
-                stt_available_frames=credits.available_frames,
-                stt_available_bytes=credits.available_bytes,
-                tts_window_bytes=self._ack_window.maximum_bytes,
-                tts_outstanding_bytes=outstanding,
+        async with self._flow_control_lock:
+            if self._closed or not self._hello_received:
+                return
+            async with self._state_lock:
+                credits = await self._input_credits.snapshot()
+                stt_utterance_id = self._stt_credit_utterance_id
+                stt_accepted_through_sequence = self._stt_accepted_through_sequence
+            outstanding = await self._ack_window.outstanding_bytes()
+            self._stt_credit_revision += 1
+            await self._send_event(
+                FlowControlEvent(
+                    stt_credit_revision=self._stt_credit_revision,
+                    stt_utterance_id=stt_utterance_id,
+                    stt_accepted_through_sequence=stt_accepted_through_sequence,
+                    stt_available_frames=credits.available_frames,
+                    stt_available_bytes=credits.available_bytes,
+                    tts_window_bytes=self._ack_window.maximum_bytes,
+                    tts_outstanding_bytes=outstanding,
+                )
             )
-        )
 
     async def _outbound_worker(self) -> None:
         while not self._closed:

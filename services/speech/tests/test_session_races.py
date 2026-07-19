@@ -9,12 +9,13 @@ from typing import Literal, cast
 import pytest
 from fastapi import WebSocket
 
-from suits_speech.audio_queue import AckReservation, TtsJob
+from suits_speech.audio_queue import AckReservation, TtsAckWindow, TtsJob
 from suits_speech.config import SpeechSettings
 from suits_speech.health import SpeechRuntime
 from suits_speech.protocol import (
     AudioChunkControl,
     CancelUtteranceControl,
+    StartUtteranceControl,
     TtsAudioEvent,
 )
 from suits_speech.providers.base import (
@@ -48,6 +49,21 @@ class _RecordingSocket:
 
     async def close(self, *, code: int = 1_000, reason: str = "") -> None:
         self.closed = (code, reason)
+
+
+class _BlockingOutstandingSnapshots:
+    def __init__(self, *, maximum_bytes: int) -> None:
+        self.maximum_bytes = maximum_bytes
+        self.calls = 0
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+
+    async def outstanding_bytes(self) -> int:
+        self.calls += 1
+        if self.calls == 1:
+            self.first_started.set()
+            await self.release_first.wait()
+        return 0
 
 
 class _NoopSttSession:
@@ -157,12 +173,23 @@ def _active(
     )
     connection._active_utterance = active
     connection._utterance_epoch = 1
+    connection._stt_credit_utterance_id = utterance_id
+    connection._stt_accepted_through_sequence = active.next_sequence - 1
     connection._remember_utterance(utterance_id)
     return active
 
 
 def _json_events(socket: _RecordingSocket) -> list[dict[str, object]]:
     return [json.loads(packet) for packet in socket.sent if isinstance(packet, str)]
+
+
+def _queued_json_events(connection: SpeechConnection) -> list[dict[str, object]]:
+    return [
+        json.loads(packet)
+        for batch in connection._outbound
+        for packet in batch.packets
+        if isinstance(packet, str)
+    ]
 
 
 async def _wait_for_event(socket: _RecordingSocket, event_type: str) -> None:
@@ -175,6 +202,126 @@ async def _wait_for_event(socket: _RecordingSocket, event_type: str) -> None:
 
 async def _start_outbound(connection: SpeechConnection) -> None:
     connection._outbound_worker_task = asyncio.create_task(connection._outbound_worker())
+
+
+async def test_stt_credit_watermark_tracks_start_admission_and_terminal_state(
+    tmp_path: Path,
+) -> None:
+    connection, _ = _connection(
+        tmp_path,
+        SUITS_STT_INPUT_MAX_FRAMES="4",
+        SUITS_STT_INPUT_MAX_BYTES="2560",
+    )
+    await connection._runtime.load_models()
+    await connection._start_utterance(
+        StartUtteranceControl(
+            utterance_id="utterance:credit",
+            barge_in=False,
+        )
+    )
+
+    # An unrelated TTS cancellation publishes flow before the first PCM frame.
+    await connection._cancel_synthesis_scope(
+        scope="all",
+        target_id=None,
+        reason="test_snapshot",
+        emit_empty=False,
+    )
+    pcm = b"\x00" * 640
+    for sequence in range(2):
+        await connection._accept_audio_header(
+            AudioChunkControl(
+                utterance_id="utterance:credit",
+                sequence=sequence,
+                byte_length=len(pcm),
+                duration_ms=20,
+            )
+        )
+        await connection._handle_binary(pcm)
+
+    await connection._cancel_active_utterance(
+        utterance_id="utterance:credit",
+        reason="test_terminal",
+        emit=True,
+    )
+
+    flow_events = [
+        event for event in _queued_json_events(connection) if event.get("type") == "flow_control"
+    ]
+    assert [event["sttCreditRevision"] for event in flow_events] == [1, 2, 3, 4]
+    assert [
+        (event["sttUtteranceId"], event["sttAcceptedThroughSequence"]) for event in flow_events
+    ] == [
+        ("utterance:credit", -1),
+        ("utterance:credit", 0),
+        ("utterance:credit", 1),
+        ("utterance:credit", 1),
+    ]
+    assert flow_events[-1]["sttAvailableFrames"] == 4
+    assert flow_events[-1]["sttAvailableBytes"] == 2_560
+
+    cleanup_tasks = tuple(connection._cleanup_tasks)
+    if cleanup_tasks:
+        await asyncio.gather(*cleanup_tasks)
+    await connection._start_utterance(
+        StartUtteranceControl(
+            utterance_id="utterance:next",
+            barge_in=False,
+        )
+    )
+    await connection._cancel_synthesis_scope(
+        scope="all",
+        target_id=None,
+        reason="test_next_snapshot",
+        emit_empty=False,
+    )
+    next_flow = [
+        event for event in _queued_json_events(connection) if event.get("type") == "flow_control"
+    ][-1]
+    assert next_flow["sttCreditRevision"] == 5
+    assert next_flow["sttUtteranceId"] == "utterance:next"
+    assert next_flow["sttAcceptedThroughSequence"] == -1
+    await connection._shutdown()
+
+
+async def test_concurrent_flow_snapshots_cannot_enqueue_stale_credit_after_newer(
+    tmp_path: Path,
+) -> None:
+    connection, _ = _connection(
+        tmp_path,
+        SUITS_STT_INPUT_MAX_FRAMES="2",
+        SUITS_STT_INPUT_MAX_BYTES="1280",
+    )
+    original_ack_window = connection._ack_window
+    snapshots = _BlockingOutstandingSnapshots(maximum_bytes=original_ack_window.maximum_bytes)
+    connection._ack_window = cast(TtsAckWindow, snapshots)
+
+    first = asyncio.create_task(connection._send_flow_control())
+    await snapshots.first_started.wait()
+    await connection._input_credits.reserve(
+        utterance_id="utterance:race",
+        sequence=0,
+        byte_length=640,
+    )
+    second = asyncio.create_task(connection._send_flow_control())
+    await asyncio.sleep(0)
+    assert snapshots.calls == 1
+
+    snapshots.release_first.set()
+    await asyncio.gather(first, second)
+    flow_events = [
+        event for event in _queued_json_events(connection) if event.get("type") == "flow_control"
+    ]
+    assert [event["sttCreditRevision"] for event in flow_events] == [1, 2]
+    assert [event["sttAvailableFrames"] for event in flow_events] == [2, 1]
+    assert [event["sttAvailableBytes"] for event in flow_events] == [1_280, 640]
+
+    connection._ack_window = original_ack_window
+    await connection._input_credits.release(
+        utterance_id="utterance:race",
+        sequence=0,
+    )
+    await connection._shutdown()
 
 
 async def test_final_terminal_batch_precedes_cancel_after_final(tmp_path: Path) -> None:

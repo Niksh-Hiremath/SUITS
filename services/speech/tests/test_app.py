@@ -83,6 +83,9 @@ def test_handshake_load_and_ping(client: TestClient) -> None:
         assert flow == {
             "protocol": PROTOCOL_VERSION,
             "type": "flow_control",
+            "sttCreditRevision": 1,
+            "sttUtteranceId": None,
+            "sttAcceptedThroughSequence": -1,
             "sttAvailableFrames": 8,
             "sttAvailableBytes": 524_288,
             "ttsWindowBytes": 5_760,

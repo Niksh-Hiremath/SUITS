@@ -345,10 +345,19 @@ class MetricsEvent(ProtocolModel):
 
 class FlowControlEvent(ProtocolModel):
     type: Literal["flow_control"] = "flow_control"
+    stt_credit_revision: int = Field(ge=1)
+    stt_utterance_id: Identifier | None
+    stt_accepted_through_sequence: int = Field(ge=-1, le=2_147_483_647)
     stt_available_frames: int = Field(ge=0)
     stt_available_bytes: int = Field(ge=0)
     tts_window_bytes: int = Field(ge=2)
     tts_outstanding_bytes: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def bind_stt_watermark_to_utterance(self) -> FlowControlEvent:
+        if self.stt_utterance_id is None and self.stt_accepted_through_sequence != -1:
+            raise ValueError("a null sttUtteranceId requires sttAcceptedThroughSequence -1")
+        return self
 
 
 class ErrorEvent(ProtocolModel):
@@ -437,4 +446,7 @@ def parse_server_event(payload: str) -> ServerEvent:
 def dump_message(message: ProtocolModel) -> str:
     """Serialize a protocol message using its strict wire aliases."""
 
-    return message.model_dump_json(by_alias=True, exclude_none=True)
+    return message.model_dump_json(
+        by_alias=True,
+        exclude_none=not isinstance(message, FlowControlEvent),
+    )
