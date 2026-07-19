@@ -635,7 +635,8 @@ export class HearingController {
     this.assertOpen();
     if (
       this.preparingGeneration !== null ||
-      this.developerSubmission !== null
+      this.developerSubmission !== null ||
+      this.recording !== null
     ) {
       throw new HearingControllerError("BUSY", SAFE_MESSAGES.BUSY);
     }
@@ -1555,6 +1556,12 @@ export class HearingController {
       );
     }
 
+    // The route has already published this durable view before resolving the
+    // interruption port. Adopt its head before any fallible local playback so
+    // a missing clip, audio-device failure, or timeout cannot leave the
+    // controller behind the canonical trial record.
+    this.baseline = response.view;
+
     const reactionPlayback = partialInterruption.reactionPlayback;
     if (reactionPlayback === null) {
       throw new HearingControllerError(
@@ -1609,7 +1616,6 @@ export class HearingController {
       );
     }
 
-    this.baseline = response.view;
     this.recording = null;
     recording.completion.resolve(null);
     if (recording.postCommitRecovery !== null) {
@@ -1812,6 +1818,11 @@ export class HearingController {
           SAFE_MESSAGES.INTERRUPTION_STALE,
         );
       }
+    } catch (cause) {
+      // A failed or timed-out local job must release both the browser playback
+      // and the companion's response queue before the sealed retry can run.
+      this.cancelInterruptionPlayback(job);
+      throw cause;
     } finally {
       signal.removeEventListener("abort", abort);
       if (this.matchPlaybackJob(job.identity) === job) {
@@ -1954,7 +1965,13 @@ export class HearingController {
     event: Extract<SpeechClientEvent, { type: "tts_audio_frame" }>,
   ): void {
     const job = this.matchPlaybackJob(event.metadata);
-    if (job === null || !job.started) return;
+    if (job === null || !job.started) {
+      // Discarded/stale frames still consume companion flow-control credit.
+      // ACK them without enqueueing so cancelled responses cannot deadlock the
+      // TTS window or become audible later.
+      event.acknowledge();
+      return;
+    }
     try {
       this.playback.enqueueFrame({
         jobId: event.metadata.jobId,
