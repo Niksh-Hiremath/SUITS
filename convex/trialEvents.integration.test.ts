@@ -165,11 +165,6 @@ const appendTrustedForOwnerReference = makeFunctionReference<
   }>,
   Receipt
 >("trialEvents:appendTrustedForOwner");
-const reloadReference = makeFunctionReference<
-  "query",
-  Readonly<{ trialId: string; afterSequence?: number; limit?: number }>,
-  ReloadResult
->("trialEvents:reload");
 const reloadForOwnerReference = makeFunctionReference<
   "query",
   Readonly<{
@@ -220,6 +215,25 @@ async function setup() {
     owner: backend.withIdentity({ tokenIdentifier: OWNER_ID }),
     otherOwner: backend.withIdentity({ tokenIdentifier: OTHER_OWNER_ID }),
   };
+}
+
+async function reloadOwned(
+  backend: TestBackend,
+  input: Readonly<{
+    trialId: string;
+    ownerId?: string;
+    afterSequence?: number;
+    limit?: number;
+  }>,
+): Promise<ReloadResult> {
+  return await backend.query(reloadForOwnerReference, {
+    ownerId: input.ownerId ?? OWNER_ID,
+    trialId: input.trialId,
+    ...(input.afterSequence === undefined
+      ? {}
+      : { afterSequence: input.afterSequence }),
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
+  });
 }
 
 function createArgs(
@@ -310,7 +324,7 @@ describe("owner-bound trial event persistence", () => {
       replayed: false,
     });
     await expect(
-      otherOwner.query(reloadReference, { trialId }),
+      reloadOwned(backend, { ownerId: OTHER_OWNER_ID, trialId }),
     ).rejects.toThrow("TRIAL_NOT_FOUND");
     await expect(
       otherOwner.mutation(appendReference, {
@@ -341,7 +355,7 @@ describe("owner-bound trial event persistence", () => {
       replayed: false,
     });
 
-    const reload = await owner.query(reloadReference, { trialId });
+    const reload = await reloadOwned(backend, { trialId });
     expect(reload).toMatchObject({
       trialId,
       graphId: GRAPH_ID,
@@ -364,7 +378,7 @@ describe("owner-bound trial event persistence", () => {
         "offer:action:owner-bound:settlement": { status: "open" },
       },
     });
-    const delta = await owner.query(reloadReference, {
+    const delta = await reloadOwned(backend, {
       trialId,
       afterSequence: 1,
     });
@@ -474,7 +488,7 @@ describe("owner-bound trial event persistence", () => {
     await owner.mutation(appendReference, {
       actionJson: JSON.stringify(action),
     });
-    const reload = await owner.query(reloadReference, { trialId });
+    const reload = await reloadOwned(backend, { trialId });
     expect(
       TrialStateV3Schema.parse(JSON.parse(reload.stateJson)).updatedAt,
     ).toBe(requestedAt);
@@ -514,7 +528,7 @@ describe("owner-bound trial event persistence", () => {
       });
     });
 
-    await expect(owner.query(reloadReference, { trialId })).resolves.toMatchObject({
+    await expect(reloadOwned(backend, { trialId })).resolves.toMatchObject({
       validated: false,
       requiresMigration: true,
     });
@@ -568,7 +582,7 @@ describe("owner-bound trial event persistence", () => {
       lastSequence: 2,
       replayed: false,
     });
-    const reloaded = await owner.query(reloadReference, { trialId });
+    const reloaded = await reloadOwned(backend, { trialId });
     expect(TrialStateV3Schema.parse(JSON.parse(reloaded.stateJson))).toMatchObject(
       { phase: "opening", version: 2, lastSequence: 2 },
     );
@@ -685,7 +699,7 @@ describe("owner-bound trial event persistence", () => {
     });
 
     await expect(
-      owner.query(reloadReference, { trialId }),
+      reloadOwned(backend, { trialId }),
     ).rejects.toThrow("TRIAL_PROJECTION_MISMATCH");
     await expect(
       owner.mutation(appendReference, {
@@ -726,12 +740,12 @@ describe("owner-bound trial event persistence", () => {
     });
 
     await expect(
-      owner.query(reloadReference, { trialId }),
+      reloadOwned(backend, { trialId }),
     ).rejects.toThrow("TRIAL_EVENT_ENVELOPE_MISMATCH");
   });
 
   it("returns legacy rows for migration without rewriting them", async () => {
-    const { backend, owner } = await setup();
+    const { backend } = await setup();
     const trialId = "trial:legacy-v2";
     await backend.run(async (ctx) => {
       await ctx.db.insert("trialEvents", {
@@ -772,7 +786,7 @@ describe("owner-bound trial event persistence", () => {
       });
     });
 
-    const reload = await owner.query(reloadReference, { trialId });
+    const reload = await reloadOwned(backend, { trialId });
     expect(reload).toMatchObject({
       validated: false,
       requiresMigration: true,

@@ -48,7 +48,6 @@ import {
   internalQuery,
   internalMutation,
   mutation,
-  query,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
@@ -2054,14 +2053,6 @@ async function reloadForOwner(
       nextAfterSequence: hasMore ? lastReturnedSequence : null,
     };
 }
-
-export const reload = query({
-  args: reloadArgs,
-  handler: async (ctx, args) => {
-    const ownerId = await requireOwnerId(ctx);
-    return await reloadForOwner(ctx, args, ownerId);
-  },
-});
 
 /** Trusted server read for an owner session verified outside Convex auth. */
 export const reloadForOwnerSession = internalQuery({
