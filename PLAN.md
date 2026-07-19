@@ -546,9 +546,9 @@ Deliverables:
 - [x] interrupt coordinator with stale revision protection;
 - [x] cached objection reaction;
 - [x] GPT-5.6 objection/ruling schema;
-- [ ] sustained/overruled/rephrase/strike/resume flows;
+- [x] sustained/overruled/rephrase/strike/resume flows;
 - [x] simultaneous speaker and barge-in handling;
-- [ ] objection metrics and eval fixtures.
+- [x] objection metrics and eval fixtures.
 
 Gate:
 
@@ -880,6 +880,14 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: this is not the Milestone 6 gate. A production-path browser E2E fixture still must prove the audible objection occurs before final STT, active audio is cancelled, and the validated ruling resumes coherently. The combined sustained/overruled/rephrase/strike/resume deliverable and objection eval fixtures remain open. No microphone permission or audible-output claim is made.
   - Commits: `1177e88`, `23b331a`, `dbdc290`, `f170c52`, `501bb35`, `ac143ca`, `da2bdde`, `87a04ce`, and `affd284`.
 
+- 2026-07-20 00:14 IST - Milestone 6 strike-motion and objection-eval checkpoint
+  - Changed: added public-record-scoped strike opportunities for AI cross and recross; strict planner and counsel strike directives; spoken `MOVE_TO_STRIKE`, `STRIKE_TESTIMONY`, and `DENY_STRIKE_MOTION` events; a role-isolated Luna judge request; exact motion, testimony, action, speech, citation, model, and trace binding; atomic ruling plus terminal-audit persistence; and grant/deny continuation back to opponent planning. Pending rulings now serialize player commands, and an actorless owner-only continuation recovery path resumes abandoned model work after reload without accepting a browser-selected actor or command.
+  - Hardened: judge ruling citations must equal the challenged testimony and cannot include unrelated facts, exhibits, source segments, events, or prior statements. Exact replay requires the original owner/trial/call-bound terminal trace; a missing, changed, or second trace cannot attach to a historical ruling. Raw source-segment identifiers are removed before the public judge request is dispatched.
+  - Evaluated: added seven named objection assertions for no-write withdrawal, cached-reaction ordering, sustained cancellation/rephrase, overruled exact resume, stale/late suppression, and strike grant/deny. These fixtures are explicitly symbolic and make no browser, live-audio, or live-model claim.
+  - Verified: 1,251 tests passed with three explicit live-only skips; both TypeScript surfaces, the two-file/six-test eval suite, repository lint, production build, and `git diff --check` passed. The build generated 19/19 pages and includes `/api/hearings/[trialId]/continuation/recover`. The linked `cheery-bandicoot-36` Convex deployment synchronized in 7.56 seconds without a login prompt.
+  - Remaining: Milestone 6 is not complete until the production-path Playwright fixture proves the cached objection reaction precedes final STT, active speech is cancelled, the validated ruling commits, and the response resumes coherently. No microphone permission or audible-output claim is made.
+  - Commits: `e6fc244`, `88fd8dd`, `b1cea7e`, `58af82d`, `b1a867d`, `566b45c`, and `8bf4dfb`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -945,6 +953,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 
 - A final-bound ruling cannot be whole-chain single-flight if the BFF trusts a fixed heartbeat interval or the raw absolute expiry. The provider must wait for an immediate renewal when the claim is near expiry, every renewal request must time out before `leaseExpiresAt - clockSkew - safetyBuffer`, and claim acquisition must reserve execution time. Otherwise Convex can grant takeover while the prior Luna request is still running.
 - Reload recovery cannot enqueue both a pending ruling and its later complete continuation as independent audio jobs. The queue must retain the earliest controller baseline while replacing the pending adoption with the complete response before drain; cancellation/unmount and concurrent courtroom activity also need synchronous fences before canonical publication.
+- A generated strike ruling cannot safely rely on ordinary action idempotency alone. If replay is allowed to persist a new call ID, a schema-valid envelope can attach a second accepted audit to an already committed event. Replay must require the exact existing terminal trace for the original owner, trial, call, action, and event.
+- A pending judicial motion must be a procedure-wide serialization point. Allowing settlement or another player command to append first makes a head-bound ruling stale, so player commands now fail with `STRIKE_RULING_PENDING` and reload invokes an actorless protected continuation before accepting new work.
 
 ## 15. Decisions
 
@@ -1009,6 +1019,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep final-bound lease tokens server-only. Use the shared 30-second durable duration, a conservative five-second cross-service clock-skew allowance, a one-second pre-expiry abort buffer, and a bounded 60-second acquisition window that releases late claims rather than starting model work near the route deadline.
 - Treat a revised final that no longer matches the partial candidate as a no-write withdrawal at the unchanged source head. Play only the neutral local correction "Correction. The objection is withdrawn."; never invent a judge ruling for an event that was not committed.
 - Recover interruptions through an owner-only BFF route with no browser-selected interrupt, actor, ground, or lease authority. Publish the durable head before audio, suppress historical performance, coalesce pending-to-complete recovery before drain, and fence aborted or concurrent recovery before mutating page state.
+- Offer AI strike motions only against active public testimony elicited by the player in the current direct or redirect leg. Consume the opportunity after one motion in the appearance, regardless of disposition, to keep planning bounded and prevent repetitive motions.
+- Materialize a generic judge strike decision as exactly one append-only ruling event with embedded speech and one terminal call audit in the same Convex transaction. Derive every action, motion, turn, fact-strike, and event identity server-side.
+- Treat pending generic judicial work like interrupted-speech recovery: expose only an owner/trial actorless continuation boundary, no browser-selected directive or actor, and return the current view without generic dispatch while a leased final-bound interruption remains active.
 
 ## 16. Verification Evidence
 
@@ -1211,6 +1224,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run build` - exit 0 in 14.9 seconds; Next.js 16.2.10 compiled/typechecked, generated 19/19 pages, and registered both protected interruption routes. `npm run verify:convex-surface` - exit 0; exactly six authenticated public Convex functions remain.
   - `npx convex dev --once` - exit 0; the linked `cheery-bandicoot-36` development deployment became ready in 7.95 seconds without a login prompt and added `finalBoundInterruptionClaims.by_claim_id`, `.by_interrupt`, and `.by_owner_trial`. No production deployment, microphone permission, audible playback, or live final-bound Luna request was exercised in this checkpoint.
   - `git push origin main` - exit 0 through `affd284`; all scoped implementation, test, lint-ignore, and generated-type commits are on `origin/main`.
+
+- 2026-07-20 00:14 IST - Milestone 6 strike-motion and recovery verification
+  - `npx vitest run convex/hearingRuntime.integration.test.ts convex/trialEvents.integration.test.ts src/server/hearing-api/convex-http.source.test.ts src/domain/hearing-runtime/opponent-strike-opportunities.test.ts` - exit 0 during the focused gate; 47 tests passed before the final replay and recovery regressions were added. Final individual suites passed 25 hearing-runtime tests and 21 trial-event persistence tests.
+  - `npx vitest run src/app/hearing/page.source.test.ts src/app/api/hearings/route.test.ts src/server/hearing-api/durable-service.test.ts` - exit 0; three files and 26 tests passed for actorless recovery forwarding, malformed-response rejection, same-origin/session enforcement, real prepared-model orchestration, page reload wiring, and stale-head fencing.
+  - `npm test` - exit 0; 145 files passed, three live-only files skipped, 1,251 tests passed, and three tests skipped. `npm run eval` - exit 0; two files and six tests passed, including seven named objection-flow assertions.
+  - `npm run lint` - exit 0 with only the four existing generated Convex warnings. `npm run typecheck`, `npm exec -- tsc -p convex/tsconfig.json --noEmit`, and `git diff --check` - exit 0.
+  - `npm run build` - exit 0 in 16.2 seconds; Next.js 16.2.10 compiled/typechecked and generated 19/19 pages; the route manifest includes `/api/hearings/[trialId]/continuation/recover`.
+  - `npx convex dev --once` - exit 0; linked development deployment `cheery-bandicoot-36` reported functions ready in 7.56 seconds without a login prompt. No production deploy, microphone permission, audible playback, Playwright run, or live Luna strike decision was exercised in this checkpoint.
+  - `git push origin main` - exit 0 through `8bf4dfb`; the pure opportunity selector, judge orchestration, atomic ruling/audit, persistence regressions, and protected reload recovery are on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
