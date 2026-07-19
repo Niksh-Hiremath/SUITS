@@ -3,6 +3,22 @@ import { convexTest, type TestConvex } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { createThreeWitnessCaseGraphV1Fixture } from "../src/domain/case-graph";
+import { sha256Utf8 } from "../src/domain/case-graph/hash";
+import {
+  COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+  COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+  CourtroomModelCallTraceSchema,
+  JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+  JudgeRoleResponseModelOutputSchema,
+  type JudgeRoleResponseModelOutput,
+} from "../src/domain/courtroom-ai";
+import {
+  HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HearingJudgeResponsePrecommitSchema,
+  hashJudgeResponseModelOutput,
+  judgeResponseOutputCitations,
+  type HearingJudgeResponsePrecommit,
+} from "../src/domain/hearing-runtime";
 import type { TrialPolicyActorBindingInput } from "../src/domain/trial-policy";
 import {
   TRIAL_ACTION_SCHEMA_VERSION_V3,
@@ -15,11 +31,12 @@ import schema from "./schema";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./courtroomModelCalls.ts": () => import("./courtroomModelCalls"),
   "./trialEvents.ts": () => import("./trialEvents"),
 };
 
-const OWNER_ID = "owner:trial-events-primary";
-const OTHER_OWNER_ID = "owner:trial-events-other";
+const OWNER_ID = "owner:123e4567-e89b-42d3-a456-426614174001";
+const OTHER_OWNER_ID = "owner:123e4567-e89b-42d3-a456-426614174002";
 const GRAPH_ID = "graph:trial-events-published";
 const OTHER_GRAPH_ID = "graph:trial-events-other-owner";
 const DRAFT_GRAPH_ID = "graph:trial-events-draft";
@@ -165,6 +182,16 @@ const appendTrustedForOwnerReference = makeFunctionReference<
   }>,
   Receipt
 >("trialEvents:appendTrustedForOwner");
+const appendJudgeResponseForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    actionJson: string;
+    generationJson: string;
+    writeSnapshot?: boolean;
+  }>,
+  Receipt
+>("trialEvents:appendJudgeResponseForOwner");
 const reloadForOwnerReference = makeFunctionReference<
   "query",
   Readonly<{
@@ -304,6 +331,448 @@ function forgedJudgeAction(trialId: string): TrialActionV3 {
     modelMetadata: null,
     type: "BEGIN_PHASE",
     payload: { phase: "opening" },
+  });
+}
+
+const JUDGE_STRIKE_TESTIMONY_ID = "testimony:judge-response:answer";
+const JUDGE_STRIKE_FACT_ID = "fact_complaint_sent";
+
+function judgeFixtureAction(input: Readonly<{
+  trialId: string;
+  actionId: string;
+  expectedStateVersion: number;
+  actor: ActorRef;
+  source: "user" | "ai" | "deterministic" | "system";
+  causationId: string;
+  type: TrialActionV3["type"];
+  payload: unknown;
+  responseId?: string;
+  requestedAt?: string;
+  modelMetadata?: TrialActionV3["modelMetadata"];
+}>): TrialActionV3 {
+  return TrialActionV3Schema.parse({
+    schemaVersion: TRIAL_ACTION_SCHEMA_VERSION_V3,
+    actionId: input.actionId,
+    trialId: input.trialId,
+    expectedStateVersion: input.expectedStateVersion,
+    actor: input.actor,
+    source: input.source,
+    requestedAt:
+      input.requestedAt ??
+      new Date(
+        STARTED_AT + (input.expectedStateVersion + 1) * 1_000,
+      ).toISOString(),
+    causationId: input.causationId,
+    correlationId: input.trialId,
+    responseId: input.responseId ?? null,
+    interruptId: null,
+    modelMetadata: input.modelMetadata ?? null,
+    type: input.type,
+    payload: input.payload,
+  });
+}
+
+async function setupPendingJudgeStrikeMotion(ruling: "granted" | "denied") {
+  const { backend } = await setup();
+  const trialId = `trial:judge-response:${ruling}`;
+  const append = async (trialAction: TrialActionV3): Promise<Receipt> =>
+    await backend.mutation(appendTrustedForOwnerReference, {
+      ownerId: OWNER_ID,
+      actionJson: JSON.stringify(trialAction),
+    });
+  const startActionId = `action:${trialId}:start`;
+  await backend.mutation(createForOwnerReference, {
+    ownerId: OWNER_ID,
+    ...createArgs(trialId, startActionId),
+  });
+
+  const phaseActionId = `action:${trialId}:phase`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: phaseActionId,
+      expectedStateVersion: 1,
+      actor: ACTORS.judge,
+      source: "deterministic",
+      causationId: `event:${startActionId}`,
+      type: "BEGIN_PHASE",
+      payload: { phase: "case_in_chief" },
+    }),
+  );
+  const callActionId = `action:${trialId}:call`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: callActionId,
+      expectedStateVersion: 2,
+      actor: ACTORS.userCounsel,
+      source: "user",
+      causationId: `event:${phaseActionId}`,
+      type: "CALL_WITNESS",
+      payload: { witnessId: ACTORS.rina.witnessId, calledBySide: "user" },
+    }),
+  );
+  const swearActionId = `action:${trialId}:swear`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: swearActionId,
+      expectedStateVersion: 3,
+      actor: ACTORS.judge,
+      source: "deterministic",
+      causationId: `event:${callActionId}`,
+      type: "SWEAR_WITNESS",
+      payload: { witnessId: ACTORS.rina.witnessId },
+    }),
+  );
+  const questionActionId = `action:${trialId}:question`;
+  const questionId = `question:${trialId}`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: questionActionId,
+      expectedStateVersion: 4,
+      actor: ACTORS.userCounsel,
+      source: "user",
+      causationId: `event:${swearActionId}`,
+      type: "ASK_QUESTION",
+      payload: {
+        questionId,
+        witnessId: ACTORS.rina.witnessId,
+        examinationKind: "direct",
+        text: "Did you send the complaint?",
+        turnId: `turn:${trialId}:question`,
+        presentedEvidenceIds: [],
+      },
+    }),
+  );
+  const requestActionId = `action:${trialId}:request`;
+  const responseId = `response:${trialId}`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: requestActionId,
+      expectedStateVersion: 5,
+      actor: ACTORS.system,
+      source: "system",
+      causationId: `event:${questionActionId}`,
+      type: "REQUEST_RESPONSE",
+      payload: {
+        responseId,
+        actorId: ACTORS.rina.actorId,
+        purpose: "answer_question",
+      },
+      responseId,
+    }),
+  );
+  const answerActionId = `action:${trialId}:answer`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: answerActionId,
+      expectedStateVersion: 6,
+      actor: ACTORS.rina,
+      source: "deterministic",
+      causationId: `event:${requestActionId}`,
+      type: "ANSWER_QUESTION",
+      payload: {
+        responseId,
+        questionId,
+        witnessId: ACTORS.rina.witnessId,
+        testimonyId: JUDGE_STRIKE_TESTIMONY_ID,
+        turnId: `turn:${trialId}:answer`,
+        text: "I sent the complaint.",
+        factIds: [JUDGE_STRIKE_FACT_ID],
+        evidenceIds: [],
+      },
+      responseId,
+    }),
+  );
+  const motionActionId = `action:${trialId}:motion`;
+  const motionId = `motion:${trialId}`;
+  await append(
+    judgeFixtureAction({
+      trialId,
+      actionId: motionActionId,
+      expectedStateVersion: 7,
+      actor: ACTORS.opposingCounsel,
+      source: "user",
+      causationId: `event:${answerActionId}`,
+      type: "MOVE_TO_STRIKE",
+      payload: {
+        motionId,
+        testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
+        reason: "The response exceeded the permitted scope.",
+        speech: {
+          turnId: `turn:${trialId}:motion`,
+          text: "Move to strike the response.",
+          citations: {
+            factIds: [],
+            evidenceIds: [],
+            testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
+            eventIds: [],
+            sourceSegmentIds: [],
+          },
+        },
+      },
+    }),
+  );
+  return {
+    backend,
+    trialId,
+    motionId,
+    motionEventId: `event:${motionActionId}`,
+  };
+}
+
+function judgeStrikeOutput(
+  ruling: "granted" | "denied",
+): JudgeRoleResponseModelOutput {
+  return JudgeRoleResponseModelOutputSchema.parse({
+    schemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    speechSegments: [
+      {
+        text:
+          ruling === "granted"
+            ? "The motion to strike is granted."
+            : "The motion to strike is denied.",
+        citations: {
+          factIds: [],
+          evidenceIds: [],
+          testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
+          transcriptTurnIds: [],
+          sourceSegmentIds: [],
+          priorStatementIds: [],
+          issueIds: [],
+          instructionIds: [],
+          ruleIds: [],
+          settlementOfferIds: [],
+        },
+      },
+    ],
+    proposedAction: {
+      kind: "rule_on_strike_motion",
+      ruling,
+      reason:
+        ruling === "granted"
+          ? "The challenged response exceeded the permitted scope."
+          : "The challenged response remained within the permitted scope.",
+    },
+    performance: {
+      activity: "ruling",
+      emotion: "neutral",
+      intensity: 0.5,
+      gazeTarget: "questioning_counsel",
+      gesture: "gavel",
+      speakingStyle: "formal",
+    },
+  });
+}
+
+function judgeStrikeGeneration(input: Readonly<{
+  trialId: string;
+  motionEventId: string;
+  ruling: "granted" | "denied";
+  output?: JudgeRoleResponseModelOutput;
+}>): HearingJudgeResponsePrecommit {
+  const output = input.output ?? judgeStrikeOutput(input.ruling);
+  const outputHash = hashJudgeResponseModelOutput(output);
+  const citations = judgeResponseOutputCitations(output);
+  const outputCharacterCount = JSON.stringify(output).length;
+  const proposedCitationCount = output.speechSegments.reduce(
+    (total, segment) =>
+      total +
+      Object.values(segment.citations).reduce(
+        (segmentTotal, identifiers) => segmentTotal + identifiers.length,
+        0,
+      ),
+    0,
+  );
+  const callId = `call:${input.trialId}:judge`;
+  const decisionId = `decision:${input.trialId}:judge`;
+  const providerRequestId = `request:${input.trialId}:judge`;
+  const completedAt = "2026-07-19T06:00:08.700Z";
+  const usage = {
+    inputTokens: 420,
+    outputTokens: 58,
+    totalTokens: 478,
+    cachedInputTokens: 180,
+    cacheWriteTokens: 0,
+    reasoningTokens: 10,
+  };
+  return HearingJudgeResponsePrecommitSchema.parse({
+    schemaVersion: HEARING_JUDGE_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+    trialId: input.trialId,
+    callId,
+    decisionId,
+    expectedStateVersion: 8,
+    expectedLastEventId: input.motionEventId,
+    output,
+    modelMetadata: {
+      model: "gpt-5.6-luna",
+      requestId: providerRequestId,
+      promptVersion: "role-responder.judge.prompt.v1",
+      schemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+      latencyMs: 600,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: 0.001,
+      retryCount: 0,
+      validationFailureCount: 0,
+    },
+    trace: {
+      schemaVersion: COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+      callId,
+      trialId: input.trialId,
+      responseId: null,
+      actorId: ACTORS.judge.actorId,
+      actorRole: "judge",
+      callClass: "role_responder",
+      task: "judge_response",
+      inputEventIds: [input.motionEventId],
+      expectedStateVersion: 8,
+      expectedLastEventId: input.motionEventId,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      providerProtocolVersion: "responses-api.v1",
+      promptVersion: "role-responder.judge.prompt.v1",
+      outputSchemaVersion: JUDGE_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+      knowledgeScope: {
+        knowledgeSchemaVersion: "knowledge-view.v2",
+        knowledgeViewHash: "a".repeat(64),
+        stateVersion: 8,
+        factCount: 1,
+        evidenceCount: 0,
+        testimonyCount: 1,
+        priorStatementCount: 0,
+        sourceSegmentCount: 0,
+        publicRecordEventCount: 8,
+        currentExchangeCount: 1,
+      },
+      promptAudit: {
+        stablePrefixHash: "b".repeat(64),
+        trustedContextHash: "c".repeat(64),
+        untrustedInputHash: "d".repeat(64),
+        inputCharacterCount: 1_000,
+      },
+      status: "accepted",
+      startedAt: "2026-07-19T06:00:08.100Z",
+      completedAt,
+      latencyMs: 600,
+      firstStructuredDeltaMs: 190,
+      firstAcceptedSegmentMs: 360,
+      retryCount: 0,
+      validationFailureCount: 0,
+      estimatedCostUsd: 0.001,
+      usage,
+      acceptedAttempt: 1,
+      acceptedCitations: citations,
+      acceptedCitationCount: Object.values(citations).reduce(
+        (total, identifiers) => total + identifiers.length,
+        0,
+      ),
+      outputHash,
+      outputCharacterCount,
+      committedActionId: null,
+      committedEventId: null,
+      safeFailureCode: null,
+      attempts: [
+        {
+          schemaVersion: COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
+          attempt: 1,
+          mode: "initial",
+          status: "accepted",
+          providerRequestId,
+          providerResponseId: `response:${input.trialId}:judge`,
+          startedAt: "2026-07-19T06:00:08.100Z",
+          completedAt,
+          latencyMs: 600,
+          firstStructuredDeltaMs: 190,
+          streamEventCount: 9,
+          structuredDeltaCount: 3,
+          streamedCharacterCount: outputCharacterCount,
+          outputHash,
+          proposedCitationCount,
+          usage,
+          validationIssueCodes: [],
+          safeErrorCode: null,
+        },
+      ],
+    },
+  });
+}
+
+function generatedJudgeStrikeAction(
+  generation: HearingJudgeResponsePrecommit,
+): Extract<TrialActionV3, { type: "STRIKE_TESTIMONY" | "DENY_STRIKE_MOTION" }> {
+  const material = {
+    trialId: generation.trialId,
+    decisionId: generation.decisionId,
+  };
+  const digest = sha256Utf8(JSON.stringify(material));
+  const actionId = `action:judge-strike-ruling:${digest}`;
+  const text = generation.output.speechSegments
+    .map((segment) => segment.text)
+    .join(" ");
+  const citations = judgeResponseOutputCitations(generation.output);
+  const speech = {
+    turnId: `turn:judge-strike-ruling:${digest}`,
+    text,
+    citations: {
+      factIds: citations.factIds,
+      evidenceIds: citations.evidenceIds,
+      testimonyIds: citations.testimonyIds,
+      eventIds: citations.eventIds,
+      sourceSegmentIds: citations.sourceSegmentIds,
+    },
+  };
+  const common = {
+    trialId: generation.trialId,
+    actionId,
+    expectedStateVersion: generation.expectedStateVersion,
+    actor: ACTORS.judge,
+    source: "ai" as const,
+    causationId: generation.expectedLastEventId,
+    requestedAt: generation.trace.completedAt ?? undefined,
+    modelMetadata: generation.modelMetadata,
+  };
+  const proposed = generation.output.proposedAction;
+  if (proposed.kind !== "rule_on_strike_motion") {
+    throw new Error("Judge strike fixture requires a strike ruling");
+  }
+  if (proposed.ruling === "granted") {
+    return judgeFixtureAction({
+      ...common,
+      type: "STRIKE_TESTIMONY",
+      payload: {
+        motionId: `motion:${generation.trialId}`,
+        testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
+        factIds: [JUDGE_STRIKE_FACT_ID],
+        speech,
+      },
+    }) as Extract<TrialActionV3, { type: "STRIKE_TESTIMONY" }>;
+  }
+  return judgeFixtureAction({
+    ...common,
+    type: "DENY_STRIKE_MOTION",
+    payload: {
+      motionId: `motion:${generation.trialId}`,
+      reason: proposed.reason,
+      speech,
+    },
+  }) as Extract<TrialActionV3, { type: "DENY_STRIKE_MOTION" }>;
+}
+
+async function appendJudgeResponse(
+  backend: TestBackend,
+  trialAction: TrialActionV3,
+  generation: HearingJudgeResponsePrecommit,
+): Promise<Receipt> {
+  return await backend.mutation(appendJudgeResponseForOwnerReference, {
+    ownerId: OWNER_ID,
+    actionJson: JSON.stringify(trialAction),
+    generationJson: JSON.stringify(generation),
+    writeSnapshot: true,
   });
 }
 
@@ -810,6 +1279,377 @@ describe("owner-bound trial event persistence", () => {
       projectionCount: 1,
       eventVersion: "trial-event.v2",
       stateVersion: "trial-state.v2",
+    });
+  });
+});
+
+describe("atomic generated judge-response append", () => {
+  it.each(["granted", "denied"] as const)(
+    "commits and exactly replays a %s strike ruling with its terminal trace",
+    async (ruling) => {
+      const fixture = await setupPendingJudgeStrikeMotion(ruling);
+      const generation = judgeStrikeGeneration({
+        trialId: fixture.trialId,
+        motionEventId: fixture.motionEventId,
+        ruling,
+      });
+      const trialAction = generatedJudgeStrikeAction(generation);
+
+      const first = await appendJudgeResponse(
+        fixture.backend,
+        trialAction,
+        generation,
+      );
+      expect(first).toMatchObject({
+        trialId: fixture.trialId,
+        actionId: trialAction.actionId,
+        committedStateVersion: 9,
+        firstSequence: 9,
+        lastSequence: 9,
+        replayed: false,
+      });
+      const replay = await appendJudgeResponse(
+        fixture.backend,
+        trialAction,
+        generation,
+      );
+      expect(replay).toEqual({ ...first, replayed: true });
+
+      const persisted = await fixture.backend.run(async (ctx) => ({
+        events: await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", fixture.trialId),
+          )
+          .collect(),
+        receipts: await ctx.db
+          .query("actionReceipts")
+          .withIndex("by_trial_version", (index) =>
+            index.eq("trialId", fixture.trialId),
+          )
+          .collect(),
+        projection: await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (index) =>
+            index.eq("trialId", fixture.trialId),
+          )
+          .unique(),
+        calls: await ctx.db
+          .query("courtroomModelCalls")
+          .withIndex("by_call_id", (index) =>
+            index.eq("callId", generation.callId),
+          )
+          .collect(),
+        attempts: await ctx.db
+          .query("courtroomModelCallAttempts")
+          .withIndex("by_call_attempt", (index) =>
+            index.eq("callId", generation.callId),
+          )
+          .collect(),
+        snapshots: await ctx.db
+          .query("trialSnapshots")
+          .withIndex("by_trial_version", (index) =>
+            index.eq("trialId", fixture.trialId),
+          )
+          .collect(),
+      }));
+      expect(persisted.events).toHaveLength(9);
+      expect(persisted.receipts).toHaveLength(9);
+      expect(persisted.calls).toHaveLength(1);
+      expect(persisted.attempts).toHaveLength(1);
+      expect(persisted.snapshots.at(-1)).toMatchObject({ stateVersion: 9 });
+      expect(persisted.projection).toMatchObject({
+        ownerId: OWNER_ID,
+        stateVersion: 9,
+        lastSequence: 9,
+      });
+      const state = TrialStateV3Schema.parse(
+        JSON.parse(persisted.projection?.stateJson ?? "null"),
+      );
+      expect(state.strikeMotions[fixture.motionId]).toMatchObject({
+        status: ruling,
+        rulingEventId: first.eventIds[0],
+      });
+      expect(state.testimony[JUDGE_STRIKE_TESTIMONY_ID]?.status).toBe(
+        ruling === "granted" ? "stricken" : "active",
+      );
+      const rulingEvents = persisted.events.filter(
+        (event) => event.actionId === trialAction.actionId,
+      );
+      expect(rulingEvents).toHaveLength(1);
+      expect(rulingEvents[0]).toMatchObject({
+        eventId: first.eventIds[0],
+        eventType:
+          ruling === "granted"
+            ? "STRIKE_TESTIMONY"
+            : "DENY_STRIKE_MOTION",
+        actorId: ACTORS.judge.actorId,
+        source: "ai",
+      });
+      expect(JSON.parse(rulingEvents[0]?.payloadJson ?? "null")).toMatchObject({
+        motionId: fixture.motionId,
+        speech: {
+          turnId: expect.stringContaining("turn:judge-strike-ruling:"),
+          text: generation.output.speechSegments[0]?.text,
+          citations: {
+            testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
+          },
+        },
+      });
+      expect(
+        CourtroomModelCallTraceSchema.parse(
+          JSON.parse(persisted.calls[0]?.traceJson ?? "null"),
+        ),
+      ).toMatchObject({
+        callId: generation.callId,
+        status: "accepted",
+        committedActionId: trialAction.actionId,
+        committedEventId: first.eventIds[0],
+      });
+    },
+  );
+
+  it.each([
+    ["fact", "factIds", JUDGE_STRIKE_FACT_ID],
+    ["evidence", "evidenceIds", "evidence_unrelated"],
+    ["testimony", "testimonyIds", "testimony:unrelated"],
+    ["source", "sourceSegmentIds", "source_segment_unrelated"],
+    ["prior statement", "priorStatementIds", "prior_statement_unrelated"],
+  ] as const)(
+    "rejects a strike ruling with an extra %s citation",
+    async (_label, citationField, citationId) => {
+      const fixture = await setupPendingJudgeStrikeMotion("granted");
+      const baseOutput = judgeStrikeOutput("granted");
+      const speechSegment = baseOutput.speechSegments[0];
+      if (speechSegment === undefined) {
+        throw new Error("Judge strike fixture requires one speech segment");
+      }
+      const output = JudgeRoleResponseModelOutputSchema.parse({
+        ...baseOutput,
+        speechSegments: [
+          {
+            ...speechSegment,
+            citations: {
+              ...speechSegment.citations,
+              [citationField]: [
+                ...speechSegment.citations[citationField],
+                citationId,
+              ],
+            },
+          },
+        ],
+      });
+      const generation = judgeStrikeGeneration({
+        trialId: fixture.trialId,
+        motionEventId: fixture.motionEventId,
+        ruling: "granted",
+        output,
+      });
+      const trialAction = generatedJudgeStrikeAction(generation);
+
+      await expect(
+        appendJudgeResponse(fixture.backend, trialAction, generation),
+      ).rejects.toThrow("JUDGE_GENERATION_INVALID");
+
+      const persisted = await fixture.backend.run(async (ctx) => ({
+        events: await ctx.db
+          .query("trialEvents")
+          .withIndex("by_trial_sequence", (index) =>
+            index.eq("trialId", fixture.trialId),
+          )
+          .collect(),
+        calls: await ctx.db.query("courtroomModelCalls").collect(),
+        attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
+      }));
+      expect(persisted.events).toHaveLength(8);
+      expect(persisted.calls).toHaveLength(0);
+      expect(persisted.attempts).toHaveLength(0);
+    },
+  );
+
+  it("rejects a ruling replay when its terminal trace row is absent", async () => {
+    const fixture = await setupPendingJudgeStrikeMotion("granted");
+    const generation = judgeStrikeGeneration({
+      trialId: fixture.trialId,
+      motionEventId: fixture.motionEventId,
+      ruling: "granted",
+    });
+    const trialAction = generatedJudgeStrikeAction(generation);
+    await appendJudgeResponse(fixture.backend, trialAction, generation);
+
+    await fixture.backend.run(async (ctx) => {
+      const call = await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", generation.callId),
+        )
+        .unique();
+      if (call === null) throw new Error("Expected persisted judge trace");
+      const attempts = await ctx.db
+        .query("courtroomModelCallAttempts")
+        .withIndex("by_call_attempt", (index) =>
+          index.eq("callId", generation.callId),
+        )
+        .collect();
+      for (const attempt of attempts) await ctx.db.delete(attempt._id);
+      await ctx.db.delete(call._id);
+    });
+
+    await expect(
+      appendJudgeResponse(fixture.backend, trialAction, generation),
+    ).rejects.toThrow("JUDGE_GENERATION_INVALID");
+
+    const persisted = await fixture.backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+      receipts: await ctx.db
+        .query("actionReceipts")
+        .withIndex("by_trial_version", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+      attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
+    }));
+    expect(persisted.events).toHaveLength(9);
+    expect(persisted.receipts).toHaveLength(9);
+    expect(persisted.calls).toHaveLength(0);
+    expect(persisted.attempts).toHaveLength(0);
+  });
+
+  it("rejects a ruling replay when its terminal trace differs", async () => {
+    const fixture = await setupPendingJudgeStrikeMotion("granted");
+    const generation = judgeStrikeGeneration({
+      trialId: fixture.trialId,
+      motionEventId: fixture.motionEventId,
+      ruling: "granted",
+    });
+    const trialAction = generatedJudgeStrikeAction(generation);
+    await appendJudgeResponse(fixture.backend, trialAction, generation);
+
+    const tamperedTraceJson = await fixture.backend.run(async (ctx) => {
+      const call = await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", generation.callId),
+        )
+        .unique();
+      if (call === null) throw new Error("Expected persisted judge trace");
+      const trace = CourtroomModelCallTraceSchema.parse(
+        JSON.parse(call.traceJson),
+      );
+      const tamperedTrace = CourtroomModelCallTraceSchema.parse({
+        ...trace,
+        knowledgeScope: {
+          ...trace.knowledgeScope,
+          knowledgeViewHash: "e".repeat(64),
+        },
+      });
+      const traceJson = JSON.stringify(tamperedTrace);
+      await ctx.db.patch(call._id, { traceJson });
+      return traceJson;
+    });
+
+    await expect(
+      appendJudgeResponse(fixture.backend, trialAction, generation),
+    ).rejects.toThrow("JUDGE_GENERATION_INVALID");
+
+    const persisted = await fixture.backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+      calls: await ctx.db
+        .query("courtroomModelCalls")
+        .withIndex("by_call_id", (index) =>
+          index.eq("callId", generation.callId),
+        )
+        .collect(),
+      attempts: await ctx.db
+        .query("courtroomModelCallAttempts")
+        .withIndex("by_call_attempt", (index) =>
+          index.eq("callId", generation.callId),
+        )
+        .collect(),
+    }));
+    expect(persisted.events).toHaveLength(9);
+    expect(persisted.calls).toHaveLength(1);
+    expect(persisted.calls[0]?.traceJson).toBe(tamperedTraceJson);
+    expect(persisted.attempts).toHaveLength(1);
+  });
+
+  it("rejects a stale generated head without appending a ruling or trace", async () => {
+    const fixture = await setupPendingJudgeStrikeMotion("granted");
+    const generation = judgeStrikeGeneration({
+      trialId: fixture.trialId,
+      motionEventId: fixture.motionEventId,
+      ruling: "granted",
+    });
+    const trialAction = generatedJudgeStrikeAction(generation);
+    const staleLastEventId = `event:${fixture.trialId}:stale-head`;
+    const staleGeneration = HearingJudgeResponsePrecommitSchema.parse({
+      ...generation,
+      expectedLastEventId: staleLastEventId,
+      trace: {
+        ...generation.trace,
+        inputEventIds: [staleLastEventId],
+        expectedLastEventId: staleLastEventId,
+      },
+    });
+
+    await expect(
+      appendJudgeResponse(
+        fixture.backend,
+        trialAction,
+        staleGeneration,
+      ),
+    ).rejects.toThrow("JUDGE_GENERATION_STALE");
+
+    const persisted = await fixture.backend.run(async (ctx) => ({
+      events: await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+      receipts: await ctx.db
+        .query("actionReceipts")
+        .withIndex("by_trial_version", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+      projection: await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .unique(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+      attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
+      snapshots: await ctx.db
+        .query("trialSnapshots")
+        .withIndex("by_trial_version", (index) =>
+          index.eq("trialId", fixture.trialId),
+        )
+        .collect(),
+    }));
+    expect(persisted.events).toHaveLength(8);
+    expect(persisted.receipts).toHaveLength(8);
+    expect(
+      persisted.events.some((event) => event.actionId === trialAction.actionId),
+    ).toBe(false);
+    expect(persisted.calls).toHaveLength(0);
+    expect(persisted.attempts).toHaveLength(0);
+    expect(persisted.snapshots).toHaveLength(1);
+    expect(persisted.projection).toMatchObject({
+      stateVersion: 8,
+      lastSequence: 8,
     });
   });
 });
