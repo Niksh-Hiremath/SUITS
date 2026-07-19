@@ -563,7 +563,7 @@ Deliverables:
 - [x] character animation state machines;
 - [x] camera director;
 - [x] lip/viseme timing;
-- [ ] evidence/ruling/settlement transitions;
+- [x] evidence/ruling/settlement transitions;
 - [x] quality settings and responsive layout;
 - [x] accessibility and motion-reduction support;
 - [ ] visual regression evidence.
@@ -916,6 +916,13 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: Milestone 7 is not complete. Validated GPT performance metadata, evidence and settlement transitions, a deterministic visual state atlas, success-run screenshots/video of every required state, and the primary full-trial Playwright flow remain open. Automated Chromium remains fake-media and muted-output evidence, not a real microphone, physical speaker audibility, or GPU speech claim.
   - Commits: `d32d165`, `378595f`, `361b3b5`, `3b77f41`, `b763b48`, and `01d55c4`.
 
+- 2026-07-20 04:48 IST - Milestone 7 durable semantics and courtroom-transition checkpoint
+  - Changed: added a strict v2 committed-performance contract and append-only Convex sidecar for accepted witness, counsel, judge, ruling, negotiation, and jury performance proposals; projected only head-valid public courtroom cues; and retained lazy validation/upgrade for legacy v1 rows. The pure presentation runtime now owns exact evidence/settlement enter, update, switch, and exit phases plus the ready -> gavel -> holding ruling sequence. The hearing page rebases these states against the exact trial head and uses one absolute wake selector for camera, display, and ruling deadlines.
+  - Renderer boundary: the page joins a committed cue only after exact local playback has audibly started, against one active non-stricken turn or the exact current ruling head. The adapter removes call/action/event IDs, hashes, evidence IDs, actor provenance, and role `activity`; the stage receives only bounded emotion, intensity, delivery/style, gaze, and gesture values. Model metadata cannot select actor, animation, posture, camera, mouth timing, display lifecycle, or gavel timing. `stand`, `sit`, and `gavel` semantic gestures are intentionally inert. Reduced motion is time-invariant, and one revision/frame-clock cache reduces the R3F demand loop from multiple deep runtime selections to one shared sample per frame.
+  - Verified: the linked Convex development deployment accepted the sidecar/functions through `npx convex dev --once` without a login prompt. The final focused semantic/runtime/page/renderer command passed five files and 45 tests; strict TypeScript, zero-warning scoped ESLint, and `git diff --check` passed. The full root suite passed 153 files with three intentional live-only skips (1,336 tests passed, three skipped), and `npm run build` compiled/typechecked and generated all 19 routes in 16.8 seconds. Independent audits found and confirmed fixes for actor-namespace mismatch, stricken/future/cross-trial cue leakage, stale ruling heads, renderer `activity` leakage, duplicate live regions, repeated per-frame deep parsing, and transition-duration drift; the final semantic-renderer review reported no P0-P3 findings.
+  - Remaining: Milestone 7 still requires the deterministic visual state atlas, success screenshots/video for every required character state and the mid-sentence objection sequence, plus a primary full-trial Playwright flow with no console errors. Fake-media/muted browser evidence still does not prove a human microphone, physical speaker audibility, or GPU speech quality.
+  - Commits: `417a6d4`, `7626539`, `001cf52`, `3ec0e21`, `d56f2bc`, `7c5f92a`, `9ec01e7`, `d50bec1`, and `8859586`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -994,6 +1001,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - The browser playback adapter schedules each source at least eight milliseconds ahead of `AudioContext.currentTime`. The initial M7 probe timestamped the intercepted JavaScript call, so it could not prove mouth-after-scheduled-start ordering until it retained the `when` value and converted both clocks.
 - A durable base reframe can keep the same semantic actor while changing composition, most visibly from `witness_close` to `witness_counsel_two_shot`. Actor-only camera state silently bypassed hysteresis for that case; exact shot ownership fixed it.
 - R3F `frameloop="demand"` still becomes a continuous loop when a component calls `invalidate()` on every active semantic frame. Reduced motion required both static pose time and explicit invalidation termination, not only smaller animation amplitudes.
+- Durable actor IDs and local speech actor IDs deliberately occupy different namespaces. A browser semantic join must bind through the canonical turn/ruling plus the local scene slot and purpose; comparing those actor strings, or comparing a durable Responses API ID with a local TTS response ID, incorrectly suppresses valid performance.
+- Schema-valid committed cues still require cross-field projection fences. Transcript cues must be active, same-trial, and no newer than the current view, while an unscoped current ruling cue must match the exact trial/version/last-event head before it can influence audible presentation.
+- `selectCourtroomPresentationRuntime` performs strict snapshot validation and can carry up to 2,048 mouth cues. Calling it independently from several R3F `useFrame` callbacks multiplies deep parsing/scanning cost; one cache keyed by immutable runtime revision plus the shared frame clock preserves exact time sampling with one selection per demand frame.
 
 ## 15. Decisions
 
@@ -1070,6 +1080,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - `AudioBufferSourceNode.start()` schedules against the AudioContext clock and may target a future `when`; the JavaScript call timestamp is not an audible-start timestamp. Browser timing evidence must convert that scheduled context time to the page monotonic clock, and muted fake-media automation must not claim physical speaker audibility.
 - Camera actor identity is insufficient to preserve composition: the witness can validly own both a close shot and a witness/counsel two-shot. The ephemeral runtime therefore owns the exact current and pending shot in addition to actor, priority, and cue order.
 - Reduced motion must freeze time-varying pose functions and stop mouth/pose self-invalidation after the event-triggered frame. A static semantic speaking state is not permission to run a perpetual render loop.
+- Persist accepted GPT performance metadata in an append-only Convex sidecar bound to the exact call/action/event/turn/head/output hash, not by mutating material trial events. Project only public courtroom cues whose source and head still match canonical state; validate and lazily upgrade legacy v1 rows without inventing missing model output.
+- Join durable semantics to local presentation only at the last browser boundary and only after exact audible start. Pass the renderer a structurally reduced allowlist with no role `activity` or provenance; keep actor, lifecycle, posture, camera, mouth, display, and ruling/gavel ownership in the deterministic local runtime.
+- Sample the validated presentation runtime once per R3F demand frame and share that immutable snapshot across figures, display, gavel, and metadata. Use one prioritized atomic live region for transition or actor status so simultaneous visual changes do not create competing accessibility announcements.
 
 ## 16. Verification Evidence
 
@@ -1315,6 +1328,16 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts` - exit 0; one Chromium production-path fixture passed in 44.4 seconds (23.3-second test body). Its PowerShell harness synchronized `cheery-bandicoot-36` in 7.07 seconds without a login prompt and used fake media plus muted output. The bounded semantic ledger proved objection -> ruling -> resumed witness order, close-shot blends, scheduled-Web-Audio-start-before-mouth timing on the shared page clock, terminal rest, settled return to the witness/counsel two-shot, reduced-quality switching without renderer loss, and a reduced-motion cut/static-mouth speaker test. The pure runtime tests prove the exact 180 ms threshold. This does not claim human microphone, physical speaker, or GPU inference evidence.
   - Two independent review rounds found and drove fixes for monotonic playback/VAD fencing, exact camera composition, same-actor/base-to-base hysteresis, reduced-motion demand-loop termination, cross-trial reset ordering, and source-call-versus-scheduled-audio timing. Final focused re-review reported no P0/P1 findings.
   - `git push origin main` - exit 0 through `361b3b5` (`feat: add fenced courtroom performance runtime`), `3b77f41` (`fix: preserve same-actor camera hysteresis`), `b763b48` (`feat: animate exact courtroom performance`), and `01d55c4` (`test: verify courtroom performance sequence`). The earlier quality-control commits `d32d165` and `378595f` are also on `origin/main`.
+
+- 2026-07-20 03:51-04:48 IST - Milestone 7 committed semantics and transition verification
+  - `npx convex dev --once` - exit 0; the linked `cheery-bandicoot-36` development deployment accepted the committed-performance sidecar schema/indexes and functions without a login prompt.
+  - Focused v2 projection/sidecar suites plus `npm run typecheck` and scoped ESLint - exit 0; the final pre-render checkpoint passed 151 files with three skipped and 1,322 tests with three skipped before the renderer integration.
+  - `npm exec -- vitest run src/components/courtroom/courtroom-semantic-style.test.ts src/components/courtroom/courtroom-runtime.source.test.ts src/app/hearing/page.source.test.ts src/domain/courtroom-presentation/semantic.test.ts src/domain/courtroom-presentation/runtime.test.ts` - exit 0; five files and 45 tests passed. Coverage proves active/non-stricken exact-turn and exact-ruling-head joins, no pre-audio or terminal influence, no role-activity/provenance leakage, inert model `stand`/`sit`/`gavel`, bounded affect, reduced-motion time invariance, privacy-safe enum selectors, exact-actor application, evidence/settlement/ruling phases, and one validated runtime selection per R3F frame.
+  - `npm run typecheck`, scoped ESLint over the page/renderer/style slice with `--max-warnings 0`, and `git diff --check` - exit 0.
+  - `npm test` - exit 0 in 12.7 seconds; 153 files passed, three live-only files skipped, 1,336 tests passed, and three skipped.
+  - `npm run build` - exit 0 in 16.8 seconds; Next.js compiled/typechecked and generated all 19 routes/pages.
+  - Two independent reviews found no blocking transition issues and no P0-P3 semantic-renderer issues after fixes for duplicate live regions, repeated deep selection, cross-trial/future/stricken cues, stale ruling heads, actor namespaces, and lifecycle leakage.
+  - `git push origin main` - exit 0 through `417a6d4`, `7626539`, `001cf52`, `3ec0e21`, `d56f2bc`, `7c5f92a`, `9ec01e7`, `d50bec1`, and `8859586`.
 
 ## 17. Blocked external prerequisites
 
