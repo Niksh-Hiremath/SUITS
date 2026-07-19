@@ -8,7 +8,7 @@ WebSocket frame; the runtime rejects text/base64 audio fields as unknown input.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -19,8 +19,8 @@ from pydantic import (
     model_validator,
 )
 
-PROTOCOL_VERSION = "suits.speech.v1"
-SERVICE_VERSION = "0.1.0"
+PROTOCOL_VERSION: Final = "suits.speech.v1"
+SERVICE_VERSION: Final = "0.1.0"
 
 _ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
 Identifier = Annotated[str, StringConstraints(pattern=_ID_PATTERN)]
@@ -59,14 +59,14 @@ class WireModel(BaseModel):
 class ProtocolModel(WireModel):
     """Top-level wire messages carry the exact protocol discriminator."""
 
-    protocol: Literal[PROTOCOL_VERSION] = PROTOCOL_VERSION
+    protocol: Literal["suits.speech.v1"] = PROTOCOL_VERSION
 
 
 class HelloControl(ProtocolModel):
     type: Literal["hello"] = "hello"
     request_id: Identifier
     client_id: Identifier
-    supported_protocols: tuple[Literal[PROTOCOL_VERSION], ...] = (PROTOCOL_VERSION,)
+    supported_protocols: tuple[Literal["suits.speech.v1"], ...] = (PROTOCOL_VERSION,)
 
 
 class LoadModelsControl(ProtocolModel):
@@ -207,7 +207,7 @@ class ProviderCapability(WireModel):
 class ReadyEvent(ProtocolModel):
     type: Literal["ready"] = "ready"
     session_id: Identifier
-    service_version: Literal[SERVICE_VERSION] = SERVICE_VERSION
+    service_version: Literal["0.1.0"] = SERVICE_VERSION
     mode: Literal["fake", "cpu", "cuda"]
 
 
@@ -387,8 +387,8 @@ ServerEvent: TypeAlias = Annotated[
     Field(discriminator="type"),
 ]
 
-_CLIENT_ADAPTER = TypeAdapter(ClientControlMessage)
-_SERVER_ADAPTER = TypeAdapter(ServerEvent)
+_CLIENT_ADAPTER: TypeAdapter[ClientControlMessage] = TypeAdapter(ClientControlMessage)
+_SERVER_ADAPTER: TypeAdapter[ServerEvent] = TypeAdapter(ServerEvent)
 
 
 class ProtocolDecodeError(ValueError):
@@ -398,24 +398,26 @@ class ProtocolDecodeError(ValueError):
 def _check_wire_shape(payload: str) -> None:
     try:
         value = json.loads(payload)
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, RecursionError) as error:
         raise ProtocolDecodeError("message must be valid JSON") from error
     if not isinstance(value, dict):
         raise ProtocolDecodeError("message must be a JSON object")
     if value.get("protocol") != PROTOCOL_VERSION:
         raise ProtocolDecodeError("message must declare the exact protocol")
 
-    def reject_python_field_names(candidate: object) -> None:
+    pending: list[tuple[object, int]] = [(value, 0)]
+    while pending:
+        candidate, depth = pending.pop()
+        if depth > 32:
+            raise ProtocolDecodeError("wire message nesting exceeds the protocol limit")
         if isinstance(candidate, dict):
             for key, nested in candidate.items():
                 if not isinstance(key, str) or "_" in key:
                     raise ProtocolDecodeError("wire keys must use camelCase")
-                reject_python_field_names(nested)
+                pending.append((nested, depth + 1))
         elif isinstance(candidate, list):
             for nested in candidate:
-                reject_python_field_names(nested)
-
-    reject_python_field_names(value)
+                pending.append((nested, depth + 1))
 
 
 def parse_client_control(payload: str) -> ClientControlMessage:

@@ -206,6 +206,22 @@ def test_protocol_is_strict_and_version_pinned() -> None:
         parse_client_control(json.dumps(snake_case))
 
 
+def test_protocol_rejects_excessive_json_nesting_without_recursing() -> None:
+    nested: object = {"value": True}
+    for _ in range(64):
+        nested = [nested]
+    payload = {
+        "protocol": PROTOCOL_VERSION,
+        "type": "ping",
+        "nonce": "ping:deep",
+        "sentAtMs": 10,
+        "nested": nested,
+    }
+
+    with pytest.raises(ProtocolDecodeError, match="nesting"):
+        parse_client_control(json.dumps(payload))
+
+
 def test_server_events_round_trip_without_embedding_audio() -> None:
     capabilities = CapabilitiesEvent(
         providers=(
