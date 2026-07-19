@@ -23,6 +23,7 @@ import type * as courtroomModelCalls from "../courtroomModelCalls.js";
 import type * as crons from "../crons.js";
 import type * as evals from "../evals.js";
 import type * as events from "../events.js";
+import type * as finalBoundInterruptionClaims from "../finalBoundInterruptionClaims.js";
 import type * as hearingRuntime from "../hearingRuntime.js";
 import type * as http from "../http.js";
 import type * as migrations from "../migrations.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   evals: typeof evals;
   events: typeof events;
+  finalBoundInterruptionClaims: typeof finalBoundInterruptionClaims;
   hearingRuntime: typeof hearingRuntime;
   http: typeof http;
   migrations: typeof migrations;
