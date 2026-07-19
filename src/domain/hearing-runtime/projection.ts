@@ -11,6 +11,7 @@ import {
 } from "../trial-engine/schemas";
 import {
   canActorCallWitness,
+  canActorProposeSettlement,
   canActorRecallWitness,
 } from "../trial-policy";
 import {
@@ -211,6 +212,29 @@ export function buildHearingRuntimeView(
   if (activeQuestion && !questioningActor) {
     throw new Error(`QUESTION_ACTOR_NOT_FOUND:${activeQuestion.askedByActorId}`);
   }
+  const activeResponse = activeQuestion?.activeResponseId
+    ? trialState.pendingResponses[activeQuestion.activeResponseId]
+    : undefined;
+  if (activeQuestion?.activeResponseId && !activeResponse) {
+    throw new Error(
+      `ACTIVE_RESPONSE_NOT_FOUND:${activeQuestion.activeResponseId}`,
+    );
+  }
+  const hasPendingObjection = activeQuestion
+    ? Object.values(trialState.objections).some(
+        (objection) =>
+          objection.questionId === activeQuestion.questionId &&
+          objection.status === "pending",
+      )
+    : false;
+  const opposingResponseWindowOpen =
+    activeQuestion !== undefined &&
+    questioningActor !== undefined &&
+    questioningActor.side !== trialState.userSide &&
+    activeResponse !== undefined &&
+    (activeResponse.status === "pending" || activeResponse.status === "streaming") &&
+    activeResponse.interruptId === null &&
+    !hasPendingObjection;
   const playerOwnsActiveLeg = activeLeg?.ownerSide === trialState.userSide;
   const canUseActiveLeg =
     trialState.status === "active" &&
@@ -296,6 +320,27 @@ export function buildHearingRuntimeView(
   });
 
   const privateSettlement = knowledge.counsel.privateSettlement;
+  const visibleOpenOffers = (privateSettlement?.offers ?? []).filter((offer) => {
+    const canonical = trialState.settlementOffers[offer.offerId];
+    return (
+      offer.status === "open" &&
+      canonical?.status === "open" &&
+      canonical.expiresAtSequence >= trialState.lastSequence + 1
+    );
+  });
+  const playerPartyId = knowledge.counsel.partyId;
+  const respondableOfferIds = visibleOpenOffers
+    .filter(
+      (offer) =>
+        offer.proposerPartyId !== playerPartyId &&
+        offer.recipientPartyIds.includes(playerPartyId),
+    )
+    .map(({ offerId }) => offerId)
+    .sort(compareIds);
+  const withdrawableOfferIds = visibleOpenOffers
+    .filter((offer) => offer.proposerPartyId === playerPartyId)
+    .map(({ offerId }) => offerId)
+    .sort(compareIds);
 
   return HearingRuntimeViewV1Schema.parse({
     schemaVersion: HEARING_RUNTIME_VIEW_SCHEMA_VERSION_V1,
@@ -372,6 +417,24 @@ export function buildHearingRuntimeView(
         activeQuestion === undefined &&
         trialState.restedSides.length === 0 &&
         !hasPendingStrikeMotion,
+      canObject: opposingResponseWindowOpen,
+      canContinueResponse: opposingResponseWindowOpen,
+      canProposeSettlement:
+        privateSettlement !== null &&
+        trialState.status === "active" &&
+        activeAppearance === undefined &&
+        activeQuestion === undefined &&
+        trialState.activeInterruption === null &&
+        visibleOpenOffers.length === 0 &&
+        canActorProposeSettlement(
+          trialState.policySnapshot,
+          playerActor.actorId,
+          trialState.phase,
+        ),
+      counterableSettlementOfferIds: respondableOfferIds,
+      acceptableSettlementOfferIds: respondableOfferIds,
+      rejectableSettlementOfferIds: respondableOfferIds,
+      withdrawableSettlementOfferIds: withdrawableOfferIds,
     },
     witnesses,
     player: {

@@ -114,6 +114,13 @@ function runtimeView(): HearingRuntimeViewV1 {
       canAskQuestion: false,
       canFinishExamination: false,
       canFinishTrial: false,
+      canObject: false,
+      canContinueResponse: false,
+      canProposeSettlement: false,
+      counterableSettlementOfferIds: [],
+      acceptableSettlementOfferIds: [],
+      rejectableSettlementOfferIds: [],
+      withdrawableSettlementOfferIds: [],
     },
     witnesses: [],
     player: {

@@ -137,6 +137,13 @@ const HearingCapabilitiesSchema = z
     canAskQuestion: z.boolean(),
     canFinishExamination: z.boolean(),
     canFinishTrial: z.boolean(),
+    canObject: z.boolean(),
+    canContinueResponse: z.boolean(),
+    canProposeSettlement: z.boolean(),
+    counterableSettlementOfferIds: z.array(IdentifierSchema),
+    acceptableSettlementOfferIds: z.array(IdentifierSchema),
+    rejectableSettlementOfferIds: z.array(IdentifierSchema),
+    withdrawableSettlementOfferIds: z.array(IdentifierSchema),
   })
   .strict();
 

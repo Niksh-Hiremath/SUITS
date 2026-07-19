@@ -192,6 +192,13 @@ describe("V3 hearing runtime projection", () => {
       canAskQuestion: false,
       canFinishExamination: false,
       canFinishTrial: false,
+      canObject: false,
+      canContinueResponse: false,
+      canProposeSettlement: false,
+      counterableSettlementOfferIds: [],
+      acceptableSettlementOfferIds: [],
+      rejectableSettlementOfferIds: [],
+      withdrawableSettlementOfferIds: [],
     });
     expect(activeView.transcript).toHaveLength(1);
     expect(activeView.transcript[0]).toMatchObject({

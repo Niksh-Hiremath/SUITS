@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { CaseGraphEntityIdSchema } from "../case-graph";
+import { ObjectionGroundSchema } from "../courtroom-ai";
 
 export const HEARING_START_SCHEMA_VERSION = "hearing-start.v1" as const;
 export const HEARING_PLAYER_COMMAND_SCHEMA_VERSION =
@@ -80,11 +81,90 @@ const FinishTrialIntentSchema = z
   })
   .strict();
 
+const ObjectIntentSchema = z
+  .object({
+    type: z.literal("object"),
+    questionId: CaseGraphEntityIdSchema,
+    responseId: CaseGraphEntityIdSchema,
+    ground: ObjectionGroundSchema,
+  })
+  .strict();
+
+const ContinueResponseIntentSchema = z
+  .object({
+    type: z.literal("continue_response"),
+    responseId: CaseGraphEntityIdSchema,
+  })
+  .strict();
+
+export const HearingSettlementTermsInputSchema = z
+  .object({
+    amount: z.number().nonnegative().nullable(),
+    nonMonetaryTerms: z
+      .array(z.string().trim().min(1).max(1_000))
+      .max(24)
+      .superRefine((terms, context) => {
+        const seen = new Set<string>();
+        terms.forEach((term, index) => {
+          const normalized = term.toLocaleLowerCase("en-US");
+          if (seen.has(normalized)) {
+            context.addIssue({
+              code: "custom",
+              path: [index],
+              message: "Settlement terms must be unique",
+            });
+          }
+          seen.add(normalized);
+        });
+      }),
+    summary: z.string().trim().min(1).max(4_000),
+  })
+  .strict()
+  .superRefine((terms, context) => {
+    if (terms.amount === null && terms.nonMonetaryTerms.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["amount"],
+        message: "A settlement offer requires monetary or non-monetary terms",
+      });
+    }
+  });
+
+const ProposeSettlementIntentSchema = z
+  .object({
+    type: z.literal("propose_settlement"),
+    terms: HearingSettlementTermsInputSchema,
+  })
+  .strict();
+
+const CounterSettlementIntentSchema = z
+  .object({
+    type: z.literal("counter_settlement"),
+    offerId: CaseGraphEntityIdSchema,
+    terms: HearingSettlementTermsInputSchema,
+  })
+  .strict();
+
+const SettlementOfferIntentSchema = (type: "accept_settlement" | "reject_settlement" | "withdraw_settlement") =>
+  z
+    .object({
+      type: z.literal(type),
+      offerId: CaseGraphEntityIdSchema,
+    })
+    .strict();
+
 export const HearingPlayerIntentSchema = z.discriminatedUnion("type", [
   CallWitnessIntentSchema,
   AskQuestionIntentSchema,
   FinishWitnessIntentSchema,
   FinishTrialIntentSchema,
+  ObjectIntentSchema,
+  ContinueResponseIntentSchema,
+  ProposeSettlementIntentSchema,
+  CounterSettlementIntentSchema,
+  SettlementOfferIntentSchema("accept_settlement"),
+  SettlementOfferIntentSchema("reject_settlement"),
+  SettlementOfferIntentSchema("withdraw_settlement"),
 ]);
 
 export const HearingPlayerCommandSchema = z
@@ -101,4 +181,7 @@ export const HearingPlayerCommandSchema = z
 export type HearingCaseSelector = z.infer<typeof HearingCaseSelectorSchema>;
 export type StartHearingRequest = z.infer<typeof StartHearingRequestSchema>;
 export type HearingPlayerIntent = z.infer<typeof HearingPlayerIntentSchema>;
+export type HearingSettlementTermsInput = z.infer<
+  typeof HearingSettlementTermsInputSchema
+>;
 export type HearingPlayerCommand = z.infer<typeof HearingPlayerCommandSchema>;
