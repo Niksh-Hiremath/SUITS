@@ -66,11 +66,42 @@ describe("opponent planner prompt boundary", () => {
         settlementOfferCount: 0,
         witnessCount: 1,
       },
+      citationBinding: {
+        enabledFields: [
+          "factIds",
+          "evidenceIds",
+          "testimonyIds",
+          "sourceSegmentIds",
+        ],
+        emptyFields: [
+          "transcriptTurnIds",
+          "priorStatementIds",
+          "issueIds",
+          "instructionIds",
+          "ruleIds",
+          "settlementOfferIds",
+        ],
+        transcriptEventIdIsNotTranscriptTurnId: true,
+      },
     });
     expect(parsed.immutableRequestSha256).toBe(
       createHash("sha256")
         .update(JSON.stringify(request), "utf8")
         .digest("hex"),
+    );
+  });
+
+  it("distinguishes testimony citations from transcript-event provenance", () => {
+    const prefix = getOpponentPlannerStableDeveloperPrefix();
+
+    expect(prefix).toContain(
+      "use only factIds, evidenceIds, testimonyIds, and sourceSegmentIds",
+    );
+    expect(prefix).toContain(
+      "transcriptEventId is provenance metadata, not a transcriptTurnId",
+    );
+    expect(prefix).toContain(
+      "never copy transcriptEventId into transcriptTurnIds",
     );
   });
 

@@ -12,9 +12,9 @@ import {
 import type { CourtroomModelPrompt } from "./provider";
 
 export const OPPONENT_PLANNER_PROMPT_VERSION =
-  "opponent-planner.prompt.v1" as const;
+  "opponent-planner.prompt.v2" as const;
 export const OPPONENT_PLANNER_PROMPT_CACHE_KEY =
-  "suits:opponent-planner:v1" as const;
+  "suits:opponent-planner:v2" as const;
 export const MAX_OPPONENT_PLAN_REPAIR_CANDIDATE_CHARACTERS = 24_000;
 export const MAX_OPPONENT_PLAN_REPAIR_ISSUES = 64;
 
@@ -55,6 +55,8 @@ AUTHORITY AND SECURITY BOUNDARY
 PLANNING RULES
 - Produce a private, bounded strategy update and a prioritized list of lawful proposed moves. The deterministic trial engine remains the sole authority for what happens.
 - Every priority ID, move target, and citation must be present in the exact KnowledgeView and server-owned opportunity manifest.
+- For move citations, use only factIds, evidenceIds, testimonyIds, and sourceSegmentIds from the supplied view. Keep transcriptTurnIds, priorStatementIds, issueIds, instructionIds, ruleIds, and settlementOfferIds empty because this call supplies no auditable scope for those fields.
+- A public testimony record's transcriptEventId is provenance metadata, not a transcriptTurnId. Ground a move in that record with its testimonyId; never copy transcriptEventId into transcriptTurnIds.
 - Respect the active phase, witness appearance, examination ownership, evidence lifecycle, available foundation, objection grounds, and settlement availability exactly as supplied.
 - Cite only existing canonical IDs. Do not treat a proposed, disputed, excluded, withdrawn, stricken, or private item as admitted or jury-considerable.
 - Witness roster entries expose only counsel-permitted links. Do not infer or claim a witness's private knowledge beyond those links and the public record.
@@ -310,6 +312,23 @@ function buildTrustedManifest(
       canRequestNegotiation: request.opportunities.canRequestNegotiation,
       canRest: request.opportunities.canRest,
       canClose: request.opportunities.canClose,
+    },
+    citationBinding: {
+      enabledFields: [
+        "factIds",
+        "evidenceIds",
+        "testimonyIds",
+        "sourceSegmentIds",
+      ],
+      emptyFields: [
+        "transcriptTurnIds",
+        "priorStatementIds",
+        "issueIds",
+        "instructionIds",
+        "ruleIds",
+        "settlementOfferIds",
+      ],
+      transcriptEventIdIsNotTranscriptTurnId: true,
     },
     repair:
       context.mode === "repair"
