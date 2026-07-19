@@ -19,6 +19,8 @@ export const HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION =
   "hearing-objection-ruling-precommit.v1" as const;
 export const HEARING_OBJECTION_RULING_PROMPT_VERSION =
   "objection-resolver.ruling.prompt.v1" as const;
+export const HEARING_OBJECTION_RULING_PROVIDER_PROTOCOL_VERSION =
+  "courtroom-model-provider.v1" as const;
 
 export const HearingObjectionQuestionEventBindingSchema = z
   .object({
@@ -305,6 +307,16 @@ export const HearingObjectionRulingPrecommitSchema = z
       );
     }
     if (
+      trace.providerProtocolVersion !==
+      HEARING_OBJECTION_RULING_PROVIDER_PROTOCOL_VERSION
+    ) {
+      addMismatch(
+        context,
+        ["trace", "providerProtocolVersion"],
+        "Objection ruling trace must use the supported provider protocol",
+      );
+    }
+    if (
       modelMetadata.retryCount !== trace.retryCount ||
       modelMetadata.validationFailureCount !== trace.validationFailureCount
     ) {
@@ -347,6 +359,21 @@ export const HearingObjectionRulingPrecommitSchema = z
     const acceptedAttempt = trace.attempts.find(
       (attempt) => attempt.attempt === trace.acceptedAttempt,
     );
+    if (
+      trace.attempts.length < 1 ||
+      trace.attempts.length > 2 ||
+      trace.acceptedAttempt !== trace.attempts.length ||
+      acceptedAttempt?.status !== "accepted" ||
+      trace.attempts
+        .slice(0, -1)
+        .some((attempt) => attempt.status !== "validation_failed")
+    ) {
+      addMismatch(
+        context,
+        ["trace", "attempts"],
+        "Objection ruling generation permits one initial attempt and one validation repair",
+      );
+    }
     if (
       acceptedAttempt === undefined ||
       acceptedAttempt.status !== "accepted" ||

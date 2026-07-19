@@ -22,6 +22,8 @@ import {
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
@@ -38,6 +40,14 @@ import {
   createOpponentPlannerOutputFixture,
   createOpponentPlannerRequestFixture,
 } from "@/server/courtroom-ai/opponent-planner.test-fixtures";
+import {
+  createObjectionRulingOutputFixture,
+  createObjectionRulingRequestFixture,
+} from "@/server/courtroom-ai/judicial-response.test-fixtures";
+import {
+  createNegotiationAgentOutputFixture,
+  createNegotiationAgentRequestFixture,
+} from "@/server/courtroom-ai/negotiation-agent.test-fixtures";
 
 import {
   CourtroomCommandOrchestrationError,
@@ -130,6 +140,8 @@ function modelPreparation(
   request: ReturnType<
     | typeof createOpponentPlannerRequestFixture
     | typeof createCounselResponseRequestFixture
+    | typeof createObjectionRulingRequestFixture
+    | typeof createNegotiationAgentRequestFixture
     | typeof createJuryResponseRequestFixture
     | typeof createDebriefGeneratorRequestFixture
     | typeof witnessRequest
@@ -228,6 +240,11 @@ describe("orchestrateCourtroomCommand", () => {
       createCounselResponseRequestFixture(),
     );
     const witnessPreparation = modelPreparation(witnessRequest());
+    const objectionRequest = createObjectionRulingRequestFixture();
+    const objectionPreparation = modelPreparation(objectionRequest);
+    const negotiationPreparation = modelPreparation(
+      createNegotiationAgentRequestFixture(),
+    );
     const juryPreparation = modelPreparation(createJuryResponseRequestFixture());
     const debriefRequest = createDebriefGeneratorRequestFixture();
     const debriefPreparation = modelPreparation(
@@ -264,10 +281,35 @@ describe("orchestrateCourtroomCommand", () => {
       expect(HearingCounselResponsePrecommitSchema.parse(precommit)).toEqual(
         precommit,
       );
+      return objectionPreparation;
+    });
+    const commitObjectionRuling = vi.fn(async (precommit) => {
+      expect(HearingObjectionRulingPrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      expect(precommit).toMatchObject({
+        trialId: objectionRequest.trialId,
+        callId: objectionRequest.callId,
+        decisionId: objectionRequest.decisionId,
+        expectedStateVersion: objectionRequest.expectedStateVersion,
+        expectedLastEventId: objectionRequest.expectedLastEventId,
+        objectionEventId: objectionRequest.objection.sourceEventId,
+        responseId: objectionRequest.interruption?.interruptedResponseId,
+        questionEventBinding: {
+          turnId: objectionRequest.question.turnId,
+          sourceEventId: objectionRequest.question.eventId,
+        },
+      });
       return witnessPreparation;
     });
     const commitWitness = vi.fn(async (precommit) => {
       expect(HearingWitnessGenerationPrecommitSchema.parse(precommit)).toEqual(
+        precommit,
+      );
+      return negotiationPreparation;
+    });
+    const commitNegotiationDecision = vi.fn(async (precommit) => {
+      expect(HearingNegotiationPrecommitSchema.parse(precommit)).toEqual(
         precommit,
       );
       return juryPreparation;
@@ -292,7 +334,9 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(async () => plannerPreparation),
       commitOpponentPlan,
       commitCounselResponse,
+      commitObjectionRuling,
       commitWitness,
+      commitNegotiationDecision,
       commitJuryResponse,
       commitDebrief,
       recordTerminalTrace: vi.fn(async () => undefined),
@@ -301,7 +345,9 @@ describe("orchestrateCourtroomCommand", () => {
       [
         { type: "output", output: createOpponentPlannerOutputFixture() },
         { type: "output", output: createCounselQuestionOutputFixture() },
+        { type: "output", output: createObjectionRulingOutputFixture() },
         { type: "output", output: witnessBoundaryOutput() },
+        { type: "output", output: createNegotiationAgentOutputFixture() },
         { type: "output", output: createJuryResponseOutputFixture() },
         { type: "output", output: createDebriefGeneratorOutputFixture() },
       ],
@@ -320,13 +366,17 @@ describe("orchestrateCourtroomCommand", () => {
       .toEqual([
         { callClass: "opponent_planner", task: "plan_opponent" },
         { callClass: "role_responder", task: "counsel_response" },
+        { callClass: "objection_resolver", task: "resolve_objection" },
         { callClass: "role_responder", task: "witness_answer" },
+        { callClass: "negotiation_agent", task: "evaluate_settlement" },
         { callClass: "role_responder", task: "jury_deliberation" },
         { callClass: "debrief_generator", task: "generate_debrief" },
       ]);
     expect(commitOpponentPlan).toHaveBeenCalledTimes(1);
     expect(commitCounselResponse).toHaveBeenCalledTimes(1);
+    expect(commitObjectionRuling).toHaveBeenCalledTimes(1);
     expect(commitWitness).toHaveBeenCalledTimes(1);
+    expect(commitNegotiationDecision).toHaveBeenCalledTimes(1);
     expect(commitJuryResponse).toHaveBeenCalledTimes(1);
     expect(commitDebrief).toHaveBeenCalledTimes(1);
   });
@@ -341,7 +391,9 @@ describe("orchestrateCourtroomCommand", () => {
       ),
       commitOpponentPlan: vi.fn(),
       commitCounselResponse: vi.fn(),
+      commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
       commitJuryResponse: vi.fn(),
       commitDebrief: vi.fn(),
       recordTerminalTrace,
@@ -381,6 +433,18 @@ describe("orchestrateCourtroomCommand", () => {
 
   it.each([
     [
+      "objection ruling",
+      createObjectionRulingRequestFixture,
+      "objection_ruling",
+      "resolve_objection",
+    ],
+    [
+      "negotiation decision",
+      createNegotiationAgentRequestFixture,
+      "negotiation_decision",
+      "evaluate_settlement",
+    ],
+    [
       "jury response",
       createJuryResponseRequestFixture,
       "jury_response",
@@ -402,7 +466,9 @@ describe("orchestrateCourtroomCommand", () => {
         prepare: vi.fn(async () => modelPreparation(createRequest())),
         commitOpponentPlan: vi.fn(),
         commitCounselResponse: vi.fn(),
+        commitObjectionRuling: vi.fn(),
         commitWitness: vi.fn(),
+        commitNegotiationDecision: vi.fn(),
         commitJuryResponse: vi.fn(),
         commitDebrief: vi.fn(),
         recordTerminalTrace,
@@ -448,7 +514,9 @@ describe("orchestrateCourtroomCommand", () => {
       prepare: vi.fn(async () => plannerPreparation),
       commitOpponentPlan: vi.fn(async () => plannerPreparation),
       commitCounselResponse: vi.fn(),
+      commitObjectionRuling: vi.fn(),
       commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
       commitJuryResponse: vi.fn(),
       commitDebrief: vi.fn(),
       recordTerminalTrace: vi.fn(async () => undefined),

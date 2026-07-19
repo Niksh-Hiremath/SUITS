@@ -8,12 +8,16 @@ import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HEARING_WITNESS_GENERATION_PRECOMMIT_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
@@ -21,6 +25,8 @@ import {
   isHearingCounselResponseModelRequiredPreparation,
   isHearingDebriefGeneratorModelRequiredPreparation,
   isHearingJuryResponseModelRequiredPreparation,
+  isHearingNegotiationModelRequiredPreparation,
+  isHearingObjectionRulingModelRequiredPreparation,
   isHearingOpponentPlanModelRequiredPreparation,
   isHearingWitnessModelRequiredPreparation,
   type HearingCommandPreparation,
@@ -28,6 +34,8 @@ import {
   type HearingDebriefGeneratorPrecommit,
   type HearingDebriefTranscriptEventBinding,
   type HearingJuryResponsePrecommit,
+  type HearingNegotiationPrecommit,
+  type HearingObjectionRulingPrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingPlayerCommand,
   type HearingRuntimeViewV1,
@@ -37,11 +45,15 @@ import {
   CounselResponseGenerationError,
   DebriefGenerationError,
   JuryResponseGenerationError,
+  NegotiationAgentGenerationError,
+  ObjectionRulingGenerationError,
   OpponentPlannerGenerationError,
   WitnessAnswerGenerationError,
   generateCounselResponse,
   generateDebrief,
   generateJuryResponse,
+  generateNegotiationDecision,
+  generateObjectionRuling,
   generateOpponentPlan,
   generateWitnessAnswer,
   type CourtroomModelProvider,
@@ -66,6 +78,14 @@ export type CourtroomCommandDurableService = Readonly<{
     precommit: HearingCounselResponsePrecommit,
     signal?: AbortSignal,
   ) => Promise<HearingCommandPreparation>;
+  commitObjectionRuling: (
+    precommit: HearingObjectionRulingPrecommit,
+    signal?: AbortSignal,
+  ) => Promise<HearingCommandPreparation>;
+  commitNegotiationDecision: (
+    precommit: HearingNegotiationPrecommit,
+    signal?: AbortSignal,
+  ) => Promise<HearingCommandPreparation>;
   commitJuryResponse: (
     precommit: HearingJuryResponsePrecommit,
     signal?: AbortSignal,
@@ -84,6 +104,8 @@ export type HearingModelTask =
   | "witness_answer"
   | "opponent_plan"
   | "counsel_response"
+  | "objection_ruling"
+  | "negotiation_decision"
   | "jury_response"
   | "debrief_generation";
 
@@ -132,6 +154,8 @@ type CourtroomGenerationError =
   | WitnessAnswerGenerationError
   | OpponentPlannerGenerationError
   | CounselResponseGenerationError
+  | ObjectionRulingGenerationError
+  | NegotiationAgentGenerationError
   | JuryResponseGenerationError
   | DebriefGenerationError;
 
@@ -159,6 +183,20 @@ function generationFailure(error: unknown): Readonly<{
       error,
       task: "counsel_response",
       cancelled: error.code === "counsel_response_cancelled",
+    };
+  }
+  if (error instanceof ObjectionRulingGenerationError) {
+    return {
+      error,
+      task: "objection_ruling",
+      cancelled: error.code === "objection_ruling_cancelled",
+    };
+  }
+  if (error instanceof NegotiationAgentGenerationError) {
+    return {
+      error,
+      task: "negotiation_decision",
+      cancelled: error.code === "negotiation_decision_cancelled",
     };
   }
   if (error instanceof JuryResponseGenerationError) {
@@ -348,6 +386,71 @@ export async function orchestrateCourtroomCommand(
         });
         preparation = HearingCommandPreparationSchema.parse(
           await options.durableService.commitCounselResponse(
+            precommit,
+            options.signal,
+          ),
+        );
+        continue;
+      }
+
+      if (isHearingObjectionRulingModelRequiredPreparation(preparation)) {
+        const request = preparation.request;
+        if (request.interruption === null) {
+          throw new Error(
+            "The hearing objection boundary requires an interrupted response",
+          );
+        }
+        const generated = await generateObjectionRuling({
+          provider: options.provider,
+          request,
+          signal: options.signal,
+        });
+        const precommit = HearingObjectionRulingPrecommitSchema.parse({
+          schemaVersion: HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
+          trialId: request.trialId,
+          callId: request.callId,
+          decisionId: request.decisionId,
+          expectedStateVersion: request.expectedStateVersion,
+          expectedLastEventId: request.expectedLastEventId,
+          objectionEventId: request.objection.sourceEventId,
+          responseId: request.interruption.interruptedResponseId,
+          questionEventBinding: {
+            turnId: request.question.turnId,
+            sourceEventId: request.question.eventId,
+          },
+          output: generated.output,
+          modelMetadata: generated.modelMetadata,
+          trace: generated.trace,
+        });
+        preparation = HearingCommandPreparationSchema.parse(
+          await options.durableService.commitObjectionRuling(
+            precommit,
+            options.signal,
+          ),
+        );
+        continue;
+      }
+
+      if (isHearingNegotiationModelRequiredPreparation(preparation)) {
+        const request = preparation.request;
+        const generated = await generateNegotiationDecision({
+          provider: options.provider,
+          request,
+          signal: options.signal,
+        });
+        const precommit = HearingNegotiationPrecommitSchema.parse({
+          schemaVersion: HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+          trialId: request.trialId,
+          callId: request.callId,
+          decisionId: request.decisionId,
+          expectedStateVersion: request.expectedStateVersion,
+          expectedLastEventId: request.expectedLastEventId,
+          output: generated.output,
+          modelMetadata: generated.modelMetadata,
+          trace: generated.trace,
+        });
+        preparation = HearingCommandPreparationSchema.parse(
+          await options.durableService.commitNegotiationDecision(
             precommit,
             options.signal,
           ),

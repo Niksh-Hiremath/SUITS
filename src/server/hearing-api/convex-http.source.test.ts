@@ -8,11 +8,15 @@ import {
   HEARING_COUNSEL_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
   HEARING_DEBRIEF_GENERATOR_PRECOMMIT_SCHEMA_VERSION,
   HEARING_JURY_RESPONSE_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+  HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OPPONENT_PLAN_PRECOMMIT_SCHEMA_VERSION,
   HearingCommandPreparationSchema,
   HearingCounselResponsePrecommitSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
 } from "@/domain/hearing-runtime";
 import {
@@ -31,6 +35,16 @@ import { generateCounselResponse } from "@/server/courtroom-ai/counsel-response"
 import { generateDebrief } from "@/server/courtroom-ai/debrief-generator";
 import { ScriptedCourtroomModelProvider } from "@/server/courtroom-ai/fake-provider";
 import {
+  createObjectionRulingOutputFixture,
+  createObjectionRulingRequestFixture,
+} from "@/server/courtroom-ai/judicial-response.test-fixtures";
+import {
+  createNegotiationAgentOutputFixture,
+  createNegotiationAgentRequestFixture,
+} from "@/server/courtroom-ai/negotiation-agent.test-fixtures";
+import { generateNegotiationDecision } from "@/server/courtroom-ai/negotiation-agent";
+import { generateObjectionRuling } from "@/server/courtroom-ai/objection-ruling";
+import {
   createOpponentPlannerOutputFixture,
   createOpponentPlannerRequestFixture,
 } from "@/server/courtroom-ai/opponent-planner.test-fixtures";
@@ -40,11 +54,16 @@ import {
   HearingServiceCounselResponseCommitRequestSchema,
   HearingServiceDebriefCommitRequestSchema,
   HearingServiceJuryResponseCommitRequestSchema,
+  HearingServiceNegotiationCommitRequestSchema,
+  HearingServiceObjectionRulingCommitRequestSchema,
   HearingServiceOpponentPlanCommitRequestSchema,
 } from "../../../convex/http";
 
 const HTTP_SOURCE_PATH = fileURLToPath(
   new URL("../../../convex/http.ts", import.meta.url),
+);
+const COMMAND_ROUTE_SOURCE_PATH = fileURLToPath(
+  new URL("../../app/api/hearings/[trialId]/commands/route.ts", import.meta.url),
 );
 const OWNER_ID = "owner:123e4567-e89b-42d3-a456-426614174000";
 
@@ -134,6 +153,67 @@ async function validJuryResponsePrecommit() {
   });
 }
 
+async function validObjectionRulingPrecommit() {
+  const request = createObjectionRulingRequestFixture();
+  const generated = await generateObjectionRuling({
+    request,
+    provider: new ScriptedCourtroomModelProvider([
+      {
+        type: "output",
+        output: createObjectionRulingOutputFixture(),
+        requestId: "request:http-objection-ruling:001",
+        responseId: "response:http-objection-ruling:001",
+      },
+    ]),
+  });
+  if (request.interruption === null) {
+    throw new Error("Objection fixture must bind an interrupted response");
+  }
+  return HearingObjectionRulingPrecommitSchema.parse({
+    schemaVersion: HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    objectionEventId: request.objection.sourceEventId,
+    responseId: request.interruption.interruptedResponseId,
+    questionEventBinding: {
+      turnId: request.question.turnId,
+      sourceEventId: request.question.eventId,
+    },
+    output: generated.output,
+    modelMetadata: generated.modelMetadata,
+    trace: generated.trace,
+  });
+}
+
+async function validNegotiationPrecommit() {
+  const request = createNegotiationAgentRequestFixture();
+  const generated = await generateNegotiationDecision({
+    request,
+    provider: new ScriptedCourtroomModelProvider([
+      {
+        type: "output",
+        output: createNegotiationAgentOutputFixture(),
+        requestId: "request:http-negotiation:001",
+        responseId: "response:http-negotiation:001",
+      },
+    ]),
+  });
+  return HearingNegotiationPrecommitSchema.parse({
+    schemaVersion: HEARING_NEGOTIATION_PRECOMMIT_SCHEMA_VERSION,
+    trialId: request.trialId,
+    callId: request.callId,
+    decisionId: request.decisionId,
+    expectedStateVersion: request.expectedStateVersion,
+    expectedLastEventId: request.expectedLastEventId,
+    output: generated.output,
+    modelMetadata: generated.modelMetadata,
+    trace: generated.trace,
+  });
+}
+
 async function validDebriefPrecommit() {
   const request = createDebriefGeneratorRequestFixture();
   const generated = await generateDebrief({
@@ -162,6 +242,8 @@ describe("secret hearing model-loop HTTP boundary", () => {
   it("accepts only strict owner- and trial-bound generation precommits", async () => {
     const opponentGeneration = await validOpponentPlanPrecommit();
     const counselGeneration = await validCounselResponsePrecommit();
+    const objectionGeneration = await validObjectionRulingPrecommit();
+    const negotiationGeneration = await validNegotiationPrecommit();
     const juryGeneration = await validJuryResponsePrecommit();
     const debriefGeneration = await validDebriefPrecommit();
     const opponentBody = {
@@ -179,6 +261,16 @@ describe("secret hearing model-loop HTTP boundary", () => {
       trialId: juryGeneration.trialId,
       generation: juryGeneration,
     };
+    const objectionBody = {
+      ownerId: OWNER_ID,
+      trialId: objectionGeneration.trialId,
+      generation: objectionGeneration,
+    };
+    const negotiationBody = {
+      ownerId: OWNER_ID,
+      trialId: negotiationGeneration.trialId,
+      generation: negotiationGeneration,
+    };
     const debriefBody = {
       ownerId: OWNER_ID,
       trialId: debriefGeneration.trialId,
@@ -194,6 +286,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(
       HearingServiceJuryResponseCommitRequestSchema.parse(juryBody),
     ).toEqual(juryBody);
+    expect(
+      HearingServiceObjectionRulingCommitRequestSchema.parse(objectionBody),
+    ).toEqual(objectionBody);
+    expect(
+      HearingServiceNegotiationCommitRequestSchema.parse(negotiationBody),
+    ).toEqual(negotiationBody);
     expect(HearingServiceDebriefCommitRequestSchema.parse(debriefBody)).toEqual(
       debriefBody,
     );
@@ -209,10 +307,24 @@ describe("secret hearing model-loop HTTP boundary", () => {
         generation: opponentGeneration,
       }).success,
     ).toBe(false);
+    expect(
+      HearingServiceObjectionRulingCommitRequestSchema.safeParse({
+        ...objectionBody,
+        generation: negotiationGeneration,
+      }).success,
+    ).toBe(false);
+    expect(
+      HearingServiceNegotiationCommitRequestSchema.safeParse({
+        ...negotiationBody,
+        generation: objectionGeneration,
+      }).success,
+    ).toBe(false);
 
     for (const [schema, body] of [
       [HearingServiceOpponentPlanCommitRequestSchema, opponentBody],
       [HearingServiceCounselResponseCommitRequestSchema, counselBody],
+      [HearingServiceObjectionRulingCommitRequestSchema, objectionBody],
+      [HearingServiceNegotiationCommitRequestSchema, negotiationBody],
       [HearingServiceJuryResponseCommitRequestSchema, juryBody],
       [HearingServiceDebriefCommitRequestSchema, debriefBody],
     ] as const) {
@@ -265,10 +377,14 @@ describe("secret hearing model-loop HTTP boundary", () => {
     for (const expected of [
       '>("hearingRuntime:commitOpponentPlanGeneration")',
       '>("hearingRuntime:commitCounselGeneration")',
+      '>("hearingRuntime:commitObjectionRulingGeneration")',
+      '>("hearingRuntime:commitNegotiationGeneration")',
       '>("hearingRuntime:commitJuryGeneration")',
       '>("hearingRuntime:commitDebriefGeneration")',
       'path: "/service/hearings/opponent-plan/commit", method: "POST"',
       'path: "/service/hearings/counsel-response/commit", method: "POST"',
+      'path: "/service/hearings/objection-ruling/commit", method: "POST"',
+      'path: "/service/hearings/negotiation/commit", method: "POST"',
       'path: "/service/hearings/jury-response/commit", method: "POST"',
       'path: "/service/hearings/debrief/commit", method: "POST"',
     ]) {
@@ -288,6 +404,16 @@ describe("secret hearing model-loop HTTP boundary", () => {
     const counselSection = sourceSection(
       source,
       "const commitCounselGeneration = httpAction",
+      "const commitObjectionRulingGeneration = httpAction",
+    );
+    const objectionSection = sourceSection(
+      source,
+      "const commitObjectionRulingGeneration = httpAction",
+      "const commitNegotiationGeneration = httpAction",
+    );
+    const negotiationSection = sourceSection(
+      source,
+      "const commitNegotiationGeneration = httpAction",
       "const commitJuryGeneration = httpAction",
     );
     const jurySection = sourceSection(
@@ -305,6 +431,8 @@ describe("secret hearing model-loop HTTP boundary", () => {
       witnessSection,
       opponentSection,
       counselSection,
+      objectionSection,
+      negotiationSection,
       jurySection,
       debriefSection,
     ]) {
@@ -322,6 +450,12 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(counselSection).toContain(
       "HearingServiceCounselResponseCommitRequestSchema",
     );
+    expect(objectionSection).toContain(
+      "HearingServiceObjectionRulingCommitRequestSchema",
+    );
+    expect(negotiationSection).toContain(
+      "HearingServiceNegotiationCommitRequestSchema",
+    );
     expect(jurySection).toContain(
       "HearingServiceJuryResponseCommitRequestSchema",
     );
@@ -338,5 +472,30 @@ describe("secret hearing model-loop HTTP boundary", () => {
     expect(terminalSchema).toContain('trace.status === "cancelled"');
     expect(terminalSchema).toContain('trace.status === "stale"');
     expect(terminalSchema).not.toContain('trace.status === "accepted"');
+
+    const routeSource = await readFile(COMMAND_ROUTE_SOURCE_PATH, "utf8");
+    const objectionDurableSection = sourceSection(
+      routeSource,
+      "commitObjectionRuling:",
+      "commitNegotiationDecision:",
+    );
+    const negotiationDurableSection = sourceSection(
+      routeSource,
+      "commitNegotiationDecision:",
+      "commitJuryResponse:",
+    );
+    expect(objectionDurableSection).toContain(
+      'path: "/service/hearings/objection-ruling/commit"',
+    );
+    expect(negotiationDurableSection).toContain(
+      'path: "/service/hearings/negotiation/commit"',
+    );
+    for (const section of [objectionDurableSection, negotiationDurableSection]) {
+      expect(section).toContain("body: { ownerId, trialId, generation }");
+      expect(section).toContain(
+        "responseSchema: HearingCommandPreparationSchema",
+      );
+      expect(section).not.toMatch(/actorId|stateJson|graphJson|privateDirective/u);
+    }
   });
 });

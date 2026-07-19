@@ -17,6 +17,8 @@ import {
   validateCounselResponseOutput,
   validateDebriefGeneratorOutput,
   validateJuryResponseOutput,
+  validateNegotiationAgentOutput,
+  validateObjectionRulingOutput,
   validateOpponentPlannerOutput,
   validateWitnessAnswerOutput,
   validateWitnessAnswerRequestBinding,
@@ -35,6 +37,8 @@ import {
   HearingCaseSelectorSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingWitnessGenerationPrecommitSchema,
@@ -51,6 +55,8 @@ import {
   type HearingCaseSelector,
   type HearingDebriefGeneratorPrecommit,
   type HearingJuryResponsePrecommit,
+  type HearingNegotiationPrecommit,
+  type HearingObjectionRulingPrecommit,
   type HearingOpponentPlanPrecommit,
   type HearingRuntimeViewV1,
   type HearingWitnessGenerationPrecommit,
@@ -219,6 +225,26 @@ const appendDebriefGenerationForOwnerReference = makeFunctionReference<
   ActionReceipt
 >("trialEvents:appendDebriefGenerationForOwner");
 
+const appendObjectionRulingForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    actionJsons: string[];
+    generationJson: string;
+  }>,
+  ActionReceipt
+>("trialEvents:appendObjectionRulingForOwner");
+
+const appendNegotiationDecisionForOwnerReference = makeFunctionReference<
+  "mutation",
+  Readonly<{
+    ownerId: string;
+    actionJson: string;
+    generationJson: string;
+  }>,
+  ActionReceipt
+>("trialEvents:appendNegotiationDecisionForOwner");
+
 const reloadForOwnerReference = makeFunctionReference<
   "query",
   Readonly<{
@@ -287,6 +313,18 @@ const loadGeneratedFinalBundleReference = makeFunctionReference<
   }>,
   GeneratedFinalBundle | null
 >("hearingRuntime:loadGeneratedFinalBundleForOwner");
+
+const loadGeneratedObjectionBundleReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string; trialId: string; actionId: string }>,
+  GeneratedFinalBundle | null
+>("hearingRuntime:loadGeneratedObjectionBundleForOwner");
+
+const loadGeneratedNegotiationActionReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string; trialId: string; actionId: string }>,
+  Readonly<{ actionJson: string }> | null
+>("hearingRuntime:loadGeneratedNegotiationActionForOwner");
 
 function parseJson(value: string, label: string): unknown {
   if (!value.trim() || value.length > MAX_GRAPH_JSON_CHARACTERS) {
@@ -647,6 +685,115 @@ export const loadGeneratedCounselTurnForOwner = internalQuery({
   },
 });
 
+/** Reconstruct an exact ruling/resolution bundle for idempotent replay. */
+export const loadGeneratedObjectionBundleForOwner = internalQuery({
+  args: { ownerId: v.string(), trialId: v.string(), actionId: v.string() },
+  handler: async (ctx, args): Promise<GeneratedFinalBundle | null> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const projection = await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+      .unique();
+    if (!projection || projection.ownerId !== ownerId) {
+      throw new Error("TRIAL_NOT_FOUND");
+    }
+    const primary = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_action", (index) =>
+        index.eq("trialId", args.trialId).eq("actionId", args.actionId),
+      )
+      .unique();
+    if (!primary) return null;
+    if (
+      primary.eventType !== "RULE_ON_OBJECTION" ||
+      primary.source !== "ai" ||
+      primary.model === undefined
+    ) {
+      throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+    }
+    const resolve = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_sequence", (index) =>
+        index
+          .eq("trialId", args.trialId)
+          .eq("sequence", primary.sequence + 1),
+      )
+      .unique();
+    if (
+      !resolve ||
+      resolve.eventType !== "RESOLVE_INTERRUPTION" ||
+      resolve.source !== "deterministic" ||
+      resolve.causationId !== primary.eventId
+    ) {
+      throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+    }
+    const resolveAction = TrialActionV3Schema.parse(
+      parseJson(storedEventActionJson(resolve), "stored_resolve_action"),
+    );
+    if (resolveAction.type !== "RESOLVE_INTERRUPTION") {
+      throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+    }
+    const rows = [primary, resolve];
+    if (resolveAction.payload.outcome === "resume") {
+      const resume = await ctx.db
+        .query("trialEvents")
+        .withIndex("by_trial_sequence", (index) =>
+          index
+            .eq("trialId", args.trialId)
+            .eq("sequence", resolve.sequence + 1),
+        )
+        .unique();
+      if (
+        !resume ||
+        resume.eventType !== "RESUME_INTERRUPTED_SPEECH" ||
+        resume.source !== "deterministic" ||
+        resume.causationId !== resolve.eventId
+      ) {
+        throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+      }
+      rows.push(resume);
+    }
+    return { actionJsons: rows.map(storedEventActionJson) };
+  },
+});
+
+/** Reconstruct one exact generated settlement action for replay. */
+export const loadGeneratedNegotiationActionForOwner = internalQuery({
+  args: { ownerId: v.string(), trialId: v.string(), actionId: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Readonly<{ actionJson: string }> | null> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const projection = await ctx.db
+      .query("trialProjections")
+      .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+      .unique();
+    if (!projection || projection.ownerId !== ownerId) {
+      throw new Error("TRIAL_NOT_FOUND");
+    }
+    const event = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_action", (index) =>
+        index.eq("trialId", args.trialId).eq("actionId", args.actionId),
+      )
+      .unique();
+    if (!event) return null;
+    if (
+      event.source !== "ai" ||
+      event.model === undefined ||
+      ![
+        "COUNTER_SETTLEMENT",
+        "ACCEPT_SETTLEMENT",
+        "REJECT_SETTLEMENT",
+      ].includes(event.eventType)
+    ) {
+      throw new Error("NEGOTIATION_GENERATION_INVALID");
+    }
+    return { actionJson: storedEventActionJson(event) };
+  },
+});
+
 /**
  * Owner-guarded reconstruction of final-flow fields intentionally omitted
  * from TrialStateV3. The query walks the full canonical stream, so snapshots
@@ -1001,6 +1148,8 @@ function actionFromIntent(input: {
   source: EventSource;
   requestedAt: string;
   causationId: string | null;
+  responseId?: string | null;
+  interruptId?: string | null;
   modelMetadata?: ModelMetadata | null;
   type: TrialActionV3["type"];
   payload: unknown;
@@ -1017,9 +1166,11 @@ function actionFromIntent(input: {
     causationId: input.causationId,
     correlationId: input.trialId,
     responseId:
-      typeof payload.responseId === "string" ? payload.responseId : null,
+      input.responseId ??
+      (typeof payload.responseId === "string" ? payload.responseId : null),
     interruptId:
-      typeof payload.interruptId === "string" ? payload.interruptId : null,
+      input.interruptId ??
+      (typeof payload.interruptId === "string" ? payload.interruptId : null),
     modelMetadata: input.modelMetadata ?? null,
     type: input.type,
     payload: input.payload,
@@ -1351,11 +1502,17 @@ function canonicalWitnessAnswerRequest(input: {
     return invalidWitnessGeneration();
   }
   const pending = input.state.pendingResponses[input.responseId];
+  const resumedInterruption =
+    pending?.interruptId !== null &&
+    pending?.interruptId !== undefined &&
+    input.state.activeInterruption?.interruptId === pending.interruptId &&
+    input.state.activeInterruption.interruptedResponseId === pending.responseId &&
+    input.state.activeInterruption.status === "resumed";
   if (
     !pending ||
     pending.status === "cancelled" ||
     pending.status === "committed" ||
-    pending.interruptId !== null ||
+    (pending.interruptId !== null && !resumedInterruption) ||
     pending.questionId === null ||
     pending.appearanceId === null ||
     pending.witnessId === null
@@ -1847,7 +2004,7 @@ function canonicalObjectionRulingRequest(
     interruption.status !== "active" ||
     interruption.objectionId === null
   ) {
-    throw new Error("OBJECTION_RULING_STALE");
+    throw new Error("OBJECTION_RULING_GENERATION_STALE");
   }
   const objection = input.state.objections[interruption.objectionId];
   const response =
@@ -1877,7 +2034,7 @@ function canonicalObjectionRulingRequest(
     input.actor.side !== "neutral" ||
     lastEventId(input.state) !== interruption.sourceEventId
   ) {
-    throw new Error("OBJECTION_RULING_STALE");
+    throw new Error("OBJECTION_RULING_GENERATION_STALE");
   }
   const knowledgeView = buildKnowledgeView(
     {
@@ -1904,7 +2061,7 @@ function canonicalObjectionRulingRequest(
   };
   const decisionId = stableRuntimeId("decision:objection-ruling", material);
   if (input.decisionId !== undefined && input.decisionId !== decisionId) {
-    throw new Error("OBJECTION_RULING_STALE");
+    throw new Error("OBJECTION_RULING_GENERATION_STALE");
   }
   const callMaterial = { decisionId, material };
   const callId =
@@ -2048,6 +2205,139 @@ function canonicalNegotiationAgentRequest(
   });
 }
 
+function objectionRulingActionIds(trialId: string, decisionId: string) {
+  const material = { trialId, decisionId };
+  return {
+    rulingActionId: stableRuntimeId("action:objection-ruling", material),
+    resolveActionId: stableRuntimeId("action:resolve-objection", material),
+    resumeActionId: stableRuntimeId(
+      "action:resume-objection-response",
+      material,
+    ),
+  };
+}
+
+function negotiationDecisionActionId(
+  trialId: string,
+  decisionId: string,
+): string {
+  return stableRuntimeId("action:negotiation-decision", {
+    trialId,
+    decisionId,
+  });
+}
+
+function traceMatchesObjectionRulingRequest(
+  envelope: HearingObjectionRulingPrecommit,
+  request: ObjectionRulingRequest,
+): boolean {
+  const trace = envelope.trace;
+  const view = request.knowledgeView;
+  const sourceSegmentIds = [
+    ...view.publicRecord.facts.flatMap((fact) => fact.sourceSegmentIds),
+    ...view.publicRecord.evidence.flatMap(
+      (evidence) => evidence.sourceSegmentIds,
+    ),
+  ];
+  const inputEventIds = stableUnique([
+    request.question.eventId,
+    request.objection.sourceEventId,
+    request.expectedLastEventId,
+  ]);
+  return (
+    envelope.decisionId === request.decisionId &&
+    envelope.expectedStateVersion === request.expectedStateVersion &&
+    envelope.expectedLastEventId === request.expectedLastEventId &&
+    envelope.objectionEventId === request.objection.sourceEventId &&
+    envelope.responseId === request.interruption?.interruptedResponseId &&
+    envelope.questionEventBinding.turnId === request.question.turnId &&
+    envelope.questionEventBinding.sourceEventId === request.question.eventId &&
+    trace.trialId === request.trialId &&
+    trace.callId === request.callId &&
+    trace.responseId === request.interruption?.interruptedResponseId &&
+    trace.actorId === request.actorId &&
+    trace.actorRole === "judge" &&
+    trace.expectedStateVersion === request.expectedStateVersion &&
+    trace.expectedLastEventId === request.expectedLastEventId &&
+    sameOrderedIds(trace.inputEventIds, inputEventIds) &&
+    trace.knowledgeScope.knowledgeSchemaVersion === view.schemaVersion &&
+    trace.knowledgeScope.knowledgeViewHash ===
+      sha256Utf8(JSON.stringify(view)) &&
+    trace.knowledgeScope.stateVersion === view.stateVersion &&
+    trace.knowledgeScope.factCount === view.publicRecord.facts.length &&
+    trace.knowledgeScope.evidenceCount === view.publicRecord.evidence.length &&
+    trace.knowledgeScope.testimonyCount ===
+      view.publicRecord.testimony.length &&
+    trace.knowledgeScope.priorStatementCount === 0 &&
+    trace.knowledgeScope.sourceSegmentCount ===
+      new Set(sourceSegmentIds).size &&
+    trace.knowledgeScope.publicRecordEventCount ===
+      new Set(
+        view.publicRecord.testimony.map(
+          (testimony) => testimony.transcriptEventId,
+        ),
+      ).size &&
+    trace.knowledgeScope.currentExchangeCount ===
+      (view.currentExchange === null ? 0 : 1)
+  );
+}
+
+function traceMatchesNegotiationRequest(
+  envelope: HearingNegotiationPrecommit,
+  request: NegotiationAgentRequest,
+): boolean {
+  const trace = envelope.trace;
+  const view = request.knowledgeView;
+  const sourceSegmentIds = [
+    ...view.publicRecord.facts.flatMap((fact) => fact.sourceSegmentIds),
+    ...view.publicRecord.evidence.flatMap(
+      (evidence) => evidence.sourceSegmentIds,
+    ),
+  ];
+  const factCount = new Set([
+    ...view.counsel.facts.map((fact) => fact.factId),
+    ...view.publicRecord.facts.map((fact) => fact.factId),
+    ...(view.currentExchange?.factIds ?? []),
+  ]).size;
+  const evidenceCount = new Set([
+    ...view.counsel.evidence.map((evidence) => evidence.evidenceId),
+    ...view.publicRecord.evidence.map((evidence) => evidence.evidenceId),
+    ...(view.currentExchange?.evidenceIds ?? []),
+  ]).size;
+  return (
+    envelope.decisionId === request.decisionId &&
+    envelope.expectedStateVersion === request.expectedStateVersion &&
+    envelope.expectedLastEventId === request.expectedLastEventId &&
+    trace.trialId === request.trialId &&
+    trace.callId === request.callId &&
+    trace.responseId === null &&
+    trace.actorId === request.actorId &&
+    trace.actorRole === "counsel" &&
+    trace.expectedStateVersion === request.expectedStateVersion &&
+    trace.expectedLastEventId === request.expectedLastEventId &&
+    sameOrderedIds(trace.inputEventIds, [request.expectedLastEventId]) &&
+    trace.knowledgeScope.knowledgeSchemaVersion === view.schemaVersion &&
+    trace.knowledgeScope.knowledgeViewHash ===
+      sha256Utf8(JSON.stringify(view)) &&
+    trace.knowledgeScope.stateVersion === view.stateVersion &&
+    trace.knowledgeScope.factCount === factCount &&
+    trace.knowledgeScope.evidenceCount === evidenceCount &&
+    trace.knowledgeScope.testimonyCount ===
+      view.publicRecord.testimony.length &&
+    trace.knowledgeScope.priorStatementCount === 0 &&
+    trace.knowledgeScope.sourceSegmentCount ===
+      new Set(sourceSegmentIds).size &&
+    trace.knowledgeScope.publicRecordEventCount ===
+      new Set(
+        view.publicRecord.testimony.map(
+          (testimony) => testimony.transcriptEventId,
+        ),
+      ).size &&
+    trace.knowledgeScope.currentExchangeCount ===
+      (view.currentExchange === null ? 0 : 1)
+  );
+}
+
 function canonicalJuryResponseRequest(
   input: Readonly<{
     graph: CaseGraphV1;
@@ -2186,9 +2476,11 @@ async function canonicalDebriefGeneratorRequest(
     callId?: string;
   }>,
 ): Promise<DebriefGeneratorRequest> {
+  const settledWithoutVerdict =
+    input.state.status === "settled" && input.state.verdictId === null;
   if (
     input.state.phase !== "debrief" ||
-    input.state.verdictId === null ||
+    (!settledWithoutVerdict && input.state.verdictId === null) ||
     input.state.debriefId !== null ||
     input.actor.role !== "debrief_coach" ||
     input.actor.side !== "neutral"
@@ -2210,8 +2502,10 @@ async function canonicalDebriefGeneratorRequest(
     audit.trialId !== input.state.trialId ||
     audit.stateVersion !== input.state.version ||
     audit.lastEventId !== lastEventId(input.state) ||
-    audit.verdict === null ||
-    audit.verdict.verdictId !== input.state.verdictId
+    (settledWithoutVerdict
+      ? audit.verdict !== null
+      : audit.verdict === null ||
+        audit.verdict.verdictId !== input.state.verdictId)
   ) {
     throw new Error("DEBRIEF_GENERATION_STALE");
   }
@@ -3827,6 +4121,325 @@ export const commitWitnessGeneration = internalAction({
       },
     });
     await appendWitnessGeneration(
+      ctx,
+      ownerId,
+      JSON.stringify(action),
+      envelope,
+    );
+    return await canonicalContinuation(ctx, ownerId, args.trialId);
+  },
+});
+
+function invalidObjectionRulingGeneration(): never {
+  throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+}
+
+async function appendObjectionRulingGeneration(
+  ctx: ActionCtx,
+  ownerId: string,
+  actionJsons: string[],
+  generation: HearingObjectionRulingPrecommit,
+): Promise<void> {
+  try {
+    await ctx.runMutation(appendObjectionRulingForOwnerReference, {
+      ownerId,
+      actionJsons,
+      generationJson: JSON.stringify(generation),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("STALE")) {
+      throw new Error("OBJECTION_RULING_GENERATION_STALE");
+    }
+    if (
+      message.includes("CONFLICT") ||
+      message.includes("GENERATION") ||
+      message.includes("MODEL_CALL") ||
+      message.includes("OBJECTION") ||
+      message.includes("INTERRUPTION")
+    ) {
+      return invalidObjectionRulingGeneration();
+    }
+    throw error;
+  }
+}
+
+/** Commit one Luna judge ruling and its interruption resolution atomically. */
+export const commitObjectionRulingGeneration = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args): Promise<HearingCommandPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    let generationInput: unknown;
+    try {
+      generationInput = parseJson(args.generationJson, "objection_precommit");
+    } catch {
+      return invalidObjectionRulingGeneration();
+    }
+    const parsed =
+      HearingObjectionRulingPrecommitSchema.safeParse(generationInput);
+    if (!parsed.success || parsed.data.trialId !== args.trialId) {
+      return invalidObjectionRulingGeneration();
+    }
+    const envelope = parsed.data;
+    const ids = objectionRulingActionIds(
+      args.trialId,
+      envelope.decisionId,
+    );
+    const existing = await ctx.runQuery(
+      loadGeneratedObjectionBundleReference,
+      {
+        ownerId,
+        trialId: args.trialId,
+        actionId: ids.rulingActionId,
+      },
+    );
+    if (existing !== null) {
+      await appendObjectionRulingGeneration(
+        ctx,
+        ownerId,
+        existing.actionJsons,
+        envelope,
+      );
+      return await canonicalContinuation(ctx, ownerId, args.trialId);
+    }
+
+    const head = await loadHead(ctx, ownerId, args.trialId);
+    const judge = actorByRole(head.state, "judge", "neutral");
+    const request = canonicalObjectionRulingRequest({
+      graph: head.graph,
+      state: head.state,
+      actor: judge,
+      callId: envelope.callId,
+      decisionId: envelope.decisionId,
+    });
+    if (
+      envelope.trace.completedAt === null ||
+      !traceMatchesObjectionRulingRequest(envelope, request)
+    ) {
+      return invalidObjectionRulingGeneration();
+    }
+    const validation = validateObjectionRulingOutput(
+      request,
+      envelope.output,
+    );
+    if (!validation.accepted || request.interruption === null) {
+      return invalidObjectionRulingGeneration();
+    }
+    const completedAt = envelope.trace.completedAt;
+    const responseId = request.interruption.interruptedResponseId;
+    const interruptId = request.interruption.interruptId;
+    const ruling = actionFromIntent({
+      actionId: ids.rulingActionId,
+      trialId: args.trialId,
+      expectedStateVersion: request.expectedStateVersion,
+      actor: judge,
+      source: "ai",
+      requestedAt: requestedAtWithOffset(completedAt, 0),
+      causationId: request.expectedLastEventId,
+      responseId,
+      interruptId,
+      modelMetadata: envelope.modelMetadata,
+      type: "RULE_ON_OBJECTION",
+      payload: {
+        objectionId: request.objection.objectionId,
+        ruling: validation.ruling.ruling,
+        remedy: validation.ruling.remedy,
+        reason: validation.ruling.reason,
+      },
+    });
+    const system = actorByRole(head.state, "system", "neutral");
+    const resolve = actionFromIntent({
+      actionId: ids.resolveActionId,
+      trialId: args.trialId,
+      expectedStateVersion: request.expectedStateVersion + 1,
+      actor: system,
+      source: "deterministic",
+      requestedAt: requestedAtWithOffset(completedAt, 1),
+      causationId: eventIdForAction(ruling.actionId),
+      responseId,
+      interruptId,
+      type: "RESOLVE_INTERRUPTION",
+      payload: {
+        interruptId,
+        outcome:
+          validation.ruling.ruling === "overruled" ? "resume" : "cancel",
+      },
+    });
+    const actions = [ruling, resolve];
+    if (validation.ruling.ruling === "overruled") {
+      actions.push(
+        actionFromIntent({
+          actionId: ids.resumeActionId,
+          trialId: args.trialId,
+          expectedStateVersion: request.expectedStateVersion + 2,
+          actor: system,
+          source: "deterministic",
+          requestedAt: requestedAtWithOffset(completedAt, 2),
+          causationId: eventIdForAction(resolve.actionId),
+          responseId,
+          interruptId,
+          type: "RESUME_INTERRUPTED_SPEECH",
+          payload: { interruptId, interruptedResponseId: responseId },
+        }),
+      );
+    }
+    await appendObjectionRulingGeneration(
+      ctx,
+      ownerId,
+      actions.map((action) => JSON.stringify(action)),
+      envelope,
+    );
+    return await canonicalContinuation(ctx, ownerId, args.trialId);
+  },
+});
+
+function invalidNegotiationGeneration(): never {
+  throw new Error("NEGOTIATION_GENERATION_INVALID");
+}
+
+async function appendNegotiationGeneration(
+  ctx: ActionCtx,
+  ownerId: string,
+  actionJson: string,
+  generation: HearingNegotiationPrecommit,
+): Promise<void> {
+  try {
+    await ctx.runMutation(appendNegotiationDecisionForOwnerReference, {
+      ownerId,
+      actionJson,
+      generationJson: JSON.stringify(generation),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("STALE")) {
+      throw new Error("NEGOTIATION_GENERATION_STALE");
+    }
+    if (
+      message.includes("CONFLICT") ||
+      message.includes("GENERATION") ||
+      message.includes("MODEL_CALL") ||
+      message.includes("SETTLEMENT")
+    ) {
+      return invalidNegotiationGeneration();
+    }
+    throw error;
+  }
+}
+
+/** Commit one private Luna settlement decision and resume canonically. */
+export const commitNegotiationGeneration = internalAction({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args): Promise<HearingCommandPreparation> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    let generationInput: unknown;
+    try {
+      generationInput = parseJson(args.generationJson, "negotiation_precommit");
+    } catch {
+      return invalidNegotiationGeneration();
+    }
+    const parsed = HearingNegotiationPrecommitSchema.safeParse(generationInput);
+    if (!parsed.success || parsed.data.trialId !== args.trialId) {
+      return invalidNegotiationGeneration();
+    }
+    const envelope = parsed.data;
+    const actionId = negotiationDecisionActionId(
+      args.trialId,
+      envelope.decisionId,
+    );
+    const existing = await ctx.runQuery(
+      loadGeneratedNegotiationActionReference,
+      { ownerId, trialId: args.trialId, actionId },
+    );
+    if (existing !== null) {
+      await appendNegotiationGeneration(
+        ctx,
+        ownerId,
+        existing.actionJson,
+        envelope,
+      );
+      return await canonicalContinuation(ctx, ownerId, args.trialId);
+    }
+
+    const head = await loadHead(ctx, ownerId, args.trialId);
+    const actor = opposingCounselForAiRuntime(head.state);
+    const request = canonicalNegotiationAgentRequest({
+      graph: head.graph,
+      state: head.state,
+      actor,
+      callId: envelope.callId,
+      decisionId: envelope.decisionId,
+    });
+    if (
+      request === null ||
+      envelope.trace.completedAt === null ||
+      !traceMatchesNegotiationRequest(envelope, request)
+    ) {
+      return invalidNegotiationGeneration();
+    }
+    const validation = validateNegotiationAgentOutput(
+      request,
+      envelope.output,
+    );
+    if (!validation.accepted) return invalidNegotiationGeneration();
+    const decision = validation.decision;
+    let type: TrialActionV3["type"];
+    let payload: unknown;
+    if (decision.recommendation === "counter") {
+      if (
+        decision.terms === null ||
+        decision.offerId === null ||
+        decision.parentOfferId === null
+      ) {
+        return invalidNegotiationGeneration();
+      }
+      type = "COUNTER_SETTLEMENT";
+      payload = {
+        offerId: decision.offerId,
+        parentOfferId: decision.parentOfferId,
+        proposedByPartyId: request.representedPartyId,
+        recipientPartyIds: [request.counterpartyPartyId],
+        terms: decision.terms,
+        expiresAtSequence: settlementExpirySequence(
+          head.state.policySnapshot,
+          head.state.lastSequence + 1,
+        ),
+      };
+    } else if (decision.recommendation === "accept") {
+      if (decision.targetOfferId === null) {
+        return invalidNegotiationGeneration();
+      }
+      type = "ACCEPT_SETTLEMENT";
+      payload = { offerId: decision.targetOfferId };
+    } else if (decision.recommendation === "reject") {
+      if (decision.targetOfferId === null) {
+        return invalidNegotiationGeneration();
+      }
+      type = "REJECT_SETTLEMENT";
+      payload = { offerId: decision.targetOfferId };
+    } else {
+      return invalidNegotiationGeneration();
+    }
+    const action = actionFromIntent({
+      actionId,
+      trialId: args.trialId,
+      expectedStateVersion: request.expectedStateVersion,
+      actor,
+      source: "ai",
+      requestedAt: envelope.trace.completedAt,
+      causationId: request.expectedLastEventId,
+      modelMetadata: envelope.modelMetadata,
+      type,
+      payload,
+    });
+    await appendNegotiationGeneration(
       ctx,
       ownerId,
       JSON.stringify(action),

@@ -264,6 +264,12 @@ export function validateWitnessAnswerRequestBinding(
   const question = state.questions[request.question.questionId];
   const questionTurn = state.transcriptTurns[request.question.turnId];
   const lastEventId = state.eventIds.at(-1);
+  const resumedInterruption =
+    pending?.interruptId !== null &&
+    pending?.interruptId !== undefined &&
+    state.activeInterruption?.interruptId === pending.interruptId &&
+    state.activeInterruption.interruptedResponseId === request.responseId &&
+    state.activeInterruption.status === "resumed";
 
   if (
     request.trialId !== state.trialId ||
@@ -326,7 +332,8 @@ export function validateWitnessAnswerRequestBinding(
     !pending ||
     pending.responseId !== request.responseId ||
     pending.expectedStateVersion !== request.expectedStateVersion ||
-    pending.requestEventId !== request.expectedLastEventId ||
+    (!resumedInterruption &&
+      pending.requestEventId !== request.expectedLastEventId) ||
     pending.lastEventId !== request.expectedLastEventId ||
     pending.questionId !== request.question.questionId ||
     pending.appearanceId !== request.question.appearanceId
@@ -349,9 +356,10 @@ export function validateWitnessAnswerRequestBinding(
     );
   }
   if (
-    pending?.interruptId !== null ||
+    (pending?.interruptId !== null && !resumedInterruption) ||
     (state.activeInterruption !== null &&
-      state.activeInterruption.interruptedResponseId === request.responseId)
+      state.activeInterruption.interruptedResponseId === request.responseId &&
+      state.activeInterruption.status !== "resumed")
   ) {
     issues.push(
       issue(

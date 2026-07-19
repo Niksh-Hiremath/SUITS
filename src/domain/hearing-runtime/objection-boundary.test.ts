@@ -8,10 +8,12 @@ import {
 import {
   COURTROOM_MODEL_CALL_ATTEMPT_TRACE_SCHEMA_VERSION,
   COURTROOM_MODEL_CALL_TRACE_SCHEMA_VERSION,
+  CourtroomModelCallTraceSchema,
 } from "../courtroom-ai/model-call-trace";
 import {
   HEARING_OBJECTION_RULING_PRECOMMIT_SCHEMA_VERSION,
   HEARING_OBJECTION_RULING_PROMPT_VERSION,
+  HEARING_OBJECTION_RULING_PROVIDER_PROTOCOL_VERSION,
   HearingObjectionRulingPrecommitSchema,
   hashObjectionRulingModelOutput,
   objectionRulingOutputCitations,
@@ -121,7 +123,8 @@ function validPrecommit(): HearingObjectionRulingPrecommit {
       expectedLastEventId: "event:interruption",
       provider: "openai-responses",
       model: "gpt-5.6-luna",
-      providerProtocolVersion: "courtroom-model-provider.v1",
+      providerProtocolVersion:
+        HEARING_OBJECTION_RULING_PROVIDER_PROTOCOL_VERSION,
       promptVersion: HEARING_OBJECTION_RULING_PROMPT_VERSION,
       outputSchemaVersion: OBJECTION_RULING_OUTPUT_SCHEMA_VERSION,
       knowledgeScope: {
@@ -187,6 +190,47 @@ function validPrecommit(): HearingObjectionRulingPrecommit {
   });
 }
 
+function validRepairedPrecommit(): HearingObjectionRulingPrecommit {
+  const envelope = validPrecommit();
+  const acceptedAttempt = envelope.trace.attempts[0];
+  if (acceptedAttempt === undefined) {
+    throw new Error("Fixture requires an accepted attempt");
+  }
+  const emptyUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+  };
+
+  envelope.trace.attempts = [
+    {
+      ...acceptedAttempt,
+      status: "validation_failed",
+      providerRequestId: "request:objection:invalid:001",
+      providerResponseId: "response:openai:objection:invalid:001",
+      outputHash: HASH_A,
+      proposedCitationCount: 0,
+      usage: emptyUsage,
+      validationIssueCodes: ["invalid_ruling_semantics"],
+    },
+    {
+      ...acceptedAttempt,
+      attempt: 2,
+      mode: "repair",
+    },
+  ];
+  envelope.trace.acceptedAttempt = 2;
+  envelope.trace.retryCount = 1;
+  envelope.trace.validationFailureCount = 1;
+  envelope.modelMetadata.retryCount = 1;
+  envelope.modelMetadata.validationFailureCount = 1;
+
+  return HearingObjectionRulingPrecommitSchema.parse(envelope);
+}
+
 describe("HearingObjectionRulingPrecommitSchema", () => {
   it("accepts one uncommitted Luna ruling with exact event bindings", () => {
     const envelope = validPrecommit();
@@ -203,6 +247,70 @@ describe("HearingObjectionRulingPrecommitSchema", () => {
         envelope.questionEventBinding,
       ),
     );
+  });
+
+  it("pins the provider protocol and permits at most one validation repair", () => {
+    const repaired = validRepairedPrecommit();
+    expect(HearingObjectionRulingPrecommitSchema.parse(repaired)).toEqual(
+      repaired,
+    );
+
+    const wrongProtocol = validPrecommit();
+    wrongProtocol.trace.providerProtocolVersion =
+      "courtroom-model-provider.v2";
+
+    const providerRetry = validRepairedPrecommit();
+    const providerFailure = providerRetry.trace.attempts[0];
+    if (providerFailure === undefined) {
+      throw new Error("Fixture requires a failed initial attempt");
+    }
+    providerFailure.status = "provider_failed";
+    providerFailure.outputHash = null;
+    providerFailure.validationIssueCodes = [];
+    providerFailure.safeErrorCode = "provider_failed";
+    providerRetry.trace.validationFailureCount = 0;
+    providerRetry.modelMetadata.validationFailureCount = 0;
+
+    const tooManyRepairs = validRepairedPrecommit();
+    const firstFailure = tooManyRepairs.trace.attempts[0];
+    const acceptedAttempt = tooManyRepairs.trace.attempts[1];
+    if (firstFailure === undefined || acceptedAttempt === undefined) {
+      throw new Error("Fixture requires one failed and one accepted attempt");
+    }
+    tooManyRepairs.trace.attempts = [
+      firstFailure,
+      {
+        ...firstFailure,
+        attempt: 2,
+        mode: "repair",
+        providerRequestId: "request:objection:invalid:002",
+        providerResponseId: "response:openai:objection:invalid:002",
+      },
+      {
+        ...acceptedAttempt,
+        attempt: 3,
+      },
+    ];
+    tooManyRepairs.trace.acceptedAttempt = 3;
+    tooManyRepairs.trace.retryCount = 2;
+    tooManyRepairs.trace.validationFailureCount = 2;
+    tooManyRepairs.modelMetadata.retryCount = 2;
+    tooManyRepairs.modelMetadata.validationFailureCount = 2;
+
+    expect(CourtroomModelCallTraceSchema.safeParse(wrongProtocol.trace).success).toBe(
+      true,
+    );
+    expect(CourtroomModelCallTraceSchema.safeParse(providerRetry.trace).success).toBe(
+      true,
+    );
+    expect(CourtroomModelCallTraceSchema.safeParse(tooManyRepairs.trace).success).toBe(
+      true,
+    );
+    for (const envelope of [wrongProtocol, providerRetry, tooManyRepairs]) {
+      expect(
+        HearingObjectionRulingPrecommitSchema.safeParse(envelope).success,
+      ).toBe(false);
+    }
   });
 
   it.each([

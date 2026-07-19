@@ -33,6 +33,14 @@ import {
   type HearingWitnessGenerationPrecommit,
 } from "../src/domain/hearing-runtime/model-boundary";
 import {
+  HearingObjectionRulingPrecommitSchema,
+  type HearingObjectionRulingPrecommit,
+} from "../src/domain/hearing-runtime/objection-boundary";
+import {
+  HearingNegotiationPrecommitSchema,
+  type HearingNegotiationPrecommit,
+} from "../src/domain/hearing-runtime/settlement-boundary";
+import {
   parsePersistedOpponentDirective,
   type PersistedOpponentDirective,
 } from "../src/domain/hearing-runtime/opponent-directive";
@@ -358,6 +366,22 @@ function staleDebriefGeneration(): never {
   throw new Error("DEBRIEF_GENERATION_STALE");
 }
 
+function invalidObjectionRuling(): never {
+  throw new Error("OBJECTION_RULING_GENERATION_INVALID");
+}
+
+function staleObjectionRuling(): never {
+  throw new Error("OBJECTION_RULING_GENERATION_STALE");
+}
+
+function invalidNegotiationGeneration(): never {
+  throw new Error("NEGOTIATION_GENERATION_INVALID");
+}
+
+function staleNegotiationGeneration(): never {
+  throw new Error("NEGOTIATION_GENERATION_STALE");
+}
+
 function parseOpponentPlanGenerationJson(
   generationJson: string,
 ): HearingOpponentPlanPrecommit {
@@ -410,6 +434,32 @@ function parseDebriefGenerationJson(
   return parsed.success ? parsed.data : invalidDebriefGeneration();
 }
 
+function parseObjectionRulingJson(
+  generationJson: string,
+): HearingObjectionRulingPrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidObjectionRuling();
+  }
+  const parsed = HearingObjectionRulingPrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidObjectionRuling();
+}
+
+function parseNegotiationGenerationJson(
+  generationJson: string,
+): HearingNegotiationPrecommit {
+  let input: unknown;
+  try {
+    input = parseJsonObject(generationJson, "generationJson");
+  } catch {
+    return invalidNegotiationGeneration();
+  }
+  const parsed = HearingNegotiationPrecommitSchema.safeParse(input);
+  return parsed.success ? parsed.data : invalidNegotiationGeneration();
+}
+
 function finalRuntimeId(prefix: string, material: unknown): string {
   return `${prefix}:${sha256Utf8(canonicalJson(material))}`;
 }
@@ -444,6 +494,36 @@ function debriefGenerationIds(generation: HearingDebriefGeneratorPrecommit) {
     }),
     debriefId,
   };
+}
+
+function objectionRulingIds(generation: HearingObjectionRulingPrecommit) {
+  const material = {
+    trialId: generation.trialId,
+    decisionId: generation.decisionId,
+  };
+  return {
+    rulingActionId: finalRuntimeId("action:objection-ruling", material),
+    resolveActionId: finalRuntimeId("action:resolve-objection", material),
+    resumeActionId: finalRuntimeId("action:resume-objection-response", material),
+  };
+}
+
+function negotiationActionId(generation: HearingNegotiationPrecommit): string {
+  return finalRuntimeId("action:negotiation-decision", {
+    trialId: generation.trialId,
+    decisionId: generation.decisionId,
+  });
+}
+
+function negotiationCounterOfferId(
+  generation: HearingNegotiationPrecommit,
+  targetOfferId: string,
+): string {
+  return finalRuntimeId("offer:negotiation-counter", {
+    trialId: generation.trialId,
+    decisionId: generation.decisionId,
+    targetOfferId,
+  });
 }
 
 function eventIdForGeneratedAction(actionId: string): string {
@@ -984,6 +1064,208 @@ function terminalTimeWithOffset(value: string | null, offset: number): string {
 
 function sameActionActor(left: TrialActionV3, right: TrialActionV3): boolean {
   return sameCanonicalJson(left.actor, right.actor);
+}
+
+async function requireObjectionRulingActions(
+  ctx: MutationCtx,
+  actions: readonly TrialActionV3[],
+  generation: HearingObjectionRulingPrecommit,
+): Promise<readonly TrialActionV3[]> {
+  const overruled =
+    generation.output.ruling === "overruled" &&
+    generation.output.remedy === "resume_response";
+  const sustained =
+    generation.output.ruling === "sustained" &&
+    generation.output.remedy === "cancel_response";
+  if ((!overruled && !sustained) || actions.length !== (overruled ? 3 : 2)) {
+    return invalidObjectionRuling();
+  }
+  const [ruling, resolve, resume] = actions;
+  if (!ruling || !resolve || (overruled && !resume)) {
+    return invalidObjectionRuling();
+  }
+  const [questionRow, objectionRow, interruptionRow] = await Promise.all([
+    ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", generation.questionEventBinding.sourceEventId),
+      )
+      .unique(),
+    ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", generation.objectionEventId),
+      )
+      .unique(),
+    ctx.db
+      .query("trialEvents")
+      .withIndex("by_event_id", (index) =>
+        index.eq("eventId", generation.expectedLastEventId),
+      )
+      .unique(),
+  ]);
+  if (!questionRow || !objectionRow || !interruptionRow) {
+    return staleObjectionRuling();
+  }
+  const questionEvent = storedEventToV3(questionRow);
+  const objectionEvent = storedEventToV3(objectionRow);
+  const interruptionEvent = storedEventToV3(interruptionRow);
+  if (
+    questionEvent.trialId !== generation.trialId ||
+    questionEvent.type !== "ASK_QUESTION" ||
+    questionEvent.payload.turnId !== generation.questionEventBinding.turnId ||
+    objectionEvent.trialId !== generation.trialId ||
+    objectionEvent.type !== "OBJECT" ||
+    objectionEvent.payload.questionId !== questionEvent.payload.questionId ||
+    objectionEvent.payload.interruptedResponseId !== generation.responseId ||
+    interruptionEvent.trialId !== generation.trialId ||
+    interruptionEvent.type !== "BEGIN_INTERRUPTION" ||
+    interruptionEvent.stateVersion !== generation.expectedStateVersion ||
+    interruptionEvent.payload.objectionId !== objectionEvent.payload.objectionId ||
+    interruptionEvent.payload.interruptedResponseId !== generation.responseId
+  ) {
+    return staleObjectionRuling();
+  }
+  const ids = objectionRulingIds(generation);
+  const completedAt = generation.trace.completedAt;
+  if (completedAt === null) return invalidObjectionRuling();
+  const at = (offset: number) => {
+    const timestamp = Date.parse(completedAt);
+    if (!Number.isFinite(timestamp) || timestamp < 0) {
+      return invalidObjectionRuling();
+    }
+    return new Date(timestamp + offset).toISOString();
+  };
+  if (
+    ruling.type !== "RULE_ON_OBJECTION" ||
+    ruling.actionId !== ids.rulingActionId ||
+    ruling.trialId !== generation.trialId ||
+    ruling.expectedStateVersion !== generation.expectedStateVersion ||
+    ruling.actor.role !== "judge" ||
+    ruling.actor.side !== "neutral" ||
+    ruling.actor.witnessId !== null ||
+    ruling.actor.actorId !== generation.trace.actorId ||
+    ruling.source !== "ai" ||
+    ruling.requestedAt !== at(0) ||
+    ruling.causationId !== generation.expectedLastEventId ||
+    ruling.correlationId !== generation.trialId ||
+    ruling.responseId !== generation.responseId ||
+    ruling.interruptId !== interruptionEvent.payload.interruptId ||
+    !sameCanonicalJson(ruling.modelMetadata, generation.modelMetadata) ||
+    ruling.payload.objectionId !== objectionEvent.payload.objectionId ||
+    ruling.payload.ruling !== generation.output.ruling ||
+    ruling.payload.remedy !== generation.output.remedy ||
+    ruling.payload.reason !== generation.output.reason
+  ) {
+    return invalidObjectionRuling();
+  }
+  if (
+    resolve.type !== "RESOLVE_INTERRUPTION" ||
+    resolve.actionId !== ids.resolveActionId ||
+    resolve.trialId !== generation.trialId ||
+    resolve.expectedStateVersion !== generation.expectedStateVersion + 1 ||
+    resolve.actor.role !== "system" ||
+    resolve.actor.side !== "neutral" ||
+    resolve.actor.witnessId !== null ||
+    resolve.source !== "deterministic" ||
+    resolve.requestedAt !== at(1) ||
+    resolve.causationId !== eventIdForGeneratedAction(ruling.actionId) ||
+    resolve.correlationId !== generation.trialId ||
+    resolve.responseId !== generation.responseId ||
+    resolve.interruptId !== interruptionEvent.payload.interruptId ||
+    resolve.modelMetadata !== null ||
+    resolve.payload.interruptId !== interruptionEvent.payload.interruptId ||
+    resolve.payload.outcome !== (overruled ? "resume" : "cancel")
+  ) {
+    return invalidObjectionRuling();
+  }
+  if (overruled) {
+    if (
+      !resume ||
+      resume.type !== "RESUME_INTERRUPTED_SPEECH" ||
+      resume.actionId !== ids.resumeActionId ||
+      resume.trialId !== generation.trialId ||
+      resume.expectedStateVersion !== generation.expectedStateVersion + 2 ||
+      !sameActionActor(resume, resolve) ||
+      resume.source !== "deterministic" ||
+      resume.requestedAt !== at(2) ||
+      resume.causationId !== eventIdForGeneratedAction(resolve.actionId) ||
+      resume.correlationId !== generation.trialId ||
+      resume.responseId !== generation.responseId ||
+      resume.interruptId !== interruptionEvent.payload.interruptId ||
+      resume.modelMetadata !== null ||
+      resume.payload.interruptId !== interruptionEvent.payload.interruptId ||
+      resume.payload.interruptedResponseId !== generation.responseId
+    ) {
+      return invalidObjectionRuling();
+    }
+  }
+  return actions;
+}
+
+function requireNegotiationAction(
+  action: TrialActionV3,
+  generation: HearingNegotiationPrecommit,
+): TrialActionV3 {
+  const targetOfferIds = generation.output.citations.settlementOfferIds;
+  if (targetOfferIds.length !== 1) return invalidNegotiationGeneration();
+  const targetOfferId = targetOfferIds[0];
+  if (!targetOfferId) return invalidNegotiationGeneration();
+  const recommendation = generation.output.recommendation;
+  const expectedType =
+    recommendation === "counter"
+      ? "COUNTER_SETTLEMENT"
+      : recommendation === "accept"
+        ? "ACCEPT_SETTLEMENT"
+        : recommendation === "reject"
+          ? "REJECT_SETTLEMENT"
+          : null;
+  if (expectedType === null || action.type !== expectedType) {
+    return invalidNegotiationGeneration();
+  }
+  if (
+    generation.trace.completedAt === null ||
+    action.actionId !== negotiationActionId(generation) ||
+    action.trialId !== generation.trialId ||
+    action.expectedStateVersion !== generation.expectedStateVersion ||
+    action.actor.role !== "opposing_counsel" ||
+    action.actor.side !== "opposing" ||
+    action.actor.witnessId !== null ||
+    action.actor.actorId !== generation.trace.actorId ||
+    action.source !== "ai" ||
+    action.requestedAt !== generation.trace.completedAt ||
+    action.causationId !== generation.expectedLastEventId ||
+    action.correlationId !== generation.trialId ||
+    action.responseId !== null ||
+    action.interruptId !== null ||
+    !sameCanonicalJson(action.modelMetadata, generation.modelMetadata)
+  ) {
+    return staleNegotiationGeneration();
+  }
+  if (action.type === "COUNTER_SETTLEMENT") {
+    const terms = generation.output.terms;
+    if (
+      recommendation !== "counter" ||
+      terms === null ||
+      action.payload.offerId !==
+        negotiationCounterOfferId(generation, targetOfferId) ||
+      action.payload.parentOfferId !== targetOfferId ||
+      action.payload.recipientPartyIds.length !== 1 ||
+      action.payload.recipientPartyIds[0] === action.payload.proposedByPartyId ||
+      action.payload.terms.amount !== terms.amount ||
+      action.payload.terms.currency !== terms.currency ||
+      !sameOrderedStrings(
+        action.payload.terms.nonMonetaryTerms,
+        terms.nonMonetaryTerms,
+      ) ||
+      action.payload.terms.summary !== terms.summary
+    ) {
+      return invalidNegotiationGeneration();
+    }
+  } else if (action.payload.offerId !== targetOfferId) {
+    return invalidNegotiationGeneration();
+  }
+  return action;
 }
 
 function requireJuryGenerationActions(
@@ -2332,6 +2614,143 @@ export const appendCounselTurnForOwner = internalMutation({
       ...generation.trace,
       committedActionId: action.actionId,
       committedEventId,
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return receipt;
+  },
+});
+
+/** Atomically commits a Luna judge ruling, interruption resolution, and audit. */
+export const appendObjectionRulingForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJsons: v.array(v.string()),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInputs: unknown[];
+    try {
+      actionInputs = args.actionJsons.map((actionJson) =>
+        parseJsonObject(actionJson, "actionJson"),
+      );
+    } catch {
+      return invalidObjectionRuling();
+    }
+    const parsedActions = actionInputs.map((input) =>
+      TrialActionV3Schema.safeParse(input),
+    );
+    if (parsedActions.some((parsed) => !parsed.success)) {
+      return invalidObjectionRuling();
+    }
+    const generation = parseObjectionRulingJson(args.generationJson);
+    const actions = await requireObjectionRulingActions(
+      ctx,
+      parsedActions.map((parsed) => {
+        if (!parsed.success) return invalidObjectionRuling();
+        return parsed.data;
+      }),
+      generation,
+    );
+    let primaryReceipt: Awaited<ReturnType<typeof appendActiveAction>> | null =
+      null;
+    for (const [index, action] of actions.entries()) {
+      const projection = requireOwnedProjection(
+        await ctx.db
+          .query("trialProjections")
+          .withIndex("by_trial", (query) =>
+            query.eq("trialId", action.trialId),
+          )
+          .unique(),
+        args.ownerId,
+      );
+      const receipt = await appendActiveAction(ctx, {
+        action,
+        ownerId: args.ownerId,
+        projection,
+        writeSnapshot: index === actions.length - 1,
+        playerControlledOnly: false,
+      });
+      const eventId = receipt.eventIds[0];
+      if (
+        receipt.eventIds.length !== 1 ||
+        eventId !== eventIdForGeneratedAction(action.actionId) ||
+        receipt.actionId !== action.actionId ||
+        receipt.trialId !== action.trialId
+      ) {
+        return invalidObjectionRuling();
+      }
+      await requireStoredGeneratedEvent(ctx, { action, eventId });
+      if (index === 0) primaryReceipt = receipt;
+    }
+    if (primaryReceipt === null) return invalidObjectionRuling();
+    const primaryAction = actions[0];
+    if (!primaryAction) return invalidObjectionRuling();
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: primaryAction.actionId,
+      committedEventId: eventIdForGeneratedAction(primaryAction.actionId),
+    });
+    await persistTerminalCourtroomModelCallForOwner(ctx, {
+      ownerId: args.ownerId,
+      traceJson: canonicalJson(committedTrace),
+    });
+    return primaryReceipt;
+  },
+});
+
+/** Atomically commits one private Luna negotiation decision and its audit. */
+export const appendNegotiationDecisionForOwner = internalMutation({
+  args: {
+    ownerId: v.string(),
+    actionJson: v.string(),
+    generationJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertIdentifier(args.ownerId, "ownerId");
+    let actionInput: unknown;
+    try {
+      actionInput = parseJsonObject(args.actionJson, "actionJson");
+    } catch {
+      return invalidNegotiationGeneration();
+    }
+    const parsedAction = TrialActionV3Schema.safeParse(actionInput);
+    if (!parsedAction.success) return invalidNegotiationGeneration();
+    const generation = parseNegotiationGenerationJson(args.generationJson);
+    const action = requireNegotiationAction(parsedAction.data, generation);
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (query) =>
+          query.eq("trialId", action.trialId),
+        )
+        .unique(),
+      args.ownerId,
+    );
+    const receipt = await appendActiveAction(ctx, {
+      action,
+      ownerId: args.ownerId,
+      projection,
+      writeSnapshot: true,
+      playerControlledOnly: false,
+    });
+    const eventId = receipt.eventIds[0];
+    if (
+      receipt.eventIds.length !== 1 ||
+      eventId !== eventIdForGeneratedAction(action.actionId) ||
+      receipt.actionId !== action.actionId ||
+      receipt.trialId !== action.trialId
+    ) {
+      return invalidNegotiationGeneration();
+    }
+    await requireStoredGeneratedEvent(ctx, { action, eventId });
+    const committedTrace = CourtroomModelCallTraceSchema.parse({
+      ...generation.trace,
+      committedActionId: action.actionId,
+      committedEventId: eventId,
     });
     await persistTerminalCourtroomModelCallForOwner(ctx, {
       ownerId: args.ownerId,

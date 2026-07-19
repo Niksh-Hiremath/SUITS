@@ -16,6 +16,8 @@ import {
   HearingCommandPreparationSchema,
   HearingDebriefGeneratorPrecommitSchema,
   HearingJuryResponsePrecommitSchema,
+  HearingNegotiationPrecommitSchema,
+  HearingObjectionRulingPrecommitSchema,
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
@@ -206,6 +208,16 @@ const commitCounselGenerationReference = makeFunctionReference<
   { ownerId: string; trialId: string; generationJson: string },
   HearingCommandPreparation
 >("hearingRuntime:commitCounselGeneration");
+const commitObjectionRulingGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitObjectionRulingGeneration");
+const commitNegotiationGenerationReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string; generationJson: string },
+  HearingCommandPreparation
+>("hearingRuntime:commitNegotiationGeneration");
 const commitJuryGenerationReference = makeFunctionReference<
   "action",
   { ownerId: string; trialId: string; generationJson: string },
@@ -277,6 +289,38 @@ export const HearingServiceCounselResponseCommitRequestSchema = z
     ownerId: CaseServiceOwnerIdSchema,
     trialId: z.string().trim().min(1).max(256),
     generation: HearingCounselResponsePrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceObjectionRulingCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingObjectionRulingPrecommitSchema,
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (body.generation.trialId !== body.trialId) {
+      context.addIssue({
+        code: "custom",
+        path: ["generation", "trialId"],
+        message: "Generation trial must match the service request",
+      });
+    }
+  });
+export const HearingServiceNegotiationCommitRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: z.string().trim().min(1).max(256),
+    generation: HearingNegotiationPrecommitSchema,
   })
   .strict()
   .superRefine((body, context) => {
@@ -589,6 +633,45 @@ const commitCounselGeneration = httpAction(async (ctx, request) => {
   }
 });
 
+const commitObjectionRulingGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceObjectionRulingCommitRequestSchema,
+    );
+    const result = await ctx.runAction(
+      commitObjectionRulingGenerationReference,
+      {
+        ownerId: body.ownerId,
+        trialId: body.trialId,
+        generationJson: JSON.stringify(body.generation),
+      },
+    );
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const commitNegotiationGeneration = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceNegotiationCommitRequestSchema,
+    );
+    const result = await ctx.runAction(commitNegotiationGenerationReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      generationJson: JSON.stringify(body.generation),
+    });
+    return caseServiceJson(HearingCommandPreparationSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const commitJuryGeneration = httpAction(async (ctx, request) => {
   try {
     await authorizeCaseServiceRequest(request, process.env.SUITS_CONVEX_SERVICE_SECRET);
@@ -669,6 +752,8 @@ http.route({ path: "/service/hearings/command/prepare", method: "POST", handler:
 http.route({ path: "/service/hearings/command/commit", method: "POST", handler: commitWitnessGeneration });
 http.route({ path: "/service/hearings/opponent-plan/commit", method: "POST", handler: commitOpponentPlanGeneration });
 http.route({ path: "/service/hearings/counsel-response/commit", method: "POST", handler: commitCounselGeneration });
+http.route({ path: "/service/hearings/objection-ruling/commit", method: "POST", handler: commitObjectionRulingGeneration });
+http.route({ path: "/service/hearings/negotiation/commit", method: "POST", handler: commitNegotiationGeneration });
 http.route({ path: "/service/hearings/jury-response/commit", method: "POST", handler: commitJuryGeneration });
 http.route({ path: "/service/hearings/debrief/commit", method: "POST", handler: commitDebriefGeneration });
 http.route({ path: "/service/hearings/model-call/terminal", method: "POST", handler: recordTerminalModelCall });

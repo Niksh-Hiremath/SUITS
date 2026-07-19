@@ -258,6 +258,47 @@ describe("witness answer contracts", () => {
     ).toContain("response_not_pending");
   });
 
+  it("accepts a response rebound to the exact resumed-interruption head", () => {
+    const { request, state } = createPendingWitnessRequest();
+    const resumedState = structuredClone(state);
+    const resumedRequest = structuredClone(request);
+    const resumeEventId = "event:witness-answer:resumed";
+    const interruptId = "interrupt:witness-answer:resumed";
+    resumedState.version += 1;
+    resumedState.lastSequence += 1;
+    resumedState.eventIds.push(resumeEventId);
+    resumedState.activeInterruption = {
+      interruptId,
+      interruptedResponseId: request.responseId,
+      objectionId: "objection:witness-answer:resumed",
+      status: "resumed",
+      sourceEventId: "event:witness-answer:interruption",
+      lastEventId: resumeEventId,
+    };
+    Object.assign(resumedState.pendingResponses[request.responseId]!, {
+      status: "streaming",
+      interruptId,
+      expectedStateVersion: resumedState.version,
+      lastEventId: resumeEventId,
+    });
+    resumedRequest.expectedStateVersion = resumedState.version;
+    resumedRequest.expectedLastEventId = resumeEventId;
+    resumedRequest.knowledgeView.stateVersion = resumedState.version;
+    resumedRequest.knowledgeView.publicRecord.stateVersion =
+      resumedState.version;
+
+    expect(
+      validateWitnessAnswerRequestBinding(resumedRequest, resumedState),
+    ).toEqual([]);
+
+    resumedState.activeInterruption.status = "resolved";
+    expect(
+      validateWitnessAnswerRequestBinding(resumedRequest, resumedState).map(
+        ({ code }) => code,
+      ),
+    ).toContain("response_interrupted");
+  });
+
   it("reports every material request-to-view binding mismatch before generation", () => {
     const { request, state } = createPendingWitnessRequest();
     const mutations: Array<{
