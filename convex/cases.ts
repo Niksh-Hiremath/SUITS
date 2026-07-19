@@ -1,8 +1,8 @@
-import { internalQuery, mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 
 const CASE_ID = "case_asha_vertex_v1";
 
-export const seedGoldenCase = mutation({
+export const seedGoldenCase = internalMutation({
   args: {},
   handler: async (ctx) => {
     const existing = await ctx.db
@@ -73,7 +73,7 @@ export const seedGoldenCase = mutation({
   },
 });
 
-export const getGoldenCase = query({
+export const getGoldenCase = internalQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db

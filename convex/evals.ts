@@ -1,9 +1,9 @@
 import { v } from "convex/values";
 
 import { evaluateGoldenRun, summarizePromptVersions } from "../src/evals/formal-evals";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 
-export const evaluateAndPersist = mutation({
+export const evaluateAndPersist = internalMutation({
   args: {
     trialId: v.string(),
     scenarioId: v.optional(v.string()),
@@ -49,12 +49,12 @@ export const evaluateAndPersist = mutation({
   },
 });
 
-export const list = query({
+export const list = internalQuery({
   args: {},
   handler: async (ctx) => await ctx.db.query("evalRuns").order("desc").take(100),
 });
 
-export const comparison = query({
+export const comparison = internalQuery({
   args: {},
   handler: async (ctx) => summarizePromptVersions(await ctx.db.query("evalRuns").order("desc").take(100)),
 });

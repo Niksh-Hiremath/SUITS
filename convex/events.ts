@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 
 const eventName = v.union(
   v.literal("hearing_started"),
@@ -11,7 +11,7 @@ const eventName = v.union(
   v.literal("debrief_downloaded"),
 );
 
-export const track = mutation({
+export const track = internalMutation({
   args: {
     trialId: v.optional(v.string()),
     name: eventName,
@@ -32,7 +32,7 @@ export const track = mutation({
   },
 });
 
-export const summary = query({
+export const summary = internalQuery({
   args: {},
   handler: async (ctx) => {
     const events = await ctx.db.query("productEvents").order("desc").take(1000);

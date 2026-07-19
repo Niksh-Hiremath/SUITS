@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 
 const phase = v.union(
   v.literal("briefing"),
@@ -39,7 +39,7 @@ function stableId(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-export const create = mutation({
+export const create = internalMutation({
   args: {
     mode: v.union(v.literal("participatory"), v.literal("autonomous")),
     side: v.optional(v.union(v.literal("claimant"), v.literal("respondent"))),
@@ -65,7 +65,7 @@ export const create = mutation({
   },
 });
 
-export const appendTurn = mutation({
+export const appendTurn = internalMutation({
   args: {
     trialId: v.string(),
     speaker: v.string(),
@@ -106,7 +106,7 @@ export const appendTurn = mutation({
   },
 });
 
-export const transition = mutation({
+export const transition = internalMutation({
   args: { trialId: v.string(), requested: phase, actionId: v.string() },
   handler: async (ctx, args) => {
     const trial = await ctx.db.query("trials").withIndex("by_trial_id", (q) => q.eq("trialId", args.trialId)).unique();
@@ -129,7 +129,7 @@ export const transition = mutation({
   },
 });
 
-export const get = query({
+export const get = internalQuery({
   args: { trialId: v.string() },
   handler: async (ctx, args) => {
     const trial = await ctx.db.query("trials").withIndex("by_trial_id", (q) => q.eq("trialId", args.trialId)).unique();
@@ -142,7 +142,7 @@ export const get = query({
   },
 });
 
-export const list = query({
+export const list = internalQuery({
   args: {},
   handler: async (ctx) => await ctx.db.query("trials").order("desc").take(50),
 });

@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 
 import { calculateElevenLabsCostUsd, calculateOpenAiCostUsd } from "../src/domain/cost-observability";
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 
 const phase = v.union(
   v.literal("briefing"),
@@ -14,7 +14,7 @@ const phase = v.union(
   v.literal("failed"),
 );
 
-export const start = mutation({
+export const start = internalMutation({
   args: {
     trialId: v.string(),
     parentId: v.optional(v.string()),
@@ -63,7 +63,7 @@ export const start = mutation({
   },
 });
 
-export const finish = mutation({
+export const finish = internalMutation({
   args: {
     traceId: v.string(),
     status: v.union(

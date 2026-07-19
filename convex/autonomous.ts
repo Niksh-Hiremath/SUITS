@@ -3,8 +3,8 @@
 import OpenAI from "openai";
 import { v } from "convex/values";
 
-import { api } from "./_generated/api";
-import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { internalAction } from "./_generated/server";
 
 const decisiveQuestion =
   "Ms. Sen, the Gate B log records Northstar's truck at 7:31 PM, eleven minutes before the lights failed at 7:42, correct?";
@@ -72,7 +72,7 @@ type Review = {
   revisedClosing: { text: string; basedOnTurnIds: string[] };
 };
 
-export const runGolden = action({
+export const runGolden = internalAction({
   args: {
     mode: v.optional(v.union(v.literal("autonomous"), v.literal("participatory"))),
     promptVersion: v.optional(v.string()),
@@ -86,8 +86,8 @@ export const runGolden = action({
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not configured in Convex");
 
-    const trialId: string = await ctx.runMutation(api.trials.create, { mode: "autonomous", side: "respondent" });
-    const directorTrace = await ctx.runMutation(api.traces.start, {
+    const trialId: string = await ctx.runMutation(internal.trials.create, { mode: "autonomous", side: "respondent" });
+    const directorTrace = await ctx.runMutation(internal.traces.start, {
       trialId,
       actor: "Court Director",
       action: "run_hearing",
@@ -97,47 +97,47 @@ export const runGolden = action({
       promptVersion: "director.v1",
     });
 
-    const briefingId = await ctx.runMutation(api.trials.appendTurn, {
+    const briefingId = await ctx.runMutation(internal.trials.appendTurn, {
       trialId, speaker: "director", actor: "Court Director", phase: "briefing",
       text: "Court is in session for a fictional educational hearing. Northstar may test Harbor Lantern's account through one focused cross-examination.",
       source: "authored_fixture", promptVersion: "director.v1",
     });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "opening", actionId: `${trialId}:briefing` });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "opening", actionId: `${trialId}:briefing` });
 
-    const openingTrace = await ctx.runMutation(api.traces.start, {
+    const openingTrace = await ctx.runMutation(internal.traces.start, {
       trialId, parentId: directorTrace, actor: "Opposing Advocate", action: "deliver_opening", phase: "opening",
       provider: "authored", model: "deterministic-fallback.v1", promptVersion: "opposing-advocate.v1",
     });
-    const openingId = await ctx.runMutation(api.trials.appendTurn, {
+    const openingId = await ctx.runMutation(internal.trials.appendTurn, {
       trialId, speaker: "opposing_advocate", actor: "Opposing Advocate", phase: "opening",
       text: "Northstar's generator was due at six. Harbor Lantern's lights later failed, and the generator had not entered the venue. The record will show Northstar missed the agreed delivery plan.",
       source: "authored_fixture", factIds: ["F-PUB-002", "F-PUB-003"], evidenceIds: ["E-001", "E-002"], promptVersion: "opposing-advocate.v1",
     });
-    await ctx.runMutation(api.traces.finish, { traceId: openingTrace, status: "succeeded", outputTurnIds: [openingId] });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "cross_examination", actionId: `${trialId}:opening` });
+    await ctx.runMutation(internal.traces.finish, { traceId: openingTrace, status: "succeeded", outputTurnIds: [openingId] });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "cross_examination", actionId: `${trialId}:opening` });
 
-    const questionId: string = await ctx.runMutation(api.trials.appendTurn, {
+    const questionId: string = await ctx.runMutation(internal.trials.appendTurn, {
       trialId, speaker: "autonomous_advocate", actor: "Autonomous Advocate", phase: "cross_examination",
       text: decisiveQuestion, source: "authored_fixture", evidenceIds: ["E-003"], promptVersion: "autonomous-advocate.v1",
     });
-    const witnessTrace = await ctx.runMutation(api.traces.start, {
+    const witnessTrace = await ctx.runMutation(internal.traces.start, {
       trialId, parentId: directorTrace, actor: "Witness", action: "answer_question", phase: "cross_examination",
       provider: "deterministic", model: "contradiction-matcher.v1", inputTurnIds: [questionId], promptVersion: "witness.v1",
     });
-    const answerId: string = await ctx.runMutation(api.trials.appendTurn, {
+    const answerId: string = await ctx.runMutation(internal.trials.appendTurn, {
       trialId, speaker: "witness", actor: "Witness", phase: "cross_examination",
       text: decisiveAnswer, source: "deterministic_fallback", factIds: ["F-WIT-005", "F-WIT-006"], evidenceIds: ["E-003"], replyToTurnId: questionId, promptVersion: "witness.v1",
     });
-    await ctx.runMutation(api.traces.finish, { traceId: witnessTrace, status: "succeeded", outputTurnIds: [answerId] });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "closing", actionId: `${trialId}:cross` });
+    await ctx.runMutation(internal.traces.finish, { traceId: witnessTrace, status: "succeeded", outputTurnIds: [answerId] });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "closing", actionId: `${trialId}:cross` });
 
-    const closingId = await ctx.runMutation(api.trials.appendTurn, {
+    const closingId = await ctx.runMutation(internal.trials.appendTurn, {
       trialId, speaker: "autonomous_advocate", actor: "Autonomous Advocate", phase: "closing",
       text: closing, source: "authored_fixture", factIds: ["F-PUB-002", "F-PUB-003"], evidenceIds: ["E-003"], promptVersion: "autonomous-advocate.v1",
     });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "deliberation", actionId: `${trialId}:closing` });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "deliberation", actionId: `${trialId}:closing` });
 
-    const reviewTrace = await ctx.runMutation(api.traces.start, {
+    const reviewTrace = await ctx.runMutation(internal.traces.start, {
       trialId, parentId: directorTrace, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation",
       provider: "openai", model, inputTurnIds: [briefingId, openingId, questionId, answerId, closingId], promptVersion,
     });
@@ -169,29 +169,29 @@ export const runGolden = action({
       throw new Error("Jury/Review Board returned an unknown transcript citation");
     }
 
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "debrief", actionId: `${trialId}:deliberation` });
-    const debriefId: string = await ctx.runMutation(api.artifacts.saveReview, {
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "debrief", actionId: `${trialId}:deliberation` });
+    const debriefId: string = await ctx.runMutation(internal.artifacts.saveReview, {
       trialId,
       ...review,
       contradictionFound: true,
       contradictionTurnIds: [questionId, answerId],
       model,
     });
-    await ctx.runMutation(api.traces.finish, {
+    await ctx.runMutation(internal.traces.finish, {
       traceId: reviewTrace,
       status: "succeeded",
       inputTokens: response.usage?.input_tokens,
       outputTokens: response.usage?.output_tokens,
       artifactIds: [debriefId],
     });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "complete", actionId: `${trialId}:debrief` });
-    await ctx.runMutation(api.traces.finish, {
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "complete", actionId: `${trialId}:debrief` });
+    await ctx.runMutation(internal.traces.finish, {
       traceId: directorTrace,
       status: "succeeded",
       outputTurnIds: [briefingId, openingId, questionId, answerId, closingId],
       artifactIds: [debriefId],
     });
-    const evaluated = await ctx.runMutation(api.evals.evaluateAndPersist, {
+    const evaluated = await ctx.runMutation(internal.evals.evaluateAndPersist, {
       trialId,
       promptVersion,
       model,
@@ -200,13 +200,13 @@ export const runGolden = action({
   },
 });
 
-export const runGate3 = action({
+export const runGate3 = internalAction({
   args: { runs: v.optional(v.number()), promptVersion: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ passed: number; total: number; gatePassed: boolean; results: Array<{ trialId: string; evalId: string; passed: boolean }> }> => {
     const total = Math.max(1, Math.min(20, Math.floor(args.runs ?? 5)));
     const results = [];
     for (let index = 0; index < total; index += 1) {
-      results.push(await ctx.runAction(api.autonomous.runGolden, {
+      results.push(await ctx.runAction(internal.autonomous.runGolden, {
         mode: "autonomous",
         promptVersion: args.promptVersion ?? "jury-review.v1",
       }));

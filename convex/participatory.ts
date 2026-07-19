@@ -3,8 +3,8 @@
 import OpenAI from "openai";
 import { v } from "convex/values";
 
-import { api, internal } from "./_generated/api";
-import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { internalAction } from "./_generated/server";
 import { runReview } from "../src/domain/review";
 import { runCourtDirector } from "../src/domain/court-director";
 import { answerGoldenWitness, assessGoldenVerdict, replyAsOpposingCounsel } from "../src/domain/courtroom-roleplay";
@@ -34,41 +34,41 @@ type Review = {
   revisedClosing: { text: string; basedOnTurnIds: string[] };
 };
 
-export const start = action({
+export const start = internalAction({
   args: {},
   handler: async (ctx): Promise<string> => {
     const judgeOpening = "Court is in session. You represent Asha Mehta. The issue is whether Vertex terminated her because she reported a warehouse safety problem, or whether documented performance concerns had already set that decision in motion. The verdict will rest only on this transcript.";
     const advocateOpening = "Vertex denies retaliation. HR drafted the termination memorandum on May 7, a week before Asha's complaint, and two late inventory reports were already documented. The evidence will show a performance decision—not punishment for reporting safety.";
-    const trialId: string = await ctx.runMutation(api.trials.create, { mode: "participatory", side: "claimant" });
-    await ctx.runMutation(api.events.track, {
+    const trialId: string = await ctx.runMutation(internal.trials.create, { mode: "participatory", side: "claimant" });
+    await ctx.runMutation(internal.events.track, {
       trialId,
       name: "hearing_started",
       metadataJson: JSON.stringify({ mode: "participatory", caseId: "case_asha_vertex_v1" }),
     });
-    const root = await ctx.runMutation(api.traces.start, { trialId, actor: "Court Director", action: "manage_participatory_hearing", phase: "briefing", provider: "code", model: "deterministic-state-machine.v1", promptVersion: "director.v1" });
-    await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "director", actor: "Judge", phase: "briefing", text: judgeOpening, source: "authored_fixture", promptVersion: "judge.v1" });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "opening", actionId: `${trialId}:briefing` });
-    const opening = await ctx.runMutation(api.trials.appendTurn, { trialId, speaker: "opposing_advocate", actor: "Vertex Advocate", phase: "opening", text: advocateOpening, source: "authored_fixture", factIds: ["F-PUB-003", "F-PUB-004"], evidenceIds: ["E-003", "E-004"], promptVersion: "opposing-advocate.v2" });
-    await ctx.runMutation(api.traces.finish, { traceId: root, status: "succeeded", outputCharacters: judgeOpening.length + advocateOpening.length, outputTurnIds: [opening] });
-    await ctx.runMutation(api.trials.transition, { trialId, requested: "cross_examination", actionId: `${trialId}:opening` });
+    const root = await ctx.runMutation(internal.traces.start, { trialId, actor: "Court Director", action: "manage_participatory_hearing", phase: "briefing", provider: "code", model: "deterministic-state-machine.v1", promptVersion: "director.v1" });
+    await ctx.runMutation(internal.trials.appendTurn, { trialId, speaker: "director", actor: "Judge", phase: "briefing", text: judgeOpening, source: "authored_fixture", promptVersion: "judge.v1" });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "opening", actionId: `${trialId}:briefing` });
+    const opening = await ctx.runMutation(internal.trials.appendTurn, { trialId, speaker: "opposing_advocate", actor: "Vertex Advocate", phase: "opening", text: advocateOpening, source: "authored_fixture", factIds: ["F-PUB-003", "F-PUB-004"], evidenceIds: ["E-003", "E-004"], promptVersion: "opposing-advocate.v2" });
+    await ctx.runMutation(internal.traces.finish, { traceId: root, status: "succeeded", outputCharacters: judgeOpening.length + advocateOpening.length, outputTurnIds: [opening] });
+    await ctx.runMutation(internal.trials.transition, { trialId, requested: "cross_examination", actionId: `${trialId}:opening` });
     return trialId;
   },
 });
 
-export const askWitness = action({
+export const askWitness = internalAction({
   args: { trialId: v.string(), question: v.string() },
   handler: async (ctx, args): Promise<string> => {
     const groundedAnswer = answerGoldenWitness(args.question);
     const decisive = groundedAnswer.evidenceIds.includes("E-005");
-    const questionId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination", text: args.question, source: "typed", promptVersion: "user.v1" });
-    await ctx.runMutation(api.events.track, {
+    const questionId: string = await ctx.runMutation(internal.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination", text: args.question, source: "typed", promptVersion: "user.v1" });
+    await ctx.runMutation(internal.events.track, {
       trialId: args.trialId,
       name: "question_submitted",
       metadataJson: JSON.stringify({ inputMode: "typed", characterCount: args.question.length }),
     });
     const [run, publicCase, privateCase] = await Promise.all([
-      ctx.runQuery(api.trials.get, { trialId: args.trialId }),
-      ctx.runQuery(api.cases.getGoldenCase, {}),
+      ctx.runQuery(internal.trials.get, { trialId: args.trialId }),
+      ctx.runQuery(internal.cases.getGoldenCase, {}),
       ctx.runQuery(internal.cases.getPrivateGoldenCase, {}),
     ]);
     if (!run || !publicCase || !privateCase) throw new Error("Court Director context unavailable");
@@ -111,22 +111,22 @@ export const askWitness = action({
       reviewer: modelCall,
       timeoutMs: 12_000,
     });
-    const trace = await ctx.runMutation(api.traces.start, {
+    const trace = await ctx.runMutation(internal.traces.start, {
       trialId: args.trialId, actor: "Court Director", action: "plan_delegate_review", phase: "cross_examination",
       provider: "openai", model, inputTurnIds: [questionId], promptVersion: "director.v2",
       plan: directed.trace.plan, selectedSpecialist: directed.trace.selectedSpecialist, persona: directed.trace.persona,
       contractJson: JSON.stringify(directed.trace.contract), delegationRationale: directed.trace.delegationRationale,
     });
     if (decisive) {
-      await ctx.runMutation(api.events.track, {
+      await ctx.runMutation(internal.events.track, {
         trialId: args.trialId,
         name: "contradiction_exposed",
         metadataJson: JSON.stringify({ evidenceId: "E-005", matcherVersion: "retaliation-causation.v1" }),
       });
     }
     // Resolve authored facts reliably so natural discovery questions do not require a hidden timestamp.
-    const answerId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: groundedAnswer.text, source: "deterministic_grounded", factIds: groundedAnswer.factIds, evidenceIds: groundedAnswer.evidenceIds, replyToTurnId: questionId, promptVersion: "witness.v3" });
-    await ctx.runMutation(api.traces.finish, {
+    const answerId: string = await ctx.runMutation(internal.trials.appendTurn, { trialId: args.trialId, speaker: "witness", actor: "Witness", phase: "cross_examination", text: groundedAnswer.text, source: "deterministic_grounded", factIds: groundedAnswer.factIds, evidenceIds: groundedAnswer.evidenceIds, replyToTurnId: questionId, promptVersion: "witness.v3" });
+    await ctx.runMutation(internal.traces.finish, {
       traceId: trace, status: directed.status === "accepted" ? "succeeded" : directed.status,
       inputTokens: directorInputTokens, outputTokens: directorOutputTokens,
       outputCharacters: groundedAnswer.text.length,
@@ -138,45 +138,45 @@ export const askWitness = action({
   },
 });
 
-export const addressCounsel = action({
+export const addressCounsel = internalAction({
   args: { trialId: v.string(), statement: v.string() },
   handler: async (ctx, args): Promise<string> => {
-    const run = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
+    const run = await ctx.runQuery(internal.trials.get, { trialId: args.trialId });
     if (!run || run.trial.phase !== "cross_examination") throw new Error("Opposing counsel may only be addressed during cross-examination");
-    const statementId: string = await ctx.runMutation(api.trials.appendTurn, {
+    const statementId: string = await ctx.runMutation(internal.trials.appendTurn, {
       trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "cross_examination",
       text: args.statement, source: "typed", promptVersion: "user.v1",
     });
     const reply = replyAsOpposingCounsel(args.statement);
-    const trace = await ctx.runMutation(api.traces.start, {
+    const trace = await ctx.runMutation(internal.traces.start, {
       trialId: args.trialId, actor: "Opposing Advocate", action: "respond_to_argument", phase: "cross_examination",
       provider: "deterministic", model: "golden-case-counsel.v1", inputTurnIds: [statementId], promptVersion: "opposing-advocate.v2",
     });
-    const replyId: string = await ctx.runMutation(api.trials.appendTurn, {
+    const replyId: string = await ctx.runMutation(internal.trials.appendTurn, {
       trialId: args.trialId, speaker: "opposing_advocate", actor: "Opposing Advocate", phase: "cross_examination",
       text: reply.text, source: "deterministic_grounded", factIds: reply.factIds, evidenceIds: reply.evidenceIds,
       replyToTurnId: statementId, promptVersion: "opposing-advocate.v2",
     });
-    await ctx.runMutation(api.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: args.statement.length, outputCharacters: reply.text.length, outputTurnIds: [replyId] });
+    await ctx.runMutation(internal.traces.finish, { traceId: trace, status: "succeeded", inputCharacters: args.statement.length, outputCharacters: reply.text.length, outputTurnIds: [replyId] });
     return replyId;
   },
 });
 
-export const finish = action({
+export const finish = internalAction({
   args: { trialId: v.string(), closing: v.string() },
   handler: async (ctx, args): Promise<string> => {
-    const existing = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
+    const existing = await ctx.runQuery(internal.trials.get, { trialId: args.trialId });
     if (!existing) throw new Error("Trial not found");
     if (existing.trial.phase === "complete" && existing.debrief) return existing.debrief.debriefId;
-    await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "closing", actionId: `${args.trialId}:cross` });
-    const closingId: string = await ctx.runMutation(api.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "closing", text: args.closing, source: "typed", promptVersion: "user.v1" });
-    await ctx.runMutation(api.events.track, {
+    await ctx.runMutation(internal.trials.transition, { trialId: args.trialId, requested: "closing", actionId: `${args.trialId}:cross` });
+    const closingId: string = await ctx.runMutation(internal.trials.appendTurn, { trialId: args.trialId, speaker: "user_advocate", actor: "Advocate", phase: "closing", text: args.closing, source: "typed", promptVersion: "user.v1" });
+    await ctx.runMutation(internal.events.track, {
       trialId: args.trialId,
       name: "closing_submitted",
       metadataJson: JSON.stringify({ inputMode: "typed", characterCount: args.closing.length }),
     });
-    await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "deliberation", actionId: `${args.trialId}:closing` });
-    const run = await ctx.runQuery(api.trials.get, { trialId: args.trialId });
+    await ctx.runMutation(internal.trials.transition, { trialId: args.trialId, requested: "deliberation", actionId: `${args.trialId}:closing` });
+    const run = await ctx.runQuery(internal.trials.get, { trialId: args.trialId });
     if (!run) throw new Error("Trial not found");
     const model = process.env.OPENAI_DEEP_MODEL ?? "gpt-5.6-terra";
     if (model !== "gpt-5.6-terra") {
@@ -194,7 +194,7 @@ export const finish = action({
       ),
     );
     const rootTrace = run.traces.find((item) => !item.parentId);
-    const trace = await ctx.runMutation(api.traces.start, { trialId: args.trialId, parentId: rootTrace?.traceId, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation", provider: "openai", model, inputTurnIds: turnIds, promptVersion: "jury-review.v1" });
+    const trace = await ctx.runMutation(internal.traces.start, { trialId: args.trialId, parentId: rootTrace?.traceId, actor: "Jury/Review Board", action: "deliberate_and_debrief", phase: "deliberation", provider: "openai", model, inputTurnIds: turnIds, promptVersion: "jury-review.v1" });
     const transcript = run.turns.map((turn) => `${turn.turnId} | ${turn.actor} | ${turn.phase} | ${turn.text}`).join("\n");
     const openai = new OpenAI({ apiKey });
     let inputTokens = 0;
@@ -215,13 +215,13 @@ export const finish = action({
       },
     });
     const review: Review = { ...result.review, verdict: assessGoldenVerdict(run.turns) };
-    await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "debrief", actionId: `${args.trialId}:deliberation` });
-    const debriefId: string = await ctx.runMutation(api.artifacts.saveReview, { trialId: args.trialId, ...review, contradictionFound: contradictionTurns.length >= 2, contradictionTurnIds: contradictionTurns, model });
+    await ctx.runMutation(internal.trials.transition, { trialId: args.trialId, requested: "debrief", actionId: `${args.trialId}:deliberation` });
+    const debriefId: string = await ctx.runMutation(internal.artifacts.saveReview, { trialId: args.trialId, ...review, contradictionFound: contradictionTurns.length >= 2, contradictionTurnIds: contradictionTurns, model });
     const inputRate = Number(process.env.OPENAI_INPUT_USD_PER_MILLION ?? 0);
     const outputRate = Number(process.env.OPENAI_OUTPUT_USD_PER_MILLION ?? 0);
-    await ctx.runMutation(api.traces.finish, { traceId: trace, status: result.status, inputTokens, outputTokens, estimatedCostUsd: (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000, retryCount: result.retryCount, fallbackUsed: result.fallbackUsed, errorCode: result.errorCode, errorSummary: result.fallbackUsed ? "Model review unavailable after one repair attempt; deterministic transcript-only debrief used." : undefined, outputTurnIds: [closingId], artifactIds: [debriefId] });
-    await ctx.runMutation(api.trials.transition, { trialId: args.trialId, requested: "complete", actionId: `${args.trialId}:debrief` });
-    await ctx.runMutation(api.events.track, {
+    await ctx.runMutation(internal.traces.finish, { traceId: trace, status: result.status, inputTokens, outputTokens, estimatedCostUsd: (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000, retryCount: result.retryCount, fallbackUsed: result.fallbackUsed, errorCode: result.errorCode, errorSummary: result.fallbackUsed ? "Model review unavailable after one repair attempt; deterministic transcript-only debrief used." : undefined, outputTurnIds: [closingId], artifactIds: [debriefId] });
+    await ctx.runMutation(internal.trials.transition, { trialId: args.trialId, requested: "complete", actionId: `${args.trialId}:debrief` });
+    await ctx.runMutation(internal.events.track, {
       trialId: args.trialId,
       name: "hearing_completed",
       metadataJson: JSON.stringify({ debriefId, contradictionFound: contradictionTurns.length >= 2 }),

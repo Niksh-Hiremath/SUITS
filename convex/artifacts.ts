@@ -1,8 +1,8 @@
 import { v } from "convex/values";
 
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 
-export const saveReview = mutation({
+export const saveReview = internalMutation({
   args: {
     trialId: v.string(),
     verdict: v.union(v.literal("claimant"), v.literal("respondent"), v.literal("insufficient_record")),
