@@ -6,7 +6,7 @@ import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, cast
 
 
 class TtsBackpressureError(RuntimeError):
@@ -185,6 +185,17 @@ class PhraseQueue:
         async with self._condition:
             if scope != "all" and target_id is None:
                 raise ValueError("target_id is required for job and response cancellation")
+            responses_to_close: set[str] = set()
+            if scope == "response":
+                assert target_id is not None
+                responses_to_close.add(target_id)
+            elif scope == "all":
+                responses_to_close.update(
+                    entry.job.response_id
+                    for entry in self._entries.values()
+                    if entry.status in {"queued", "generating", "streaming"}
+                )
+            self._closed_responses.update(responses_to_close)
             cancellations: list[QueueCancellation] = []
             for job_id, entry in list(self._entries.items()):
                 matches = (
@@ -198,7 +209,7 @@ class PhraseQueue:
                     "streaming",
                 }:
                     continue
-                prior_status = entry.status
+                prior_status = cast(Literal["queued", "generating", "streaming"], entry.status)
                 entry.epoch += 1
                 entry.status = "cancelled"
                 entry.cancel_event.set()
@@ -216,6 +227,10 @@ class PhraseQueue:
                     job_id for job_id in self._pending if job_id not in cancelled_ids
                 )
                 self._condition.notify_all()
+            for response_id in responses_to_close:
+                if response_id not in self._response_live_jobs:
+                    self._next_sequence_by_response.pop(response_id, None)
+                    self._record_closed_response(response_id)
             return tuple(cancellations)
 
     async def is_current(self, lease: TtsLease) -> bool:
@@ -258,7 +273,7 @@ class PhraseQueue:
             del self._response_live_jobs[response_id]
             if response_id in self._closed_responses:
                 self._next_sequence_by_response.pop(response_id, None)
-                self._closed_response_order.append(response_id)
+                self._record_closed_response(response_id)
         else:
             self._response_live_jobs[response_id] = remaining_jobs
         self._terminal_order.append(job_id)
@@ -271,6 +286,10 @@ class PhraseQueue:
                 "failed",
             }:
                 del self._entries[expired_id]
+
+    def _record_closed_response(self, response_id: str) -> None:
+        if response_id not in self._closed_response_order:
+            self._closed_response_order.append(response_id)
         while len(self._closed_response_order) > self._tombstone_limit:
             expired_response_id = self._closed_response_order.popleft()
             self._closed_responses.discard(expired_response_id)
@@ -302,6 +321,7 @@ class TtsAckWindow:
         self._maximum = max_outstanding_bytes
         self._condition = asyncio.Condition()
         self._reservations: dict[str, AckReservation] = {}
+        self._sent_tokens: set[str] = set()
         self._pending_keys: set[str] = set()
         self._outstanding_bytes = 0
 
@@ -346,6 +366,15 @@ class TtsAckWindow:
             finally:
                 self._pending_keys.discard(key)
 
+    async def mark_sent(self, *, frame_token: str) -> bool:
+        """Make a reservation ACKable only after its binary frame was sent."""
+
+        async with self._condition:
+            if frame_token not in self._reservations:
+                return False
+            self._sent_tokens.add(frame_token)
+            return True
+
     async def acknowledge(
         self,
         *,
@@ -360,7 +389,7 @@ class TtsAckWindow:
         key = frame_token
         async with self._condition:
             reservation = self._reservations.get(key)
-            if reservation is None:
+            if reservation is None or key not in self._sent_tokens:
                 return False
             if (
                 reservation.job_id != job_id
@@ -370,6 +399,7 @@ class TtsAckWindow:
             ):
                 return False
             del self._reservations[key]
+            self._sent_tokens.discard(key)
             self._outstanding_bytes -= reservation.byte_length
             self._condition.notify_all()
             return True
@@ -384,9 +414,34 @@ class TtsAckWindow:
             released = 0
             for key in removed:
                 released += self._reservations.pop(key).byte_length
+                self._sent_tokens.discard(key)
             self._outstanding_bytes -= released
             self._condition.notify_all()
             return released
+
+    async def wait_for_job_drained(
+        self,
+        *,
+        job_id: str,
+        cancel_event: asyncio.Event,
+        timeout_seconds: float = 15,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        deadline = time.monotonic() + timeout_seconds
+        async with self._condition:
+            while any(reservation.job_id == job_id for reservation in self._reservations.values()):
+                if cancel_event.is_set():
+                    raise asyncio.CancelledError
+                if time.monotonic() >= deadline:
+                    raise TtsBackpressureError("timed out waiting for final browser TTS ACK")
+                try:
+                    await asyncio.wait_for(
+                        self._condition.wait(),
+                        timeout=min(0.05, max(0.001, deadline - time.monotonic())),
+                    )
+                except TimeoutError:
+                    continue
 
     async def outstanding_bytes(self) -> int:
         async with self._condition:
@@ -396,6 +451,7 @@ class TtsAckWindow:
         async with self._condition:
             released = self._outstanding_bytes
             self._reservations.clear()
+            self._sent_tokens.clear()
             self._outstanding_bytes = 0
             self._condition.notify_all()
             return released

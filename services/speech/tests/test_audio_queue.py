@@ -117,6 +117,17 @@ async def test_cancellation_purges_queued_jobs_and_invalidates_active_epoch() ->
     assert (await queue.snapshot()).active_job_id is None
 
 
+async def test_response_cancellation_rejects_delayed_phrase_continuations() -> None:
+    queue = PhraseQueue(max_depth=2)
+    await queue.enqueue(_job("job:1"))
+
+    cancellations = await queue.cancel(scope="response", target_id="response:1")
+
+    assert [item.job_id for item in cancellations] == ["job:1"]
+    with pytest.raises(ValueError, match="already final"):
+        await queue.enqueue(_job("job:late", sequence=1, is_final=True))
+
+
 async def test_ack_window_blocks_until_browser_acknowledges_audio() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     cancel_event = asyncio.Event()
@@ -127,6 +138,7 @@ async def test_ack_window_blocks_until_browser_acknowledges_audio() -> None:
     blocked = asyncio.create_task(window.reserve(second, cancel_event=cancel_event))
     await asyncio.sleep(0)
     assert blocked.done() is False
+    assert await window.mark_sent(frame_token=first.frame_token) is True
     assert await window.acknowledge(
         job_id="job:1",
         response_id="response:1",
@@ -241,6 +253,7 @@ async def test_ack_identity_includes_response_and_server_frame_token() -> None:
     window = TtsAckWindow(max_outstanding_bytes=640)
     reservation = _reservation("job:1", frame_sequence=0)
     await window.reserve(reservation, cancel_event=asyncio.Event())
+    assert await window.mark_sent(frame_token=reservation.frame_token) is True
 
     assert (
         await window.acknowledge(
@@ -260,6 +273,60 @@ async def test_ack_identity_includes_response_and_server_frame_token() -> None:
         frame_token=reservation.frame_token,
         byte_length=640,
     )
+
+
+async def test_ack_window_waits_until_every_job_frame_is_drained() -> None:
+    window = TtsAckWindow(max_outstanding_bytes=1_280)
+    first = _reservation("job:1", frame_sequence=0)
+    second = _reservation("job:1", frame_sequence=1)
+    await window.reserve(first, cancel_event=asyncio.Event())
+    await window.reserve(second, cancel_event=asyncio.Event())
+    assert await window.mark_sent(frame_token=first.frame_token) is True
+    assert await window.mark_sent(frame_token=second.frame_token) is True
+    drained = asyncio.create_task(
+        window.wait_for_job_drained(job_id="job:1", cancel_event=asyncio.Event())
+    )
+    await asyncio.sleep(0)
+    assert drained.done() is False
+
+    for reservation in (first, second):
+        assert await window.acknowledge(
+            job_id=reservation.job_id,
+            response_id=reservation.response_id,
+            frame_sequence=reservation.frame_sequence,
+            frame_token=reservation.frame_token,
+            byte_length=reservation.byte_length,
+        )
+    await asyncio.wait_for(drained, timeout=0.25)
+
+
+async def test_ack_before_binary_send_never_releases_reserved_bytes() -> None:
+    window = TtsAckWindow(max_outstanding_bytes=640)
+    reservation = _reservation("job:reserved", frame_sequence=0)
+    await window.reserve(reservation, cancel_event=asyncio.Event())
+
+    assert (
+        await window.acknowledge(
+            job_id=reservation.job_id,
+            response_id=reservation.response_id,
+            frame_sequence=reservation.frame_sequence,
+            frame_token=reservation.frame_token,
+            byte_length=reservation.byte_length,
+        )
+        is False
+    )
+    assert await window.outstanding_bytes() == 640
+
+    assert await window.mark_sent(frame_token=reservation.frame_token) is True
+    assert await window.acknowledge(
+        job_id=reservation.job_id,
+        response_id=reservation.response_id,
+        frame_sequence=reservation.frame_sequence,
+        frame_token=reservation.frame_token,
+        byte_length=reservation.byte_length,
+    )
+    assert await window.outstanding_bytes() == 0
+    assert await window.mark_sent(frame_token=reservation.frame_token) is False
 
 
 @pytest.mark.parametrize("byte_length", [0, -10])
