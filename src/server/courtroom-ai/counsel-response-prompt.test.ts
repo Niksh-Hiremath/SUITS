@@ -149,6 +149,39 @@ describe("public counsel response prompt", () => {
     expect(prompt.developerPrefix).toContain("admitted public record");
   });
 
+  it("hash-binds an untrusted strike basis without promoting its text", () => {
+    const base = createCounselResponseRequestFixture();
+    const basis = `${COUNSEL_RESPONSE_INJECTION_CANARY} The answer lacks foundation.`;
+    const request = CounselResponseRequestSchema.parse({
+      ...base,
+      directive: {
+        kind: "move_to_strike",
+        testimonyIds: ["testimony_foundation"],
+        basis,
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: ["testimony_foundation"],
+      },
+    });
+    const prompt = buildCounselResponsePrompt({ mode: "initial", request });
+
+    expect(manifest(prompt)).toMatchObject({
+      directiveBinding: {
+        kind: "move_to_strike",
+        testimonyTargetCount: 1,
+        basisHash: createHash("sha256")
+          .update(JSON.stringify(basis), "utf8")
+          .digest("hex"),
+        permittedFactCount: 0,
+        permittedEvidenceCount: 0,
+        permittedTestimonyCount: 1,
+      },
+    });
+    expect(prompt.developerContext).not.toContain(basis);
+    expect(prompt.untrustedUserContent).toContain(basis);
+    expect(prompt.developerPrefix).toContain("exact testimonyIds");
+  });
+
   it("requires a safe issue for repair", () => {
     expect(() =>
       buildCounselResponsePrompt({

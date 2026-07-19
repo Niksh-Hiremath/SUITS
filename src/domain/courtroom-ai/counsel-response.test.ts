@@ -147,6 +147,44 @@ function questionOutput() {
   });
 }
 
+function strikeDirective(): CounselResponseRequest["directive"] {
+  return {
+    kind: "move_to_strike",
+    testimonyIds: ["testimony_foundation"],
+    basis: "The answer lacks a sufficient foundation.",
+    permittedFactIds: [],
+    permittedEvidenceIds: [],
+    permittedTestimonyIds: ["testimony_foundation"],
+  };
+}
+
+function strikeOutput(testimonyIds: string[] = ["testimony_foundation"]) {
+  return CounselRoleResponseModelOutputSchema.parse({
+    schemaVersion: COUNSEL_ROLE_RESPONSE_OUTPUT_SCHEMA_VERSION,
+    speechSegments: [
+      {
+        text: "Move to strike the witness's answer for lack of foundation.",
+        citations: citations({
+          testimonyIds: ["testimony_foundation"],
+        }),
+      },
+    ],
+    proposedAction: {
+      kind: "move_to_strike",
+      testimonyIds,
+      reason: "The answer lacks a sufficient foundation.",
+    },
+    performance: {
+      activity: "standing",
+      emotion: "confident",
+      intensity: 0.6,
+      gazeTarget: "judge",
+      gesture: "stand",
+      speakingStyle: "firm",
+    },
+  });
+}
+
 describe("counsel response boundary", () => {
   it("accepts and materializes the exact grounded question directive", () => {
     const validation = validateCounselResponseOutput(
@@ -263,6 +301,54 @@ describe("counsel response boundary", () => {
     });
     const validation = validateCounselResponseOutput(endRequest, output);
     expect(validation.accepted).toBe(true);
+  });
+
+  it("accepts only the exact non-empty testimony targets for a strike directive", () => {
+    const strikeRequest = request(strikeDirective());
+    const validation = validateCounselResponseOutput(
+      strikeRequest,
+      strikeOutput(),
+    );
+
+    expect(validation.accepted).toBe(true);
+    if (!validation.accepted) throw new Error("Expected acceptance");
+    expect(validation.response).toMatchObject({
+      action: {
+        kind: "move_to_strike",
+        testimonyIds: ["testimony_foundation"],
+        reason: "The answer lacks a sufficient foundation.",
+      },
+      testimonyIds: ["testimony_foundation"],
+    });
+
+    const mismatched = validateCounselResponseOutput(
+      strikeRequest,
+      strikeOutput([]),
+    );
+    expect(mismatched.accepted).toBe(false);
+    if (mismatched.accepted) throw new Error("Expected rejection");
+    expect(mismatched.report.issues.map(({ code }) => code)).toContain(
+      "directive_mismatch",
+    );
+  });
+
+  it("rejects empty, broadened, or privately grounded strike directives", () => {
+    const base = request();
+    for (const directive of [
+      { ...strikeDirective(), testimonyIds: [] },
+      {
+        ...strikeDirective(),
+        permittedTestimonyIds: ["testimony_foundation", "testimony_foreign"],
+      },
+      { ...strikeDirective(), permittedFactIds: ["fact_draft"] },
+    ]) {
+      expect(
+        CounselResponseRequestSchema.safeParse({
+          ...base,
+          directive,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("accepts an admitted-record-only opposing closing without an appearance", () => {

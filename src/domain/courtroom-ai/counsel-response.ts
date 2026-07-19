@@ -15,9 +15,10 @@ export const COUNSEL_RESPONSE_VALIDATION_SCHEMA_VERSION =
   "role-responder.counsel.validation.v1" as const;
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-const UniqueIdListSchema = (maximum: number) =>
+const UniqueIdListSchema = (maximum: number, minimum = 0) =>
   z
     .array(CaseGraphEntityIdSchema)
+    .min(minimum)
     .max(maximum)
     .superRefine((identifiers, context) => {
       const seen = new Set<string>();
@@ -33,33 +34,57 @@ const UniqueIdListSchema = (maximum: number) =>
       });
     });
 
-export const CounselResponseDirectiveSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("question_witness"),
-      witnessId: CaseGraphEntityIdSchema,
-      goal: z.string().trim().min(1).max(1_000),
-      presentedEvidenceIds: UniqueIdListSchema(8),
-      permittedFactIds: UniqueIdListSchema(64),
-      permittedEvidenceIds: UniqueIdListSchema(64),
-      permittedTestimonyIds: UniqueIdListSchema(64),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("end_examination"),
-      disposition: z.enum(["completed", "waived"]),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("give_closing"),
-      permittedFactIds: UniqueIdListSchema(64),
-      permittedEvidenceIds: UniqueIdListSchema(64),
-      permittedTestimonyIds: UniqueIdListSchema(128),
-    })
-    .strict(),
-]);
+export const CounselResponseDirectiveSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("question_witness"),
+        witnessId: CaseGraphEntityIdSchema,
+        goal: z.string().trim().min(1).max(1_000),
+        presentedEvidenceIds: UniqueIdListSchema(8),
+        permittedFactIds: UniqueIdListSchema(64),
+        permittedEvidenceIds: UniqueIdListSchema(64),
+        permittedTestimonyIds: UniqueIdListSchema(64),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("move_to_strike"),
+        testimonyIds: UniqueIdListSchema(16, 1),
+        basis: z.string().trim().min(1).max(1_000),
+        permittedFactIds: UniqueIdListSchema(0),
+        permittedEvidenceIds: UniqueIdListSchema(0),
+        permittedTestimonyIds: UniqueIdListSchema(16, 1),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("end_examination"),
+        disposition: z.enum(["completed", "waived"]),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("give_closing"),
+        permittedFactIds: UniqueIdListSchema(64),
+        permittedEvidenceIds: UniqueIdListSchema(64),
+        permittedTestimonyIds: UniqueIdListSchema(128),
+      })
+      .strict(),
+  ])
+  .superRefine((directive, context) => {
+    if (
+      directive.kind === "move_to_strike" &&
+      !sameOrderedIds(directive.testimonyIds, directive.permittedTestimonyIds)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["permittedTestimonyIds"],
+        message:
+          "Strike testimony permissions must exactly match the bound targets",
+      });
+    }
+  });
 
 export const CounselResponseRequestSchema = z
   .object({
@@ -134,7 +159,8 @@ export const CounselResponseRequestSchema = z
     }
 
     if (directive.kind === "end_examination") return;
-    const publicOnly = directive.kind === "give_closing";
+    const publicOnly =
+      directive.kind === "give_closing" || directive.kind === "move_to_strike";
     const publicRecord = view.publicRecord;
     const allowedFacts = new Set([
       ...publicRecord.facts.map(({ factId }) => factId),
@@ -433,6 +459,28 @@ function directiveIssues(
           "response_too_large",
           ["speechSegments"],
           "The joined counsel question exceeds 4000 characters",
+        ),
+      );
+    }
+  } else if (directive.kind === "move_to_strike") {
+    if (
+      action.kind !== "move_to_strike" ||
+      !sameOrderedIds(action.testimonyIds, directive.testimonyIds)
+    ) {
+      issues.push(
+        issue(
+          "directive_mismatch",
+          ["proposedAction"],
+          "The counsel response must move to strike the exact bound testimony targets",
+        ),
+      );
+    }
+    if (text.length > 4_000) {
+      issues.push(
+        issue(
+          "response_too_large",
+          ["speechSegments"],
+          "The joined strike motion exceeds 4000 characters",
         ),
       );
     }

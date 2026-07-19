@@ -99,7 +99,8 @@ export const PersistedOpponentDirectiveSchema =
         context.addIssue({
           code: "custom",
           path: ["integrityHash"],
-          message: "Opponent directive integrity hash does not match its payload",
+          message:
+            "Opponent directive integrity hash does not match its payload",
         });
       }
     });
@@ -196,8 +197,7 @@ function assertPlannerRequestBinding(
 
   const questionableWitnessIds = request.opportunities.questionableWitnessIds;
   const questionLimitReached =
-    binding.appearance.answeredQuestionCount >=
-    MAX_OPPONENT_QUESTIONS_PER_LEG;
+    binding.appearance.answeredQuestionCount >= MAX_OPPONENT_QUESTIONS_PER_LEG;
   const opportunitiesMatch = questionLimitReached
     ? questionableWitnessIds.length === 0
     : questionableWitnessIds.length === 1 &&
@@ -212,16 +212,17 @@ function plannerOutputHash(output: OpponentPlannerModelOutput): string {
 }
 
 /**
- * Select the first validated question for the active witness while its
- * canonical per-leg budget remains. Other legal move kinds cannot drive
- * open-court questioning and deterministically fall back to ending the
- * examination.
+ * Select the first validated open-court counsel move in model priority order.
+ * Other legal move kinds cannot drive this responder and deterministically
+ * fall back to ending the examination.
  */
-export function createPersistedOpponentDirective(input: Readonly<{
-  request: OpponentPlannerRequest;
-  output: OpponentPlannerModelOutput;
-  canonicalBinding: OpponentDirectiveCanonicalBinding;
-}>): PersistedOpponentDirective {
+export function createPersistedOpponentDirective(
+  input: Readonly<{
+    request: OpponentPlannerRequest;
+    output: OpponentPlannerModelOutput;
+    canonicalBinding: OpponentDirectiveCanonicalBinding;
+  }>,
+): PersistedOpponentDirective {
   const request = OpponentPlannerRequestSchema.parse(input.request);
   const binding = OpponentDirectiveCanonicalBindingSchema.parse(
     input.canonicalBinding,
@@ -239,41 +240,56 @@ export function createPersistedOpponentDirective(input: Readonly<{
   const selectedMoveIndex = validation.output.proposedMoves.findIndex((move) =>
     binding.appearance === null
       ? move.kind === "give_closing"
-      : move.kind === "question_witness" &&
-        move.witnessId === binding.appearance.witnessId,
+      : (move.kind === "question_witness" &&
+          move.witnessId === binding.appearance.witnessId) ||
+        (move.kind === "move_to_strike" && move.testimonyIds.length > 0),
   );
   const selectedMove =
     selectedMoveIndex < 0
       ? null
       : validation.output.proposedMoves[selectedMoveIndex];
-  const directive =
-    selectedMove?.kind === "give_closing"
-      ? CounselResponseDirectiveSchema.parse({
-          kind: "give_closing",
-          permittedFactIds: [...selectedMove.citations.factIds],
-          permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
-          permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
-        })
-      : selectedMove?.kind === "question_witness" &&
-          binding.appearance !== null
-      ? CounselResponseDirectiveSchema.parse({
-          kind: "question_witness",
-          witnessId: selectedMove.witnessId,
-          goal: selectedMove.goal,
-          presentedEvidenceIds: [...selectedMove.presentedEvidenceIds],
-          permittedFactIds: [...selectedMove.citations.factIds],
-          permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
-          permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
-        })
-      : binding.appearance !== null
-        ? CounselResponseDirectiveSchema.parse({
-          kind: "end_examination",
-          disposition:
-            binding.appearance.answeredQuestionCount === 0
-              ? "waived"
-              : "completed",
-          })
-        : mismatch("closingMove");
+  let directive: PersistedOpponentDirective["directive"];
+  if (selectedMove?.kind === "give_closing") {
+    directive = CounselResponseDirectiveSchema.parse({
+      kind: "give_closing",
+      permittedFactIds: [...selectedMove.citations.factIds],
+      permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
+      permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
+    });
+  } else if (
+    selectedMove?.kind === "move_to_strike" &&
+    binding.appearance !== null
+  ) {
+    directive = CounselResponseDirectiveSchema.parse({
+      kind: "move_to_strike",
+      testimonyIds: [...selectedMove.testimonyIds],
+      basis: selectedMove.rationale,
+      permittedFactIds: [],
+      permittedEvidenceIds: [],
+      permittedTestimonyIds: [...selectedMove.testimonyIds],
+    });
+  } else if (
+    selectedMove?.kind === "question_witness" &&
+    binding.appearance !== null
+  ) {
+    directive = CounselResponseDirectiveSchema.parse({
+      kind: "question_witness",
+      witnessId: selectedMove.witnessId,
+      goal: selectedMove.goal,
+      presentedEvidenceIds: [...selectedMove.presentedEvidenceIds],
+      permittedFactIds: [...selectedMove.citations.factIds],
+      permittedEvidenceIds: [...selectedMove.citations.evidenceIds],
+      permittedTestimonyIds: [...selectedMove.citations.testimonyIds],
+    });
+  } else if (binding.appearance !== null) {
+    directive = CounselResponseDirectiveSchema.parse({
+      kind: "end_examination",
+      disposition:
+        binding.appearance.answeredQuestionCount === 0 ? "waived" : "completed",
+    });
+  } else {
+    directive = mismatch("closingMove");
+  }
 
   const payload = PersistedOpponentDirectivePayloadSchema.parse({
     schemaVersion: PERSISTED_OPPONENT_DIRECTIVE_SCHEMA_VERSION,
@@ -315,11 +331,7 @@ export function assertPersistedOpponentDirectiveBinding(
       record.trialHead.stateVersion + 1,
       binding.stateVersion,
     ],
-    [
-      "strategyEventId",
-      record.strategyEventId,
-      binding.lastEventId,
-    ],
+    ["strategyEventId", record.strategyEventId, binding.lastEventId],
     ["actorId", record.actorId, binding.actorId],
     ["strategyId", record.strategyId, binding.strategyId],
     ["strategyRevision", record.strategyRevision, binding.strategyRevision],
@@ -356,7 +368,9 @@ export function assertPersistedOpponentDirectiveBinding(
 }
 
 /** Canonical bounded encoding for private durable strategy storage. */
-export function serializePersistedOpponentDirective(recordInput: unknown): string {
+export function serializePersistedOpponentDirective(
+  recordInput: unknown,
+): string {
   const record = PersistedOpponentDirectiveSchema.parse(recordInput);
   const serialized = `${PERSISTED_OPPONENT_DIRECTIVE_PREFIX}${JSON.stringify(record)}`;
   if (serialized.length > PERSISTED_OPPONENT_DIRECTIVE_MAX_CHARACTERS) {

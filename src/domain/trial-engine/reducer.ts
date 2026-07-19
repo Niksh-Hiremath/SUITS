@@ -51,6 +51,35 @@ function transcriptTurn(
   };
 }
 
+function appendTranscriptSpeech(
+  event: TrialEvent,
+  transcriptTurns: TrialState["transcriptTurns"],
+  transcriptTurnIds: readonly string[],
+  speech:
+    | Readonly<{
+        turnId: string;
+        text: string;
+        citations: CitationSet;
+      }>
+    | undefined,
+): Pick<TrialState, "transcriptTurns" | "transcriptTurnIds"> {
+  if (speech === undefined) {
+    return { transcriptTurns, transcriptTurnIds: [...transcriptTurnIds] };
+  }
+  const turn = transcriptTurn(
+    event,
+    speech.turnId,
+    speech.text,
+    event.actor,
+    speech.citations,
+    null,
+  );
+  return {
+    transcriptTurns: { ...transcriptTurns, [turn.turnId]: turn },
+    transcriptTurnIds: [...transcriptTurnIds, turn.turnId],
+  };
+}
+
 function opposingSide(side: "user" | "opposing"): "user" | "opposing" {
   return side === "user" ? "opposing" : "user";
 }
@@ -617,8 +646,15 @@ export function applyTrialEvent(stateInput: TrialState, eventInput: unknown): Tr
         sourceEventId: event.eventId,
         rulingEventId: null,
       };
+      const transcript = appendTranscriptSpeech(
+        event,
+        state.transcriptTurns,
+        state.transcriptTurnIds,
+        event.payload.speech,
+      );
       next = {
         ...state,
+        ...transcript,
         strikeMotions: {
           ...state.strikeMotions,
           [motion.motionId]: motion,
@@ -659,10 +695,16 @@ export function applyTrialEvent(stateInput: TrialState, eventInput: unknown): Tr
         }
       }
       const motion = state.strikeMotions[event.payload.motionId];
+      const transcript = appendTranscriptSpeech(
+        event,
+        transcriptTurns,
+        state.transcriptTurnIds,
+        event.payload.speech,
+      );
       next = {
         ...state,
         testimony,
-        transcriptTurns,
+        ...transcript,
         facts,
         strikeMotions: {
           ...state.strikeMotions,
@@ -677,8 +719,15 @@ export function applyTrialEvent(stateInput: TrialState, eventInput: unknown): Tr
     }
     case "DENY_STRIKE_MOTION": {
       const motion = state.strikeMotions[event.payload.motionId];
+      const transcript = appendTranscriptSpeech(
+        event,
+        state.transcriptTurns,
+        state.transcriptTurnIds,
+        event.payload.speech,
+      );
       next = {
         ...state,
+        ...transcript,
         strikeMotions: {
           ...state.strikeMotions,
           [motion.motionId]: {

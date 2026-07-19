@@ -789,7 +789,9 @@ async function fakeCounselGeneration(
         ? directive.permittedEvidenceIds.slice(0, 1)
         : [],
     testimonyIds:
-      directive.kind === "question_witness" || directive.kind === "give_closing"
+      directive.kind === "question_witness" ||
+      directive.kind === "move_to_strike" ||
+      directive.kind === "give_closing"
         ? directive.permittedTestimonyIds.slice(0, 1)
         : [],
     transcriptTurnIds: [],
@@ -807,6 +809,8 @@ async function fakeCounselGeneration(
         text:
           directive.kind === "question_witness"
             ? "That account is the one you ask this court to accept, correct?"
+            : directive.kind === "move_to_strike"
+              ? "Move to strike that answer for lack of foundation."
             : directive.kind === "give_closing"
               ? "The jury-considerable testimony does not carry the user's burden."
             : "No further questions, Your Honor.",
@@ -818,6 +822,12 @@ async function fakeCounselGeneration(
             kind: "ask_question",
             presentedEvidenceIds: directive.presentedEvidenceIds,
           }
+        : directive.kind === "move_to_strike"
+          ? {
+              kind: "move_to_strike",
+              testimonyIds: directive.testimonyIds,
+              reason: directive.basis,
+            }
         : directive.kind === "give_closing"
           ? { kind: "give_closing" }
         : {
@@ -825,7 +835,8 @@ async function fakeCounselGeneration(
             disposition: directive.disposition,
           },
     performance: {
-      activity: "speaking",
+      activity:
+        directive.kind === "move_to_strike" ? "standing" : "speaking",
       emotion: "confident",
       intensity: 0.5,
       gazeTarget: directive.kind === "give_closing" ? "jury" : "witness",

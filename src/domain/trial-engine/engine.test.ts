@@ -675,7 +675,148 @@ describe("append-only testimony and idempotency", () => {
       text: originalText,
       testimonyId: "testimony_one",
     });
-    expect(harness.state.transcriptTurnIds).toContain("turn_answer_one");
+    expect(harness.state.transcriptTurnIds).toEqual([
+      "turn_question_one",
+      "turn_answer_one",
+    ]);
+    expect(reduceTrial(harness.events)).toEqual(harness.state);
+  });
+
+  it("appends optional strike-motion and granted-ruling speech", () => {
+    const harness = createHarness();
+    enterCaseInChief(harness);
+    const responseId = prepareRinaResponse(harness, "speech_grant");
+    answerRina(harness, responseId, "speech_grant");
+    const citations = {
+      factIds: [],
+      evidenceIds: [],
+      testimonyIds: ["testimony_speech_grant"],
+      eventIds: [],
+      sourceSegmentIds: [],
+    };
+
+    const duplicateTurn = harness.draft(
+      "MOVE_TO_STRIKE",
+      {
+        motionId: "motion_duplicate_speech_turn",
+        testimonyIds: ["testimony_speech_grant"],
+        reason: "The answer lacks foundation.",
+        speech: {
+          turnId: "turn_answer_speech_grant",
+          text: "Move to strike.",
+          citations,
+        },
+      },
+      ACTORS.opposingCounsel,
+    );
+    expectIssue(harness.state, duplicateTurn, "DUPLICATE_ENTITY_ID");
+
+    harness.commit(
+      "MOVE_TO_STRIKE",
+      {
+        motionId: "motion_speech_grant",
+        testimonyIds: ["testimony_speech_grant"],
+        reason: "The answer lacks foundation.",
+        speech: {
+          turnId: "turn_strike_motion_grant",
+          text: "Move to strike the answer for lack of foundation.",
+          citations,
+        },
+      },
+      ACTORS.opposingCounsel,
+    );
+    harness.commit(
+      "STRIKE_TESTIMONY",
+      {
+        motionId: "motion_speech_grant",
+        testimonyIds: ["testimony_speech_grant"],
+        factIds: ["fact_complaint_sent"],
+        speech: {
+          turnId: "turn_strike_ruling_grant",
+          text: "Granted. The answer is stricken.",
+          citations,
+        },
+      },
+      ACTORS.judge,
+    );
+
+    expect(harness.state.transcriptTurnIds.slice(-2)).toEqual([
+      "turn_strike_motion_grant",
+      "turn_strike_ruling_grant",
+    ]);
+    expect(harness.state.transcriptTurns.turn_strike_motion_grant).toMatchObject({
+      actor: ACTORS.opposingCounsel,
+      status: "active",
+      testimonyId: null,
+      citations,
+    });
+    expect(harness.state.transcriptTurns.turn_strike_ruling_grant).toMatchObject({
+      actor: ACTORS.judge,
+      status: "active",
+      testimonyId: null,
+      citations,
+    });
+    expect(harness.state.transcriptTurns.turn_answer_speech_grant.status).toBe(
+      "stricken",
+    );
+    expect(reduceTrial(harness.events)).toEqual(harness.state);
+  });
+
+  it("appends optional denied-ruling speech without striking testimony", () => {
+    const harness = createHarness();
+    enterCaseInChief(harness);
+    const responseId = prepareRinaResponse(harness, "speech_deny");
+    answerRina(harness, responseId, "speech_deny");
+    const citations = {
+      factIds: [],
+      evidenceIds: [],
+      testimonyIds: ["testimony_speech_deny"],
+      eventIds: [],
+      sourceSegmentIds: [],
+    };
+
+    harness.commit(
+      "MOVE_TO_STRIKE",
+      {
+        motionId: "motion_speech_deny",
+        testimonyIds: ["testimony_speech_deny"],
+        reason: "The answer lacks foundation.",
+        speech: {
+          turnId: "turn_strike_motion_deny",
+          text: "Move to strike the answer for lack of foundation.",
+          citations,
+        },
+      },
+      ACTORS.opposingCounsel,
+    );
+    harness.commit(
+      "DENY_STRIKE_MOTION",
+      {
+        motionId: "motion_speech_deny",
+        reason: "The answer has adequate foundation.",
+        speech: {
+          turnId: "turn_strike_ruling_deny",
+          text: "Denied. The answer remains in the record.",
+          citations,
+        },
+      },
+      ACTORS.judge,
+    );
+
+    expect(harness.state.strikeMotions.motion_speech_deny.status).toBe(
+      "denied",
+    );
+    expect(harness.state.testimony.testimony_speech_deny.status).toBe("active");
+    expect(harness.state.transcriptTurns.turn_answer_speech_deny.status).toBe(
+      "active",
+    );
+    expect(harness.state.transcriptTurns.turn_strike_ruling_deny).toMatchObject({
+      actor: ACTORS.judge,
+      text: "Denied. The answer remains in the record.",
+      citations,
+      status: "active",
+    });
+    expect(reduceTrial(harness.events)).toEqual(harness.state);
   });
 
   it("rejects exact duplicate actions and events before applying them again", () => {

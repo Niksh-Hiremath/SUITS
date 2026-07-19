@@ -221,6 +221,7 @@ function hasPendingStrikeMotion(state: TrialState): boolean {
 function validateJuryConsiderableCitations(
   state: TrialState,
   citations: CitationSet,
+  path = "payload.citations",
 ): ActionValidationResult | null {
   const groups = [
     ["factIds", citations.factIds],
@@ -234,7 +235,7 @@ function validateJuryConsiderableCitations(
       return invalid(
         "DUPLICATE_ENTITY_ID",
         `Citation ${field} must be unique`,
-        `payload.citations.${field}`,
+        `${path}.${field}`,
       );
     }
   }
@@ -243,7 +244,7 @@ function validateJuryConsiderableCitations(
       return invalid(
         "INVALID_FACT_STATUS",
         `Jury-considerable citations require admitted fact ${factId}`,
-        "payload.citations.factIds",
+        `${path}.factIds`,
       );
     }
   }
@@ -252,7 +253,7 @@ function validateJuryConsiderableCitations(
       return invalid(
         "INVALID_EVIDENCE_STATUS",
         `Jury-considerable citations require admitted evidence ${evidenceId}`,
-        "payload.citations.evidenceIds",
+        `${path}.evidenceIds`,
       );
     }
   }
@@ -266,7 +267,7 @@ function validateJuryConsiderableCitations(
       return invalid(
         "UNKNOWN_TESTIMONY",
         `Jury-considerable citations require active testimony ${testimonyId}`,
-        "payload.citations.testimonyIds",
+        `${path}.testimonyIds`,
       );
     }
   }
@@ -274,17 +275,41 @@ function validateJuryConsiderableCitations(
     return invalid(
       "INVALID_ACTION",
       "Jury-considerable citations must use admitted facts, admitted evidence, or active testimony instead of raw trial events",
-      "payload.citations.eventIds",
+      `${path}.eventIds`,
     );
   }
   if (citations.sourceSegmentIds.length > 0) {
     return invalid(
       "INVALID_ACTION",
       "Jury-considerable citations cannot expose raw source segments",
-      "payload.citations.sourceSegmentIds",
+      `${path}.sourceSegmentIds`,
     );
   }
   return null;
+}
+
+function validateOptionalTranscriptSpeech(
+  state: TrialState,
+  speech:
+    | Readonly<{
+        turnId: string;
+        citations: CitationSet;
+      }>
+    | undefined,
+): ActionValidationResult | null {
+  if (speech === undefined) return null;
+  if (state.transcriptTurns[speech.turnId]) {
+    return invalid(
+      "DUPLICATE_ENTITY_ID",
+      `Transcript turn ${speech.turnId} already exists`,
+      "payload.speech.turnId",
+    );
+  }
+  return validateJuryConsiderableCitations(
+    state,
+    speech.citations,
+    "payload.speech.citations",
+  );
 }
 
 function validateAssertionProvenance(
@@ -1144,6 +1169,11 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (state.strikeMotions[action.payload.motionId]) {
         return invalid("DUPLICATE_ENTITY_ID", `Strike motion ${action.payload.motionId} already exists`);
       }
+      const speechIssue = validateOptionalTranscriptSpeech(
+        state,
+        action.payload.speech,
+      );
+      if (speechIssue) return speechIssue;
       if (hasDuplicateIds(action.payload.testimonyIds)) {
         return invalid(
           "DUPLICATE_ENTITY_ID",
@@ -1165,6 +1195,11 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
       if (!sameIds(motion.testimonyIds, action.payload.testimonyIds)) {
         return invalid("INVALID_ACTION", "Strike ruling must match the pending motion testimony IDs");
       }
+      const speechIssue = validateOptionalTranscriptSpeech(
+        state,
+        action.payload.speech,
+      );
+      if (speechIssue) return speechIssue;
       const testimonyFactIds = new Set<string>();
       for (const testimonyId of action.payload.testimonyIds) {
         const testimony = state.testimony[testimonyId];
@@ -1193,7 +1228,7 @@ function validateActionPreconditions(state: TrialState, action: TrialAction): Ac
           `Strike motion ${action.payload.motionId} is not pending`,
         );
       }
-      return null;
+      return validateOptionalTranscriptSpeech(state, action.payload.speech);
     }
     case "WITHDRAW_STRIKE_MOTION": {
       if (state.phase !== "case_in_chief") {

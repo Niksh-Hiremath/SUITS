@@ -163,9 +163,7 @@ function request(answeredQuestionCount = 0): OpponentPlannerRequest {
   });
 }
 
-function binding(
-  answeredQuestionCount = 0,
-): OpponentDirectiveCanonicalBinding {
+function binding(answeredQuestionCount = 0): OpponentDirectiveCanonicalBinding {
   return {
     trialId: "trial_directive",
     expectedStateVersion: 12,
@@ -236,9 +234,7 @@ function committedClosingBinding(): OpponentDirectiveCommittedBinding {
   return { ...committedBinding(), appearance: null };
 }
 
-function closingOutput(
-  factIds: string[] = [],
-): OpponentPlannerModelOutput {
+function closingOutput(factIds: string[] = []): OpponentPlannerModelOutput {
   return output([
     {
       kind: "give_closing",
@@ -251,10 +247,7 @@ function closingOutput(
   ]);
 }
 
-function questionMove(
-  goal: string,
-  factId: "fact_timing" | "fact_revision",
-) {
+function questionMove(goal: string, factId: "fact_timing" | "fact_revision") {
   return {
     kind: "question_witness" as const,
     witnessId: "witness_rina",
@@ -269,10 +262,41 @@ function questionMove(
   };
 }
 
+function strikeRequest(answeredQuestionCount = 0): OpponentPlannerRequest {
+  const value = request(answeredQuestionCount);
+  return OpponentPlannerRequestSchema.parse({
+    ...value,
+    opportunities: {
+      ...value.opportunities,
+      strikeableTestimonyIds: ["testimony_foundation"],
+    },
+  });
+}
+
+function strikeMove(
+  rationale = "The answer lacks a sufficient foundation.",
+  testimonyIds: string[] = ["testimony_foundation"],
+) {
+  return {
+    kind: "move_to_strike" as const,
+    testimonyIds,
+    rationale,
+    citations: citations({
+      testimonyIds: ["testimony_foundation"],
+    }),
+  };
+}
+
 function output(
   proposedMoves: OpponentPlannerModelOutput["proposedMoves"] = [
-    questionMove("Confirm that the first draft predates the complaint.", "fact_timing"),
-    questionMove("Confirm that the later revision followed it.", "fact_revision"),
+    questionMove(
+      "Confirm that the first draft predates the complaint.",
+      "fact_timing",
+    ),
+    questionMove(
+      "Confirm that the later revision followed it.",
+      "fact_revision",
+    ),
   ],
 ): OpponentPlannerModelOutput {
   return OpponentPlannerModelOutputSchema.parse({
@@ -368,6 +392,75 @@ describe("persisted opponent directive", () => {
     expect(
       assertPersistedOpponentDirectiveBinding(first, committedBinding()),
     ).toEqual(first);
+  });
+
+  it("selects the first executable question or strike move in model priority order", () => {
+    const plannerRequest = strikeRequest();
+    const ignoredMove = {
+      kind: "call_witness" as const,
+      witnessId: "witness_theo",
+      rationale: "Preserve the aligned witness for later.",
+      citations: citations(),
+    };
+    const strikeFirst = createPersistedOpponentDirective({
+      request: plannerRequest,
+      output: output([
+        ignoredMove,
+        strikeMove(),
+        questionMove(
+          "Confirm that the first draft predates the complaint.",
+          "fact_timing",
+        ),
+      ]),
+      canonicalBinding: binding(),
+    });
+
+    expect(strikeFirst).toMatchObject({
+      selectedMoveIndex: 1,
+      directive: {
+        kind: "move_to_strike",
+        testimonyIds: ["testimony_foundation"],
+        basis: "The answer lacks a sufficient foundation.",
+        permittedFactIds: [],
+        permittedEvidenceIds: [],
+        permittedTestimonyIds: ["testimony_foundation"],
+      },
+    });
+
+    const questionFirst = createPersistedOpponentDirective({
+      request: plannerRequest,
+      output: output([
+        questionMove(
+          "Confirm that the first draft predates the complaint.",
+          "fact_timing",
+        ),
+        strikeMove(),
+      ]),
+      canonicalBinding: binding(),
+    });
+    expect(questionFirst).toMatchObject({
+      selectedMoveIndex: 0,
+      directive: { kind: "question_witness" },
+    });
+  });
+
+  it("skips an empty strike proposal instead of persisting an invalid directive", () => {
+    const record = createPersistedOpponentDirective({
+      request: strikeRequest(),
+      output: output([
+        strikeMove("An empty target is not executable.", []),
+        questionMove(
+          "Confirm that the first draft predates the complaint.",
+          "fact_timing",
+        ),
+      ]),
+      canonicalBinding: binding(),
+    });
+
+    expect(record).toMatchObject({
+      selectedMoveIndex: 1,
+      directive: { kind: "question_witness" },
+    });
   });
 
   it("falls back to waived or completed when no question move applies", () => {

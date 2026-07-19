@@ -597,16 +597,32 @@ const RuleObjectionPayloadSchema = z
 const RephrasePayloadSchema = z
   .object({ originalQuestionId: IdentifierSchema, questionId: IdentifierSchema, text: z.string().trim().min(1).max(8_000), turnId: IdentifierSchema })
   .strict();
-const MoveStrikePayloadSchema = z
+const TranscriptSpeechBundleV3Schema = z
+  .object({
+    turnId: IdentifierSchema,
+    text: z.string().trim().min(1).max(4_000),
+    citations: CitationSetSchema,
+  })
+  .strict();
+const MoveStrikePayloadV1Schema = z
   .object({ motionId: IdentifierSchema, testimonyIds: z.array(IdentifierSchema).min(1), reason: z.string().trim().min(1).max(2_000) })
   .strict();
-const StrikePayloadSchema = z
+const MoveStrikePayloadV2Schema = MoveStrikePayloadV1Schema;
+const MoveStrikePayloadV3Schema = MoveStrikePayloadV2Schema.extend({
+  speech: TranscriptSpeechBundleV3Schema.optional(),
+}).strict();
+const StrikePayloadV1Schema = z
   .object({ motionId: IdentifierSchema, testimonyIds: z.array(IdentifierSchema).min(1), factIds: z.array(IdentifierSchema) })
   .strict();
+const StrikePayloadV2Schema = StrikePayloadV1Schema;
+const StrikePayloadV3Schema = StrikePayloadV2Schema.extend({
+  speech: TranscriptSpeechBundleV3Schema.optional(),
+}).strict();
 const DenyStrikeMotionPayloadV3Schema = z
   .object({
     motionId: IdentifierSchema,
     reason: z.string().trim().min(1).max(4_000),
+    speech: TranscriptSpeechBundleV3Schema.optional(),
   })
   .strict();
 const WithdrawStrikeMotionPayloadV3Schema = z
@@ -744,6 +760,8 @@ function actionSchemasFor<
   StartPayload extends z.ZodType,
   AskQuestionPayload extends z.ZodType,
   EndExaminationPayload extends z.ZodType,
+  MoveStrikePayload extends z.ZodType,
+  StrikePayload extends z.ZodType,
   RevealHiddenFactPayload extends z.ZodType,
   SettlementPayload extends z.ZodType,
 >(
@@ -751,6 +769,8 @@ function actionSchemasFor<
   startPayload: StartPayload,
   askQuestionPayload: AskQuestionPayload,
   endExaminationPayload: EndExaminationPayload,
+  moveStrikePayload: MoveStrikePayload,
+  strikePayload: StrikePayload,
   revealHiddenFactPayload: RevealHiddenFactPayload,
   settlementPayload: SettlementPayload,
 ) {
@@ -761,7 +781,7 @@ function actionSchemasFor<
     action(schemaVersion, "END_EXAMINATION", endExaminationPayload), action(schemaVersion, "RECALL_WITNESS", CallWitnessPayloadSchema),
     action(schemaVersion, "RELEASE_WITNESS", WitnessPayloadSchema), action(schemaVersion, "OBJECT", ObjectPayloadSchema),
     action(schemaVersion, "RULE_ON_OBJECTION", RuleObjectionPayloadSchema), action(schemaVersion, "REPHRASE_QUESTION", RephrasePayloadSchema),
-    action(schemaVersion, "MOVE_TO_STRIKE", MoveStrikePayloadSchema), action(schemaVersion, "STRIKE_TESTIMONY", StrikePayloadSchema),
+    action(schemaVersion, "MOVE_TO_STRIKE", moveStrikePayload), action(schemaVersion, "STRIKE_TESTIMONY", strikePayload),
     action(schemaVersion, "OFFER_EVIDENCE", OfferEvidencePayloadSchema), action(schemaVersion, "RULE_ON_EVIDENCE", RuleEvidencePayloadSchema),
     action(schemaVersion, "WITHDRAW_EVIDENCE", EvidencePayloadSchema), action(schemaVersion, "REVEAL_HIDDEN_FACT", revealHiddenFactPayload),
     action(schemaVersion, "PROPOSE_ASSERTION", ProposeAssertionPayloadSchema), action(schemaVersion, "VERIFY_ASSERTION", FactPayloadSchema),
@@ -787,6 +807,8 @@ const trialActionV1Schemas = actionSchemasFor(
   StartTrialPayloadV1Schema,
   AskQuestionPayloadV1Schema,
   EndExaminationPayloadV1Schema,
+  MoveStrikePayloadV1Schema,
+  StrikePayloadV1Schema,
   FactPayloadSchema,
   SettlementPayloadV1Schema,
 );
@@ -795,6 +817,8 @@ const trialActionV2Schemas = actionSchemasFor(
   StartTrialPayloadV2Schema,
   AskQuestionPayloadV2Schema,
   EndExaminationPayloadV2Schema,
+  MoveStrikePayloadV2Schema,
+  StrikePayloadV2Schema,
   FactPayloadSchema,
   SettlementPayloadV2Schema,
 );
@@ -804,6 +828,8 @@ const trialActionV3Schemas = [
     StartTrialPayloadV3Schema,
     AskQuestionPayloadV3Schema,
     EndExaminationPayloadV3Schema,
+    MoveStrikePayloadV3Schema,
+    StrikePayloadV3Schema,
     RevealHiddenFactPayloadV3Schema,
     SettlementPayloadV3Schema,
   ),

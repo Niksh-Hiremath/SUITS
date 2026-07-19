@@ -721,8 +721,9 @@ function requireDirectiveMatchesPlannerOutput(
       directive.directive.kind !== "end_examination" ||
       output.proposedMoves.some(
         (move) =>
-          move.kind === "question_witness" &&
-          move.witnessId === appearance.witnessId,
+          (move.kind === "question_witness" &&
+            move.witnessId === appearance.witnessId) ||
+          (move.kind === "move_to_strike" && move.testimonyIds.length > 0),
       ) ||
       directive.directive.disposition !==
         (appearance.answeredQuestionCount === 0
@@ -735,6 +736,25 @@ function requireDirectiveMatchesPlannerOutput(
   }
 
   const selectedMove = output.proposedMoves[directive.selectedMoveIndex];
+  if (selectedMove?.kind === "move_to_strike") {
+    if (
+      directive.directive.kind !== "move_to_strike" ||
+      directive.directive.basis !== selectedMove.rationale ||
+      directive.directive.permittedFactIds.length !== 0 ||
+      directive.directive.permittedEvidenceIds.length !== 0 ||
+      !sameOrderedIdentifiers(
+        directive.directive.testimonyIds,
+        selectedMove.testimonyIds,
+      ) ||
+      !sameOrderedIdentifiers(
+        directive.directive.permittedTestimonyIds,
+        selectedMove.testimonyIds,
+      )
+    ) {
+      return invalidOpponentPlan();
+    }
+    return;
+  }
   if (
     selectedMove?.kind !== "question_witness" ||
     directive.directive.kind !== "question_witness" ||
@@ -1004,7 +1024,13 @@ function citationsWithinDirective(
 
 type GeneratedCounselAction = Extract<
   TrialActionV3,
-  { type: "ASK_QUESTION" | "END_EXAMINATION" | "GIVE_CLOSING" }
+  {
+    type:
+      | "ASK_QUESTION"
+      | "MOVE_TO_STRIKE"
+      | "END_EXAMINATION"
+      | "GIVE_CLOSING";
+  }
 >;
 
 function requireGeneratedCounselAction(
@@ -1014,6 +1040,7 @@ function requireGeneratedCounselAction(
 ): GeneratedCounselAction {
   if (
     (action.type !== "ASK_QUESTION" &&
+      action.type !== "MOVE_TO_STRIKE" &&
       action.type !== "END_EXAMINATION" &&
       action.type !== "GIVE_CLOSING") ||
     action.source !== "ai" ||
@@ -1064,6 +1091,41 @@ function requireGeneratedCounselAction(
       !sameIdentifierSet(
         action.payload.testimonyIds ?? [],
         citations.testimonyIds,
+      )
+    ) {
+      return invalidCounselResponse();
+    }
+    return action;
+  }
+
+  if (directive.directive.kind === "move_to_strike") {
+    const speech =
+      action.type === "MOVE_TO_STRIKE" ? action.payload.speech : undefined;
+    if (
+      directive.appearance === null ||
+      action.type !== "MOVE_TO_STRIKE" ||
+      output.proposedAction.kind !== "move_to_strike" ||
+      !sameOrderedIdentifiers(
+        output.proposedAction.testimonyIds,
+        directive.directive.testimonyIds,
+      ) ||
+      !sameOrderedIdentifiers(
+        action.payload.testimonyIds,
+        directive.directive.testimonyIds,
+      ) ||
+      action.payload.reason !== output.proposedAction.reason ||
+      speech === undefined ||
+      speech.text !== text ||
+      !sameIdentifierSet(speech.citations.factIds, citations.factIds) ||
+      !sameIdentifierSet(speech.citations.evidenceIds, citations.evidenceIds) ||
+      !sameIdentifierSet(
+        speech.citations.testimonyIds,
+        citations.testimonyIds,
+      ) ||
+      !sameIdentifierSet(speech.citations.eventIds, citations.eventIds) ||
+      !sameIdentifierSet(
+        speech.citations.sourceSegmentIds,
+        citations.sourceSegmentIds,
       )
     ) {
       return invalidCounselResponse();
@@ -1158,7 +1220,7 @@ function requireCounselContinuation(
     return continuation;
   }
 
-  if (primary.type === "GIVE_CLOSING") {
+  if (primary.type === "GIVE_CLOSING" || primary.type === "MOVE_TO_STRIKE") {
     if (continuation !== null) return invalidCounselResponse();
     return null;
   }
