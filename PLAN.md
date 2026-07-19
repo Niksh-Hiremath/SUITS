@@ -542,8 +542,8 @@ Gate:
 
 Deliverables:
 
-- [ ] partial-transcript candidate detector;
-- [ ] interrupt coordinator with stale revision protection;
+- [x] partial-transcript candidate detector;
+- [x] interrupt coordinator with stale revision protection;
 - [ ] cached objection reaction;
 - [ ] GPT-5.6 objection/ruling schema;
 - [ ] sustained/overruled/rephrase/strike/resume flows;
@@ -867,6 +867,12 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: the two Milestone 5 hardware/privacy gate items remain open. Milestone 6 still owns automatic partial-transcript objection orchestration.
   - Commits: `5e0307c` and `d52864c`.
 
+- 2026-07-19 19:09–19:42 IST — Milestone 6 partial-candidate and coordinator checkpoint
+  - Changed: added a pure, versioned, high-confidence partial-question detector that emits review candidates only for grounds permitted by the pinned rules. Ambiguous privilege, hearsay, argumentative, and lay-opinion language now requires explicit contextual gates before it can trigger an audible reaction. Added an actorless local coordinator with monotonic utterance generations and canonical-head high-water, exact revision binding, one in-flight request, semantic retry rules, cached-reaction-before-model ordering, cancellable async barriers, final-STT sealing, final-bound model dispatch, one bounded sealed retry, content-free metrics, and abortable delivery fences. Browser proposals carry no authoritative actor identity; the protected server must derive actors, rules, and the accepted ground from canonical owner-bound state.
+  - Verified: 45 focused detector/coordinator tests pass with scoped zero-warning ESLint, strict root TypeScript, and `git diff --check`. The current full repository suite passes 136 files and 1,039 tests with three explicit live-only skips. Independent audits found and drove fixes for async stale-delivery races, thrown error observers, permanent dedupe, recovery after withdrawal/provider failure, stale generation/head reopening, non-cancellable reaction/model/delivery callbacks, false-positive audible triggers, duplicate request stranding, and sealed-final retry behavior.
+  - Remaining: this is a framework-independent component checkpoint, not the Milestone 6 gate. The hearing controller, protected Next route, atomic Convex four-event preparation, existing Luna ruling loop, ruling clips, and end-to-end sustained/overruled resume behavior are not yet wired. The cached objection reaction, model/ruling deliverable, flow/eval checkboxes, and both milestone gates remain open.
+  - Commits: `6e5b874` and `1bd6853`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -927,6 +933,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A model metadata lookup is insufficient for readiness because it does not prove the Responses endpoint, quota, or model invocation path used by hearings. The preflight therefore uses two minimal fixed Responses probes, but a process-local cache alone cannot cap cold-instance spend; the protected Convex permit serializes a global five-attempt rolling window before either model call.
 - A sticky UI phase is not a valid health signal after an asynchronous speech disconnect. Preflight readiness must also reflect the controller lifecycle, and stale capability facts must remain informational rather than rendering as current provider readiness.
 - The long-running Next development process stopped serving and hydrating reliably after repeated hot updates: both static pages and the preflight request timed out. Stopping only the exact workspace-owned listener/parent and starting a fresh process restored a 73 ms page response and a 5,161 ms live preflight. The failed browser-control click after restart remains unverified tooling behavior, not evidence of a passing interactive flow.
+- The existing Luna objection resolver cannot safely consume a raw browser partial. Its canonical preparation requires an active durable `ASK_QUESTION -> REQUEST_RESPONSE -> OBJECT -> BEGIN_INTERRUPTION` chain with exact question, response, objection, interruption, and head bindings. The smallest safe M6 seam is therefore one protected final-bound interruption request backed by an atomic four-action Convex preparation, followed by the existing validated ruling loop and atomic ruling commit.
+- Cancelling STT immediately at the first detector match would make an often-incomplete partial the canonical question. The safe browser flow must stop further PCM, dispatch the cached reaction, finalize the already-buffered utterance, intercept that exact final so it cannot enter the normal question path, and seal its revision onto the partial trigger before any billable/durable objection work starts.
 
 ## 15. Decisions
 
@@ -984,6 +992,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep capture and playback bounded independently of the WebSocket: arm the worklet only after browser resources are owned, allow at most eight unacknowledged worklet frames, acknowledge TTS only after playback accepts a frame, and use the browser output-latency estimate before reporting audible completion.
 - Make local microphone preparation and speaker playback separate explicit preflight actions. Never request microphone access on mount or as a side effect of server/model readiness checks; revoke local ready state immediately when the controller reports a recoverable/fatal disconnect.
 - Probe the two pinned GPT-5.6 models with fixed server-owned content only, `store:false`, low reasoning, and no case/transcript/audio data. Share successful results for five minutes, degraded results for fifteen seconds, and require a serializable protected Convex permit so parallel server instances cannot amplify billable calls beyond five preflight snapshots per rolling ten minutes.
+- Treat the partial detector as a conservative local latency optimization, never as legal authority. The browser envelope is intentionally actorless; the protected service must reload the exact owner-bound trial head, derive counsel/witness/rules, rerun the detector with canonical context, and reject any forged or stale candidate before appending events.
+- Use final-bound dispatch for the production M6 path: the partial may stop PCM and trigger the cached “Objection!” performance immediately, but the durable question and protected resolver request must bind the exact final STT text/revision. Keep immediate partial dispatch available only as an isolated coordinator mode for a future separately audited candidate-model path.
 
 ## 16. Verification Evidence
 
@@ -1168,6 +1178,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run build` — exit 0 in 13.9 seconds; Next.js compiled, typechecked, prerendered 19/19 pages, and registered `/preflight` plus `/api/preflight`.
   - In-app browser static review — the preflight page rendered at the normal 1,265×711 viewport with no warning/error console entries and no visible desktop layout defect. The automation click focused but did not dispatch; a later visible/fresh-tab attempt timed out and reset the browser-control session. This is recorded as an unverified interactive browser action, not a pass. No microphone permission or speaker playback was requested.
   - `git push origin main` — exit 0 for `5e0307c` (`feat: bound system preflight checks`) and `d52864c` (`feat: add system preflight workspace`).
+
+- 2026-07-19 19:09–19:42 IST — Milestone 6 partial-candidate/coordinator verification
+  - `npx vitest run src/domain/objections` — exit 0; two files and 45 tests passed. Coverage includes every conservative detector signal and negative context gate; rule filtering; minimum confidence; exact utterance/generation/head/revision fencing; equivalent-revision replacement; withdrawal and provider/delivery recovery; async cached-reaction ordering and cancellation; final-bound dispatch; sealed-final retry; ignored-abort model/delivery callbacks; error-observer containment; safe metrics; and stale result suppression.
+  - `npx eslint --max-warnings 0 src/domain/objections`, `npx tsc --noEmit --pretty false`, and `git diff --check -- src/domain/objections` — exit 0.
+  - `npm test` — exit 0 after the final coordinator hardening; 136 files and 1,039 tests passed with three explicit live-only skips.
+  - Two independent read-only audits plus primary review identified the required protected integration seam. The current slice has no imports outside `src/domain/objections`, performs no network or durable mutation, and is not counted as cached-audio, Convex, Luna, or E2E interruption proof.
+  - `git push origin main` — exit 0 for `6e5b874` (`feat: detect partial objection candidates`) and `1bd6853` (`feat: coordinate partial objection interrupts`).
 
 ## 17. Blocked external prerequisites
 
