@@ -264,10 +264,22 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("lastEventId: presentationHead.lastEventId");
     expect(sources.page).toContain("nextCourtroomPresentationWakeAt(");
     expect(sources.page).toContain(
+      "selectAudibleCourtroomSemanticPerformance(",
+    );
+    expect(sources.page).toContain(
+      "selectCourtroomPresentationRuntime(presentationRuntime)",
+    );
+    expect(sources.page).toContain(
       "advanceCourtroomPresentationRuntime(current, observedAtMs)",
     );
     expect(sources.page).toContain("<CourtroomStage");
     expect(sources.page).toContain("presentationRuntime={presentationRuntime}");
+    expect(sources.page).toContain(
+      "audibleSemanticPerformance={audibleSemanticPerformance}",
+    );
+    expect(sources.page).toContain(
+      "runtimeSnapshot={presentationRuntimeSnapshot}",
+    );
     expect(sources.page).toContain("onQualityChange={setCourtroomQuality}");
     expect(sources.page).toContain('(prefers-reduced-motion: reduce)');
     expect(sources.courtroomStage).toContain("ssr: false");

@@ -10,16 +10,18 @@ import {
 } from "react";
 
 import type {
+  CourtroomAudibleSemanticPerformance,
   CourtroomPresentationFrame,
   CourtroomPresentationRuntimeSnapshot,
   CourtroomPresentationRuntimeState,
   CourtroomQuality,
 } from "@/domain/courtroom-presentation";
-import {
-  courtroomRuntimeAnnouncementText,
-  selectCourtroomPresentationRuntime,
-} from "@/domain/courtroom-presentation";
+import { courtroomRuntimeAnnouncementText } from "@/domain/courtroom-presentation";
 
+import {
+  courtroomSemanticDelivery,
+  courtroomSemanticIntensityBand,
+} from "./courtroom-semantic-style";
 import styles from "./courtroom-stage.module.css";
 
 const CourtroomCanvas = dynamic(() => import("./courtroom-canvas"), {
@@ -56,12 +58,16 @@ class RendererBoundary extends Component<
 }
 
 export function CourtroomStage({
+  audibleSemanticPerformance,
   frame,
   presentationRuntime,
+  runtimeSnapshot,
   onQualityChange,
 }: Readonly<{
+  audibleSemanticPerformance: CourtroomAudibleSemanticPerformance | null;
   frame: CourtroomPresentationFrame;
   presentationRuntime: CourtroomPresentationRuntimeState;
+  runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
   onQualityChange: (quality: CourtroomQuality) => void;
 }>) {
   const [webglSupported, setWebglSupported] = useState<boolean | null>(null);
@@ -113,9 +119,6 @@ export function CourtroomStage({
         : ready
           ? "ready"
           : "loading";
-  const runtimeSnapshot = selectCourtroomPresentationRuntime(
-    presentationRuntime,
-  );
   const cameraShot = presentationRuntime.camera.shot;
   const runtimeCameraIsBase =
     presentationRuntime.camera.targetPriority === 0 &&
@@ -146,6 +149,12 @@ export function CourtroomStage({
       ? `${runtimeActorLabel}: ${runtimeSnapshot.animation.replaceAll("_", " ")}`
       : frame.statusSummary;
   const liveStatus = announcementText ?? screenReaderStatus;
+  const semanticIntensityBand = courtroomSemanticIntensityBand(
+    audibleSemanticPerformance,
+  );
+  const semanticDelivery = courtroomSemanticDelivery(
+    audibleSemanticPerformance,
+  );
 
   return (
     <section
@@ -168,6 +177,15 @@ export function CourtroomStage({
       data-renderer-ready={ready ? "true" : "false"}
       data-renderer-state={rendererState}
       data-ruling-phase={runtimeSnapshot.rulingPhase}
+      data-semantic-active={
+        audibleSemanticPerformance === null ? "false" : "true"
+      }
+      data-semantic-delivery={semanticDelivery}
+      data-semantic-emotion={audibleSemanticPerformance?.emotion ?? "none"}
+      data-semantic-gaze={audibleSemanticPerformance?.gazeTarget ?? "none"}
+      data-semantic-gesture={audibleSemanticPerformance?.gesture ?? "none"}
+      data-semantic-intensity={semanticIntensityBand}
+      data-semantic-kind={audibleSemanticPerformance?.kind ?? "none"}
       data-testid="courtroom-stage"
       data-transition-active={
         runtimeSnapshot.transitionActive ? "true" : "false"
@@ -177,6 +195,7 @@ export function CourtroomStage({
         {webglSupported && (
           <RendererBoundary onError={handleRenderError}>
             <CourtroomCanvas
+              audibleSemanticPerformance={audibleSemanticPerformance}
               cameraShot={cameraShot}
               cameraTransition={cameraTransition}
               frame={frame}
@@ -184,6 +203,7 @@ export function CourtroomStage({
               onContextRestored={handleContextRestored}
               onReady={handleReady}
               presentationRuntime={presentationRuntime}
+              runtimeSnapshot={runtimeSnapshot}
             />
           </RendererBoundary>
         )}
@@ -238,6 +258,8 @@ export function CourtroomStage({
       <div className={styles.actors} aria-hidden="true">
         {frame.characters.map((character) => {
           const isRuntimeActor = runtimeSnapshot.sceneActor === character.slot;
+          const isSemanticActor =
+            isRuntimeActor && audibleSemanticPerformance !== null;
           const animation =
             isRuntimeActor && runtimeSnapshot.animation
               ? runtimeSnapshot.animation
@@ -257,6 +279,12 @@ export function CourtroomStage({
               data-mouth-active={mouthActor === character.slot ? "true" : "false"}
               data-posture={posture}
               data-scene-actor={character.slot}
+              data-semantic-active={isSemanticActor ? "true" : "false"}
+              data-semantic-emotion={
+                isSemanticActor
+                  ? audibleSemanticPerformance?.emotion
+                  : undefined
+              }
               data-gavel-state={
                 character.slot === "judge"
                   ? runtimeSnapshot.rulingPhase

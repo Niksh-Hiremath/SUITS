@@ -20,6 +20,8 @@ import {
   rebaseCourtroomPresentationRuntime,
   reduceCourtroomPresentationRuntime,
   resetCourtroomPresentationRuntime,
+  selectAudibleCourtroomSemanticPerformance,
+  selectCourtroomPresentationRuntime,
   type CourtroomQuality,
 } from "@/domain/courtroom-presentation";
 import {
@@ -1107,6 +1109,20 @@ function HearingPageContent() {
   const presentationWakeAtMs = nextCourtroomPresentationWakeAt(
     presentationRuntime,
   );
+  const presentationRuntimeSnapshot = useMemo(
+    () => selectCourtroomPresentationRuntime(presentationRuntime),
+    [presentationRuntime],
+  );
+  const audibleSemanticPerformance = useMemo(
+    () =>
+      view === null
+        ? null
+        : selectAudibleCourtroomSemanticPerformance(
+            view,
+            presentationRuntimeSnapshot,
+          ),
+    [presentationRuntimeSnapshot, view],
+  );
 
   useEffect(() => {
     const observedAtMs = window.performance.now();
@@ -1241,9 +1257,11 @@ function HearingPageContent() {
         <div className="hearing-grid">
           {courtroomPresentation && (
             <CourtroomStage
+              audibleSemanticPerformance={audibleSemanticPerformance}
               frame={courtroomPresentation}
               onQualityChange={setCourtroomQuality}
               presentationRuntime={presentationRuntime}
+              runtimeSnapshot={presentationRuntimeSnapshot}
             />
           )}
           <section className="transcript-panel">

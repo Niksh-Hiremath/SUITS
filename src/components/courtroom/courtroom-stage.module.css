@@ -1,4 +1,6 @@
 .stage {
+  --courtroom-display-transition-duration: 240ms;
+
   position: relative;
   grid-column: 1 / -1;
   min-height: clamp(390px, 48vw, 620px);
@@ -127,19 +129,19 @@
 }
 
 .display[data-display-phase="entering"] {
-  animation: displayEnter 240ms ease-out both;
+  animation: displayEnter var(--courtroom-display-transition-duration) ease-out both;
 }
 
 .display[data-display-phase="updating"] {
-  animation: displayUpdate 240ms ease-in-out both;
+  animation: displayUpdate var(--courtroom-display-transition-duration) ease-in-out both;
 }
 
 .display[data-display-phase="switching"] {
-  animation: displaySwitch 240ms ease-in-out both;
+  animation: displaySwitch var(--courtroom-display-transition-duration) ease-in-out both;
 }
 
 .display[data-display-phase="exiting"] {
-  animation: displayExit 240ms ease-in both;
+  animation: displayExit var(--courtroom-display-transition-duration) ease-in both;
 }
 
 .stage[data-ruling-phase="gavel"]

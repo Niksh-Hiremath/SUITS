@@ -34,6 +34,13 @@ describe("courtroom runtime renderer boundary", () => {
       "data-posture",
       "data-mouth-active",
       "data-ruling-phase",
+      "data-semantic-active",
+      "data-semantic-delivery",
+      "data-semantic-emotion",
+      "data-semantic-gaze",
+      "data-semantic-gesture",
+      "data-semantic-intensity",
+      "data-semantic-kind",
       "data-transition-active",
     ]) {
       expect(stage).toContain(selector);
@@ -47,6 +54,12 @@ describe("courtroom runtime renderer boundary", () => {
     expect(stage).toContain("runtimeSnapshot.animation.replaceAll");
     expect(stage).not.toContain("transcript[");
     expect(stage).not.toContain("frame.display.mode");
+    expect(stage).not.toContain("semanticCue");
+    expect(canvas).not.toContain("semanticCue");
+    expect(stage).not.toContain("outputHash");
+    expect(canvas).not.toContain("outputHash");
+    expect(stage).not.toContain("activity");
+    expect(canvas).not.toContain("activity");
 
     expect(canvas).toContain(
       'canvas.setAttribute("data-mouth-actor", actor)',
@@ -76,10 +89,40 @@ describe("courtroom runtime renderer boundary", () => {
       "data-timestamp",
       "data-transition-start",
       "data-transition-end",
+      "data-call-id",
+      "data-action-id",
+      "data-event-id",
+      "data-evidence-id",
     ]) {
       expect(stage).not.toContain(privateSelector);
       expect(canvas).not.toContain(privateSelector);
     }
+  });
+
+  it("samples one validated runtime snapshot per demand frame", async () => {
+    const canvas = await readFile(CANVAS_PATH, "utf8");
+
+    expect(canvas).toContain("function sampleRuntimeFrame(");
+    expect(canvas).toContain("clock.elapsedTime");
+    expect(canvas).toContain("sampler.current.frameTimeSeconds");
+    expect(
+      canvas.match(/selectCourtroomPresentationRuntime\(/gu),
+    ).toHaveLength(1);
+  });
+
+  it("applies audited affect only to the exact audible runtime actor", async () => {
+    const canvas = await readFile(CANVAS_PATH, "utf8");
+
+    expect(canvas).toContain("deriveCourtroomSemanticStyle(");
+    expect(canvas).toContain("sampledRuntimeOwnsActor &&");
+    expect(canvas).toContain('sampledRuntime.source === "playback"');
+    expect(canvas).toContain(
+      'sampledRuntime.playback?.phase !== "requested"',
+    );
+    expect(canvas).toContain(
+      'runtimeSnapshot.sceneActor === "witness"',
+    );
+    expect(canvas).toContain("semanticStyle.headYaw");
   });
 
   it("animates every allowlisted semantic pose inside the demand loop", async () => {
@@ -128,6 +171,8 @@ describe("courtroom runtime renderer boundary", () => {
     }
     expect(styles).toContain('[data-ruling-phase="gavel"]');
     expect(styles).toContain('[data-reduced-motion="true"] .display');
+    expect(styles.match(/240ms/gu)).toHaveLength(1);
+    expect(styles).toContain("var(--courtroom-display-transition-duration)");
   });
 
   it("preserves base camera composition and cuts reduced motion", async () => {

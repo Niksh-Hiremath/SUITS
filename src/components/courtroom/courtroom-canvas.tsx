@@ -12,6 +12,7 @@ import {
 } from "three";
 
 import type {
+  CourtroomAudibleSemanticPerformance,
   CourtroomAnimation,
   CourtroomDisplayPhase,
   CourtroomPresentationFrame,
@@ -23,10 +24,16 @@ import type {
 } from "@/domain/courtroom-presentation";
 import { selectCourtroomPresentationRuntime } from "@/domain/courtroom-presentation";
 
+import {
+  courtroomSemanticStyleIsAnimated,
+  deriveCourtroomSemanticStyle,
+} from "./courtroom-semantic-style";
+
 type CameraShot = CourtroomPresentationFrame["camera"]["shot"];
 type CameraTransition = CourtroomPresentationFrame["camera"]["transition"];
 
 type CourtroomCanvasProps = Readonly<{
+  audibleSemanticPerformance: CourtroomAudibleSemanticPerformance | null;
   cameraShot: CameraShot;
   cameraTransition: CameraTransition;
   frame: CourtroomPresentationFrame;
@@ -34,12 +41,55 @@ type CourtroomCanvasProps = Readonly<{
   onContextRestored: () => void;
   onReady: () => void;
   presentationRuntime: CourtroomPresentationRuntimeState;
+  runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
 }>;
+
+type RuntimeFrameSample = Readonly<{
+  observedAtMs: number;
+  snapshot: CourtroomPresentationRuntimeSnapshot;
+}>;
+
+type RuntimeFrameSampler = {
+  current: {
+    frameTimeSeconds: number;
+    revision: number;
+    sample: RuntimeFrameSample;
+  };
+};
+
+function sampleRuntimeFrame(
+  sampler: RuntimeFrameSampler,
+  presentationRuntime: CourtroomPresentationRuntimeState,
+  frameTimeSeconds: number,
+): RuntimeFrameSample {
+  if (
+    sampler.current.revision === presentationRuntime.revision &&
+    sampler.current.frameTimeSeconds === frameTimeSeconds
+  ) {
+    return sampler.current.sample;
+  }
+  const observedAtMs = performance.now();
+  const sample = {
+    observedAtMs,
+    snapshot: selectCourtroomPresentationRuntime(
+      presentationRuntime,
+      observedAtMs,
+    ),
+  };
+  sampler.current = {
+    frameTimeSeconds,
+    revision: presentationRuntime.revision,
+    sample,
+  };
+  return sample;
+}
 
 type CharacterFigureProps = Readonly<{
   frame: CourtroomPresentationFrame;
   presentationRuntime: CourtroomPresentationRuntimeState;
   runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
+  runtimeSampler: RuntimeFrameSampler;
+  semanticPerformance: CourtroomAudibleSemanticPerformance | null;
   slot: SceneActorKey;
   position: Vector3Tuple;
   color: string;
@@ -455,6 +505,8 @@ function CharacterFigure({
   frame,
   presentationRuntime,
   runtimeSnapshot,
+  runtimeSampler,
+  semanticPerformance,
   slot,
   position,
   color,
@@ -486,9 +538,17 @@ function CharacterFigure({
 
   useEffect(() => {
     invalidate();
-  }, [animation, emphasis, invalidate, mouthIsActive, posture, reducedMotion]);
+  }, [
+    animation,
+    emphasis,
+    invalidate,
+    mouthIsActive,
+    posture,
+    reducedMotion,
+    semanticPerformance,
+  ]);
 
-  useFrame((_, rawDelta) => {
+  useFrame(({ clock }, rawDelta) => {
     if (
       !figure.current ||
       !head.current ||
@@ -498,10 +558,12 @@ function CharacterFigure({
     ) {
       return;
     }
-    const nowMs = performance.now();
-    const sampledRuntime = mouthIsActive
-      ? selectCourtroomPresentationRuntime(presentationRuntime, nowMs)
-      : runtimeSnapshot;
+    const { observedAtMs: nowMs, snapshot: sampledRuntime } =
+      sampleRuntimeFrame(
+        runtimeSampler,
+        presentationRuntime,
+        clock.elapsedTime,
+      );
     const sampledRuntimeOwnsActor = sampledRuntime.sceneActor === slot;
     const sampledAnimation =
       sampledRuntimeOwnsActor && sampledRuntime.animation
@@ -513,24 +575,48 @@ function CharacterFigure({
         : (character?.posture ?? "seated");
     const sampledMouthIsActive =
       sampledRuntimeOwnsActor && runtimeMouthIsActive(sampledRuntime);
+    const sampledSemanticPerformance =
+      sampledRuntimeOwnsActor &&
+      sampledRuntime.source === "playback" &&
+      sampledRuntime.playback?.phase !== "requested"
+        ? semanticPerformance
+        : null;
     const pose = semanticPose(
       sampledAnimation,
       sampledPosture,
       reducedMotion ? 0 : nowMs,
     );
+    const semanticStyle = deriveCourtroomSemanticStyle(
+      sampledSemanticPerformance,
+      {
+        animation: sampledAnimation,
+        observedAtMs: nowMs,
+        reducedMotion,
+        rulingPhase: sampledRuntime.rulingPhase,
+      },
+    );
     const delta = Math.min(rawDelta, 1 / 15);
     const immediate = reducedMotion;
-    const scaleBoost = scale * (1 + emphasis * 0.035);
+    const scaleBoost =
+      scale * (1 + emphasis * 0.035) * semanticStyle.scaleGain;
+    const targetLift = position[1] + pose.lift + semanticStyle.lift;
+    const targetLeanX = pose.leanX + semanticStyle.leanX;
+    const targetHeadPitch = pose.headPitch + semanticStyle.headPitch;
+    const targetHeadRoll = pose.headRoll + semanticStyle.headRoll;
+    const targetLeftArmX = pose.leftArmX + semanticStyle.leftArmX;
+    const targetLeftArmZ = pose.leftArmZ + semanticStyle.leftArmZ;
+    const targetRightArmX = pose.rightArmX + semanticStyle.rightArmX;
+    const targetRightArmZ = pose.rightArmZ + semanticStyle.rightArmZ;
 
     figure.current.position.y = dampValue(
       figure.current.position.y,
-      position[1] + pose.lift,
+      targetLift,
       delta,
       immediate,
     );
     figure.current.rotation.x = dampValue(
       figure.current.rotation.x,
-      pose.leanX,
+      targetLeanX,
       delta,
       immediate,
     );
@@ -560,37 +646,43 @@ function CharacterFigure({
     );
     head.current.rotation.x = dampValue(
       head.current.rotation.x,
-      pose.headPitch,
+      targetHeadPitch,
+      delta,
+      immediate,
+    );
+    head.current.rotation.y = dampValue(
+      head.current.rotation.y,
+      semanticStyle.headYaw,
       delta,
       immediate,
     );
     head.current.rotation.z = dampValue(
       head.current.rotation.z,
-      pose.headRoll,
+      targetHeadRoll,
       delta,
       immediate,
     );
     leftArm.current.rotation.x = dampValue(
       leftArm.current.rotation.x,
-      pose.leftArmX,
+      targetLeftArmX,
       delta,
       immediate,
     );
     leftArm.current.rotation.z = dampValue(
       leftArm.current.rotation.z,
-      pose.leftArmZ,
+      targetLeftArmZ,
       delta,
       immediate,
     );
     rightArm.current.rotation.x = dampValue(
       rightArm.current.rotation.x,
-      pose.rightArmX,
+      targetRightArmX,
       delta,
       immediate,
     );
     rightArm.current.rotation.z = dampValue(
       rightArm.current.rotation.z,
-      pose.rightArmZ,
+      targetRightArmZ,
       delta,
       immediate,
     );
@@ -619,18 +711,27 @@ function CharacterFigure({
     );
 
     const unsettled =
-      Math.abs(figure.current.position.y - (position[1] + pose.lift)) > 0.001 ||
-      Math.abs(figure.current.rotation.x - pose.leanX) > 0.001 ||
+      Math.abs(figure.current.position.y - targetLift) > 0.001 ||
+      Math.abs(figure.current.rotation.x - targetLeanX) > 0.001 ||
       Math.abs(figure.current.rotation.z - pose.leanZ) > 0.001 ||
       Math.abs(figure.current.scale.y - scaleBoost * pose.postureScaleY) >
         0.001 ||
-      Math.abs(rightArm.current.rotation.z - pose.rightArmZ) > 0.001 ||
+      Math.abs(head.current.rotation.x - targetHeadPitch) > 0.001 ||
+      Math.abs(head.current.rotation.y - semanticStyle.headYaw) > 0.001 ||
+      Math.abs(head.current.rotation.z - targetHeadRoll) > 0.001 ||
+      Math.abs(leftArm.current.rotation.z - targetLeftArmZ) > 0.001 ||
+      Math.abs(rightArm.current.rotation.z - targetRightArmZ) > 0.001 ||
       Math.abs(mouth.current.scale.x - mouthWidth) > 0.001 ||
       Math.abs(mouth.current.scale.y - mouthHeight) > 0.001;
     if (
       unsettled ||
       (!reducedMotion &&
-        (hasFutureMouthCue || isLoopingPose(sampledAnimation)))
+        (hasFutureMouthCue ||
+          isLoopingPose(sampledAnimation) ||
+          courtroomSemanticStyleIsAnimated(
+            sampledSemanticPerformance,
+            sampledAnimation,
+          )))
     ) {
       invalidate();
     }
@@ -685,10 +786,12 @@ function Jury({
   frame,
   presentationRuntime,
   runtimeSnapshot,
+  runtimeSampler,
 }: Readonly<{
   frame: CourtroomPresentationFrame;
   presentationRuntime: CourtroomPresentationRuntimeState;
   runtimeSnapshot: CourtroomPresentationRuntimeSnapshot;
+  runtimeSampler: RuntimeFrameSampler;
 }>) {
   const positions: Vector3Tuple[] = [
     [-5.35, 0.42, -2.05],
@@ -709,6 +812,8 @@ function Jury({
           presentationRuntime={presentationRuntime}
           rotationY={0.18}
           runtimeSnapshot={runtimeSnapshot}
+          runtimeSampler={runtimeSampler}
+          semanticPerformance={null}
           scale={0.67}
           slot="jury"
         />
@@ -774,9 +879,11 @@ function displaySurfaceMotion(
 function CourtroomDisplaySurface({
   presentationRuntime,
   reducedMotion,
+  runtimeSampler,
 }: Readonly<{
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
+  runtimeSampler: RuntimeFrameSampler;
 }>) {
   const surface = useRef<Mesh>(null);
   const material = useRef<MeshStandardMaterial>(null);
@@ -786,12 +893,12 @@ function CourtroomDisplaySurface({
     invalidate();
   }, [invalidate, presentationRuntime.revision, reducedMotion]);
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
     if (!surface.current || !material.current) return;
-    const nowMs = performance.now();
-    const snapshot = selectCourtroomPresentationRuntime(
+    const { observedAtMs: nowMs, snapshot } = sampleRuntimeFrame(
+      runtimeSampler,
       presentationRuntime,
-      nowMs,
+      clock.elapsedTime,
     );
     const palette = displayPalette[snapshot.display.mode];
     const progress = reducedMotion
@@ -837,9 +944,11 @@ function CourtroomDisplaySurface({
 function CourtroomArchitecture({
   presentationRuntime,
   reducedMotion,
+  runtimeSampler,
 }: Readonly<{
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
+  runtimeSampler: RuntimeFrameSampler;
 }>) {
   return (
     <group>
@@ -859,6 +968,7 @@ function CourtroomArchitecture({
       <CourtroomDisplaySurface
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
+        runtimeSampler={runtimeSampler}
       />
       {[-6.7, -4.5, -2.3, 2.3, 4.5, 6.7].map((x) => (
         <Box
@@ -932,9 +1042,11 @@ function rulingTransitionProgress(
 function JudgeGavel({
   presentationRuntime,
   reducedMotion,
+  runtimeSampler,
 }: Readonly<{
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
+  runtimeSampler: RuntimeFrameSampler;
 }>) {
   const gavel = useRef<Group>(null);
   const invalidate = useThree((state) => state.invalidate);
@@ -943,12 +1055,12 @@ function JudgeGavel({
     invalidate();
   }, [invalidate, presentationRuntime.revision, reducedMotion]);
 
-  useFrame((_, rawDelta) => {
+  useFrame(({ clock }, rawDelta) => {
     if (!gavel.current) return;
-    const nowMs = performance.now();
-    const snapshot = selectCourtroomPresentationRuntime(
+    const { observedAtMs: nowMs, snapshot } = sampleRuntimeFrame(
+      runtimeSampler,
       presentationRuntime,
-      nowMs,
+      clock.elapsedTime,
     );
     const phase = snapshot.rulingPhase;
     const progress =
@@ -1029,9 +1141,11 @@ function JudgeGavel({
 function CanvasPerformanceMetadata({
   presentationRuntime,
   reducedMotion,
+  runtimeSampler,
 }: Readonly<{
   presentationRuntime: CourtroomPresentationRuntimeState;
   reducedMotion: boolean;
+  runtimeSampler: RuntimeFrameSampler;
 }>) {
   const canvas = useThree((state) => state.gl.domElement);
   const invalidate = useThree((state) => state.invalidate);
@@ -1046,11 +1160,11 @@ function CanvasPerformanceMetadata({
     invalidate();
   }, [invalidate, presentationRuntime.revision, reducedMotion]);
 
-  useFrame(() => {
-    const nowMs = performance.now();
-    const snapshot = selectCourtroomPresentationRuntime(
+  useFrame(({ clock }) => {
+    const { observedAtMs: nowMs, snapshot } = sampleRuntimeFrame(
+      runtimeSampler,
       presentationRuntime,
-      nowMs,
+      clock.elapsedTime,
     );
     const active = runtimeMouthIsActive(snapshot);
     const shape = active && reducedMotion ? "narrow" : snapshot.mouthShape;
@@ -1095,6 +1209,7 @@ function CanvasPerformanceMetadata({
 }
 
 function CourtroomScene({
+  audibleSemanticPerformance,
   cameraShot,
   cameraTransition,
   frame,
@@ -1102,10 +1217,13 @@ function CourtroomScene({
   onContextRestored,
   onReady,
   presentationRuntime,
+  runtimeSnapshot,
 }: CourtroomCanvasProps) {
-  const runtimeSnapshot = selectCourtroomPresentationRuntime(
-    presentationRuntime,
-  );
+  const runtimeSampler = useRef<RuntimeFrameSampler["current"]>({
+    frameTimeSeconds: Number.NaN,
+    revision: presentationRuntime.revision,
+    sample: { observedAtMs: 0, snapshot: runtimeSnapshot },
+  });
   const reducedMotion = frame.reducedMotion || presentationRuntime.reducedMotion;
   return (
     <>
@@ -1123,6 +1241,7 @@ function CourtroomScene({
       <CourtroomArchitecture
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
+        runtimeSampler={runtimeSampler}
       />
       <CharacterFigure
         color="#4e2632"
@@ -1130,11 +1249,18 @@ function CourtroomScene({
         position={[0, 1.45, -4.72]}
         presentationRuntime={presentationRuntime}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
+        semanticPerformance={
+          runtimeSnapshot.sceneActor === "judge"
+            ? audibleSemanticPerformance
+            : null
+        }
         slot="judge"
       />
       <JudgeGavel
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
+        runtimeSampler={runtimeSampler}
       />
       <CharacterFigure
         color="#203b58"
@@ -1143,6 +1269,12 @@ function CourtroomScene({
         presentationRuntime={presentationRuntime}
         rotationY={-0.08}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
+        semanticPerformance={
+          runtimeSnapshot.sceneActor === "user_counsel"
+            ? audibleSemanticPerformance
+            : null
+        }
         slot="user_counsel"
       />
       <CharacterFigure
@@ -1152,6 +1284,12 @@ function CourtroomScene({
         presentationRuntime={presentationRuntime}
         rotationY={0.08}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
+        semanticPerformance={
+          runtimeSnapshot.sceneActor === "opposing_counsel"
+            ? audibleSemanticPerformance
+            : null
+        }
         slot="opposing_counsel"
       />
       <CharacterFigure
@@ -1161,6 +1299,12 @@ function CourtroomScene({
         presentationRuntime={presentationRuntime}
         rotationY={-0.22}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
+        semanticPerformance={
+          runtimeSnapshot.sceneActor === "witness"
+            ? audibleSemanticPerformance
+            : null
+        }
         slot="witness"
       />
       <CharacterFigure
@@ -1170,13 +1314,20 @@ function CourtroomScene({
         presentationRuntime={presentationRuntime}
         rotationY={0.1}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
         scale={0.82}
+        semanticPerformance={
+          runtimeSnapshot.sceneActor === "clerk"
+            ? audibleSemanticPerformance
+            : null
+        }
         slot="clerk"
       />
       <Jury
         frame={frame}
         presentationRuntime={presentationRuntime}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeSampler={runtimeSampler}
       />
       <CameraDirector
         cameraShot={cameraShot}
@@ -1186,6 +1337,7 @@ function CourtroomScene({
       <CanvasPerformanceMetadata
         presentationRuntime={presentationRuntime}
         reducedMotion={reducedMotion}
+        runtimeSampler={runtimeSampler}
       />
       <RendererLifecycle
         onContextLost={onContextLost}
@@ -1197,6 +1349,7 @@ function CourtroomScene({
 }
 
 export default function CourtroomCanvas({
+  audibleSemanticPerformance,
   cameraShot,
   cameraTransition,
   frame,
@@ -1204,6 +1357,7 @@ export default function CourtroomCanvas({
   onContextRestored,
   onReady,
   presentationRuntime,
+  runtimeSnapshot,
 }: CourtroomCanvasProps) {
   const dpr: number | [number, number] =
     frame.quality === "reduced"
@@ -1225,6 +1379,7 @@ export default function CourtroomCanvas({
       shadows={frame.quality !== "reduced" ? "percentage" : false}
     >
       <CourtroomScene
+        audibleSemanticPerformance={audibleSemanticPerformance}
         cameraShot={cameraShot}
         cameraTransition={cameraTransition}
         frame={frame}
@@ -1232,6 +1387,7 @@ export default function CourtroomCanvas({
         onContextRestored={onContextRestored}
         onReady={onReady}
         presentationRuntime={presentationRuntime}
+        runtimeSnapshot={runtimeSnapshot}
       />
     </Canvas>
   );
