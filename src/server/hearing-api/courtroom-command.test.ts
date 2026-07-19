@@ -519,6 +519,42 @@ describe("orchestrateCourtroomCommand", () => {
     expect(provider.requests).toHaveLength(2);
   });
 
+  it("rejects an out-of-scope prepared model step before provider dispatch", async () => {
+    const plannerPreparation = modelPreparation(
+      createOpponentPlannerRequestFixture(),
+    );
+    const durableService: CourtroomCommandDurableService = {
+      prepare: vi.fn(),
+      commitOpponentPlan: vi.fn(),
+      commitCounselResponse: vi.fn(),
+      commitObjectionRuling: vi.fn(),
+      commitWitness: vi.fn(),
+      commitNegotiationDecision: vi.fn(),
+      commitJuryResponse: vi.fn(),
+      commitDebrief: vi.fn(),
+      recordTerminalTrace: vi.fn(async () => undefined),
+    };
+    const provider = new ScriptedCourtroomModelProvider(
+      [{ type: "output", output: createOpponentPlannerOutputFixture() }],
+      { repeatLastStep: false },
+    );
+    const assertModelPreparation = vi.fn(() => {
+      throw new Error("MODEL_PREPARATION_OUT_OF_SCOPE");
+    });
+
+    await expect(
+      orchestratePreparedCourtroomCommand({
+        preparation: plannerPreparation,
+        provider,
+        durableService,
+        assertModelPreparation,
+      }),
+    ).rejects.toThrow("MODEL_PREPARATION_OUT_OF_SCOPE");
+    expect(assertModelPreparation).toHaveBeenCalledWith(plannerPreparation);
+    expect(provider.requests).toHaveLength(0);
+    expect(durableService.commitOpponentPlan).not.toHaveBeenCalled();
+  });
+
   it("durably records a failed private planner trace with a fresh signal", async () => {
     const recordTerminalTrace = vi.fn<
       CourtroomCommandDurableService["recordTerminalTrace"]

@@ -293,6 +293,12 @@ export type OrchestratePreparedCourtroomCommandOptions = Readonly<{
   durableService: CourtroomCommandDurableService;
   signal?: AbortSignal;
   maxModelSteps?: number;
+  assertModelPreparation?: (
+    preparation: Extract<
+      HearingCommandPreparation,
+      Readonly<{ status: "model_required" }>
+    >,
+  ) => void;
 }>;
 
 export type CommittedObjectionRulingOutcome = Readonly<
@@ -360,6 +366,7 @@ async function runPreparedCourtroomCommand(
     provider: CourtroomModelProvider;
     durableService: CourtroomCommandDurableService;
     signal?: AbortSignal;
+    assertModelPreparation?: OrchestratePreparedCourtroomCommandOptions["assertModelPreparation"];
   }>,
   limit: number,
 ): Promise<PreparedCourtroomCommandResult> {
@@ -373,6 +380,7 @@ async function runPreparedCourtroomCommand(
         objectionRulings,
       };
     }
+    options.assertModelPreparation?.(preparation);
 
     try {
       if (isHearingWitnessModelRequiredPreparation(preparation)) {
