@@ -21,6 +21,7 @@ import {
   type PartialObjectionDeliveryFence,
   type PartialObjectionEnvelope,
   type PartialObjectionHead,
+  type PartialObjectionMetrics,
 } from "@/domain/objections/partial-coordinator";
 
 import {
@@ -119,6 +120,18 @@ export type HearingCapabilitySummary = Readonly<{
   maxTtsQueueDepth: number;
 }>;
 
+export type HearingSpeechMetric = Readonly<{
+  name: string;
+  value: number;
+  unit: "count" | "bytes" | "milliseconds" | "ratio";
+}>;
+
+export type HearingSpeechMetricsSnapshot = Readonly<{
+  utteranceId: string | null;
+  jobId: string | null;
+  metrics: readonly HearingSpeechMetric[];
+}>;
+
 export type HearingControllerSnapshot = Readonly<{
   lifecycle: HearingControllerLifecycle;
   code: string | null;
@@ -126,6 +139,8 @@ export type HearingControllerSnapshot = Readonly<{
   partialText: string;
   activeMode: HearingVoiceInputMode | null;
   capabilities: HearingCapabilitySummary | null;
+  objectionMetrics: PartialObjectionMetrics | null;
+  speechMetrics: HearingSpeechMetricsSnapshot | null;
   captureStatus: AudioCaptureStatus;
   playbackStatus: AudioPlaybackStatus;
 }>;
@@ -355,6 +370,18 @@ function freezeSnapshot(
   value: HearingControllerSnapshot,
 ): HearingControllerSnapshot {
   return Object.freeze({ ...value });
+}
+
+function freezeSpeechMetrics(
+  event: Extract<SpeechClientEvent, { type: "metrics" }>,
+): HearingSpeechMetricsSnapshot {
+  return Object.freeze({
+    utteranceId: event.utteranceId ?? null,
+    jobId: event.jobId ?? null,
+    metrics: Object.freeze(
+      event.metrics.map((metric) => Object.freeze({ ...metric })),
+    ),
+  });
 }
 
 function summarizeCapabilities(
@@ -610,6 +637,8 @@ export class HearingController {
       partialText: "",
       activeMode: null,
       capabilities: null,
+      objectionMetrics: null,
+      speechMetrics: null,
       captureStatus: this.capture.state.status,
       playbackStatus: this.playback.status,
     });
@@ -625,6 +654,9 @@ export class HearingController {
             onModelResult: (envelope, result, fence) =>
               this.deliverFinalBoundInterruption(envelope, result, fence),
             onError: (error) => this.handlePartialObjectionError(error),
+            onMetrics: (metrics) => {
+              if (!this.closed) this.setSnapshot({ objectionMetrics: metrics });
+            },
           });
   }
 
@@ -1259,8 +1291,10 @@ export class HearingController {
       case "flow_control":
       case "speech_started":
       case "speech_ended":
-      case "metrics":
       case "pong":
+        return;
+      case "metrics":
+        this.setSnapshot({ speechMetrics: freezeSpeechMetrics(event) });
         return;
     }
   }
@@ -1314,6 +1348,7 @@ export class HearingController {
     ) {
       partialInterruption.envelope = result.envelope;
     }
+    this.setSnapshot({});
   }
 
   private handleFinal(
@@ -1355,6 +1390,7 @@ export class HearingController {
         utteranceId,
         revision,
       });
+      this.setSnapshot({});
       if (sealed !== true) {
         void this.failRecording(
           recording,
@@ -2768,7 +2804,11 @@ export class HearingController {
   }
 
   private setSnapshot(patch: Partial<HearingControllerSnapshot>): void {
-    this.snapshotValue = freezeSnapshot({ ...this.snapshotValue, ...patch });
+    this.snapshotValue = freezeSnapshot({
+      ...this.snapshotValue,
+      ...patch,
+      objectionMetrics: this.partialObjections?.getMetrics() ?? null,
+    });
     const listeners = [...this.listeners];
     for (const listener of listeners) {
       try {

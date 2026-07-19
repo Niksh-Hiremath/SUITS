@@ -1041,6 +1041,30 @@ function HearingPageContent() {
                     .join(" + ") || "providers unavailable"}
                 </small>
               )}
+              {speechSnapshot?.objectionMetrics &&
+                speechSnapshot.objectionMetrics.candidatesDetected > 0 && (
+                  <small>
+                    Objection telemetry ·{" "}
+                    {speechSnapshot.objectionMetrics.candidatesDetected} candidate
+                    {speechSnapshot.objectionMetrics.candidatesDetected === 1
+                      ? ""
+                      : "s"}
+                    {speechSnapshot.objectionMetrics.lastReactionDispatchLatencyMs ===
+                    null
+                      ? ""
+                      : ` · reaction ${speechSnapshot.objectionMetrics.lastReactionDispatchLatencyMs} ms`}
+                    {speechSnapshot.objectionMetrics.lastModelLatencyMs === null
+                      ? ""
+                      : ` · ruling ${speechSnapshot.objectionMetrics.lastModelLatencyMs} ms`}
+                  </small>
+                )}
+              {speechSnapshot?.speechMetrics && (
+                <small>
+                  Local audio telemetry · {speechSnapshot.speechMetrics.metrics.length}{" "}
+                  bounded metric
+                  {speechSnapshot.speechMetrics.metrics.length === 1 ? "" : "s"}
+                </small>
+              )}
               <div className="input-actions voice-controls">
                 {(speechLifecycle === "idle" ||
                   speechLifecycle === "recoverable_error") && (

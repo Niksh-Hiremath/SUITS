@@ -60,6 +60,8 @@ describe("preflight page", () => {
       partialText: "",
       activeMode: null,
       capabilities: null,
+      objectionMetrics: null,
+      speechMetrics: null,
       captureStatus: "stopped",
       playbackStatus: "idle",
     } as const;

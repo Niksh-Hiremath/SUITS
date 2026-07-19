@@ -166,6 +166,7 @@ export type PartialObjectionCoordinatorOptions<ModelResult> = Readonly<{
     fence: PartialObjectionDeliveryFence,
   ) => void | Promise<void>;
   onError: (error: PartialObjectionCoordinatorError) => void;
+  onMetrics?: (metrics: PartialObjectionMetrics) => void;
   now?: () => number;
   detectCandidate?: typeof detectPartialObjectionCandidate;
   modelDispatch?: "immediate" | "after_final_seal";
@@ -1004,6 +1005,14 @@ export class PartialObjectionCoordinator<ModelResult> {
     }
   }
 
+  private publishMetrics(): void {
+    try {
+      this.options.onMetrics?.(this.getMetrics());
+    } catch {
+      // Telemetry observers cannot compromise interruption safety or liveness.
+    }
+  }
+
   private track(task: Promise<void>): void {
     const guarded = task.catch((cause: unknown) => {
       this.metrics.coordinatorTaskFailures += 1;
@@ -1015,6 +1024,9 @@ export class PartialObjectionCoordinator<ModelResult> {
       });
     });
     this.pending.add(guarded);
-    void guarded.then(() => this.pending.delete(guarded));
+    void guarded.then(() => {
+      this.pending.delete(guarded);
+      this.publishMetrics();
+    });
   }
 }

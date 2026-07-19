@@ -923,6 +923,11 @@ describe("HearingController", () => {
     expect(test.controller.snapshot).toMatchObject({
       lifecycle: "processing",
       activeMode: "question",
+      objectionMetrics: {
+        candidatesDetected: 1,
+        reactionsStarted: 1,
+        modelRequestsStarted: 0,
+      },
     });
 
     await flushAsync();
@@ -977,10 +982,51 @@ describe("HearingController", () => {
     const rulingClip = await completeLatestClip(test);
     expect(rulingClip.clipId).toBe("courtroom.sustained.v1");
     await stopped;
+    await flushAsync();
 
     expect(test.client.synthesis).toHaveLength(2);
     expect(test.commits).toHaveLength(0);
-    expect(test.controller.snapshot.lifecycle).toBe("ready");
+    expect(test.controller.snapshot).toMatchObject({
+      lifecycle: "ready",
+      objectionMetrics: {
+        finalCandidatesSealed: 1,
+        modelRequestsStarted: 1,
+        modelRequestsCompleted: 1,
+        resultsDelivered: 1,
+      },
+    });
+    expect(
+      JSON.stringify(test.controller.snapshot.objectionMetrics),
+    ).not.toContain("safety alert");
+  });
+
+  it("retains the latest content-free local speech metric batch", async () => {
+    const test = harness();
+    await test.controller.prepare();
+
+    test.client.emit({
+      protocol: SPEECH_PROTOCOL,
+      type: "metrics",
+      utteranceId: "utterance:metric",
+      jobId: null,
+      metrics: [
+        { name: "stt.partial.latency", value: 42, unit: "milliseconds" },
+        { name: "stt.frames.accepted", value: 3, unit: "count" },
+      ],
+    });
+
+    expect(test.controller.snapshot.speechMetrics).toEqual({
+      utteranceId: "utterance:metric",
+      jobId: null,
+      metrics: [
+        { name: "stt.partial.latency", value: 42, unit: "milliseconds" },
+        { name: "stt.frames.accepted", value: 3, unit: "count" },
+      ],
+    });
+    expect(Object.isFrozen(test.controller.snapshot.speechMetrics)).toBe(true);
+    expect(
+      Object.isFrozen(test.controller.snapshot.speechMetrics?.metrics),
+    ).toBe(true);
   });
 
   it("commits a revised noncandidate final exactly once after the cached objection", async () => {

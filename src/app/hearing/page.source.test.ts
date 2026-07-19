@@ -192,6 +192,8 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain(".interruptForCourtroomAction()");
     expect(sources.page).toContain("Object: {readable(ground)}");
     expect(sources.page).toContain("Let the witness answer");
+    expect(sources.page).toContain("Objection telemetry");
+    expect(sources.page).toContain("Local audio telemetry");
     expect(sources.page).not.toContain("<textarea");
     expect(sources.page).not.toContain("sendPcmFrame");
     expect(sources.page).not.toContain("frame.pcm");
