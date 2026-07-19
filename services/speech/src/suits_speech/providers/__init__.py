@@ -8,6 +8,7 @@ from .base import (
     TranscriptHypothesis,
 )
 from .fake import FakeSttProvider, FakeTtsProvider
+from .unavailable import UnavailableSttProvider, UnavailableTtsProvider
 
 __all__ = [
     "AudioChunk",
@@ -17,4 +18,6 @@ __all__ = [
     "ProviderStatus",
     "SynthesizedPhrase",
     "TranscriptHypothesis",
+    "UnavailableSttProvider",
+    "UnavailableTtsProvider",
 ]
