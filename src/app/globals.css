@@ -1060,11 +1060,21 @@ footer {
   }
 
   .hearing-header {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
   }
 
   .hearing-header > :nth-child(2) {
     display: none;
+  }
+
+  .hearing-header-links {
+    min-width: 0;
+    max-width: min(60vw, 220px);
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    font-size: 0.76rem;
+    line-height: 1.2;
   }
 
   .briefing-panel {

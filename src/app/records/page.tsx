@@ -1,6 +1,23 @@
 import Link from "next/link";
 
-export default function RecordsPage() {
+import { CourtRecordsWorkspace } from "@/components/records/court-records-workspace";
+import { parseCourtRecordsInitialSelection } from "@/domain/court-records/navigation";
+
+export const metadata = {
+  title: "Court Records - SUITS",
+  description:
+    "Inspect the private, event-sourced record and transcript-grounded coaching for your fictional SUITS hearings.",
+};
+
+type RecordsPageProps = Readonly<{
+  searchParams: Promise<{ trial?: string | string[] }>;
+}>;
+
+export default async function RecordsPage({ searchParams }: RecordsPageProps) {
+  const initialSelection = parseCourtRecordsInitialSelection(
+    (await searchParams).trial,
+  );
+
   return (
     <main className="records-shell">
       <header className="hearing-header">
@@ -9,37 +26,15 @@ export default function RecordsPage() {
           <span>SUITS</span>
         </Link>
         <div>
-          <span className="eyebrow">Observability</span>
+          <span className="eyebrow">Owner-bound audit</span>
           <strong className="records-title">Court Records</strong>
         </div>
-        <Link className="primary-button" href="/cases/">
-          Choose a case
+        <Link className="text-link" href="/cases/">
+          Case library
         </Link>
       </header>
 
-      <section className="briefing-panel" aria-labelledby="records-migration-title">
-        <span className="eyebrow">Migration in progress</span>
-        <h1 id="records-migration-title">Owner-bound Court Records are coming next.</h1>
-        <p>
-          The legacy records viewer is unavailable while SUITS migrates to the
-          private, event-sourced hearing record. Historical Hermes trial data is
-          preserved, but this page no longer reads the unauthenticated legacy
-          trial tables.
-        </p>
-        <div className="evidence-strip" aria-label="Migration safeguards">
-          <span>Legacy data preserved</span>
-          <span>No unauthenticated trial reads</span>
-          <span>V3 records in progress</span>
-        </div>
-        <div className="hero-actions">
-          <Link className="primary-button" href="/cases/">
-            Choose a case
-          </Link>
-          <Link className="text-link" href="/">
-            Return home →
-          </Link>
-        </div>
-      </section>
+      <CourtRecordsWorkspace initialSelection={initialSelection} />
     </main>
   );
 }
