@@ -937,6 +937,13 @@ Update after each meaningful checkpoint using dated entries:
   - Verified: four focused debrief contract/generator/prompt files passed 43 tests; the final broader knowledge/jury/debrief slice passed five files and 51 tests; strict TypeScript, zero-warning scoped ESLint, and `git diff --check` passed. An independent review found and drove fixes for the transcript-plus-unrelated-proof bypass and early-settlement impossibility, then reported no remaining P0-P3 finding.
   - Remaining: this closes the first Milestone 8 correctness prerequisite, not a deliverable checkbox. Next build the privacy-safe Court Records DTO and owner-bound durable read, then audio telemetry, UI/downloads, and the ten-run multi-case gate.
 
+- 2026-07-20 06:07-06:23 IST - Milestone 8 records-integrity and repeated-eval checkpoint
+  - Changed: added a strict owner/trial model-call listing that reparses every terminal call and attempt sidecar before returning it; added an owner-bound canonical audit query that replays the complete V3 stream from event one, compares the result with the durable projection, and returns byte-stable state/event-stream SHA-256 digests for server-internal projection. Added a content-pinned pure V3 evaluation driver for all three seeded cases and an exact ten-run gate with a nine-pass threshold.
+  - Eval coverage: every run calls and examines every scenario witness, strikes one answer, admits one authenticated exhibit, excludes another, rests both sides, closes, instructs the jury, deliberates, renders a verdict, generates a debrief event, and completes. Six named invariants cover terminal state, exact double replay including a JSON round trip, jury exclusion, real debrief citation validation plus an excluded-evidence rejection, exact witness knowledge isolation, and event-envelope completeness. The result and gate schemas reject unknown fields, binding/seed drift, noncanonical invariant order, duplicate indexes, foreign executor results, and uncaught scenario failures.
+  - Verified: the model-call integration passed six tests; the canonical trial audit integration passed 22 tests; both TypeScript projects and zero-warning scoped lint passed. The focused repeated-eval file passed 11 tests and `npm run eval -- --reporter=dot` passed three files and 17 tests; the real round-robin result was 10/10, the synthetic 9/10 threshold passed, and 8/10 failed.
+  - Boundary: canonical state/events and exact generated artifacts remain server-internal inputs. Neither raw event payloads, private strategy, jury reasoning, prompts, nor hidden audit strata may reach a browser or download; the privacy-safe Court Records projector and owner-facing UI/download are still in progress. The repeated gate is deterministic mocked/replay evidence, not a live GPT-5.6 quality or GPU-speech claim.
+  - Commits: `37ca52f`, `cf3903b`, and `6ea2667`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1024,6 +1031,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Next.js normalizes `/hearing/` to `/hearing` on reload. Durable recovery assertions must bind trial identity and canonical head/view equality, not the cosmetic trailing-slash spelling.
 - A debrief transcript is a historical audit, not an admissibility shortcut. The generic transcript citation scope previously included stricken turns, and its semantic stratum treated every transcript ID as admitted; status-aware scope plus direct proof citations are both required to keep excluded testimony out of coaching conclusions and revised closings.
 - An unconditional non-empty improved closing is incompatible with a valid early settlement that has no admitted fact, evidence, or testimony. The output shape must allow zero segments while request-aware validation still requires a grounded revision whenever admitted proof exists.
+- A Court Records read cannot safely expose the canonical event JSON merely because ownership was checked: `UPDATE_OPPOSING_STRATEGY` carries private strategy and exact jury/debrief artifacts may contain private reasoning or hidden audit strata. Ownership/replay integrity and privacy projection are separate mandatory boundaries.
+- A repeated gate is meaningful only when its contract binds every distinct run index and deterministic seed, validates the requested scenario identity/content hash, catches execution failures without fabricating passed invariants, and tests the nine-of-ten threshold itself. Ten identical unchecked success objects are not gate evidence.
 
 ## 15. Decisions
 
@@ -1107,6 +1116,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Commit the deterministic 24-image Chromium/Windows PNG baseline so visual regression is reviewable in git. Keep Playwright WebM recordings ignored as local build evidence and publish their byte counts, durations, and SHA-256 hashes instead of silently committing generated video binaries.
 - Keep the complete-trial model fixture server-only and fail-closed to development/test, exact loopback hosts, and the named scenario. Reconstruct the trusted request from the server binding manifest plus the untrusted envelope and require an exact digest match before returning any scripted decision.
 - Treat active transcript citations as coaching context only. Stricken turns are excluded from the generic transcript scope, and improved-closing segments may cite only admitted facts, admitted evidence, and active testimony directly; transcript advocacy is never proof. Permit an empty improved closing only when the immutable request contains no admitted proof.
+- Build Court Records as two fail-closed stages: Convex first verifies owner scope, complete canonical replay/projection equality, generated-artifact bindings, and strict model-call sidecars; a pure domain projector then emits a payload-free allowlisted DTO. Downloads must serialize the same redacted DTO plus integrity digests, never the raw action/event stream.
+- Use an exact ten-run deterministic mocked/replay gate across all three content-pinned seeded cases, with at least nine fully invariant-valid runs required. Keep this distinct from later live-model quality evidence and target-hardware speech verification.
 
 ## 16. Verification Evidence
 
@@ -1381,6 +1392,14 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run typecheck`, scoped ESLint with `--max-warnings 0`, and `git diff --check` - exit 0.
   - Adversarial regressions prove a stricken transcript turn cannot support an admitted coaching point, a counsel turn alone cannot support a revised closing, adding an unrelated admitted exhibit does not bypass that rule, a proof-bearing record cannot omit its revised closing, and an early-settled record with no admitted proof may do so.
   - Independent final re-review reported no remaining P0-P3 finding.
+
+- 2026-07-20 06:07-06:23 IST - Milestone 8 records-integrity and repeated-eval verification
+  - `npm exec -- vitest run convex/courtroomModelCalls.integration.test.ts --reporter=dot` - exit 0; six strict owner/trial trace tests passed, including cross-owner rejection and one-millisecond attempt-sidecar tamper rejection.
+  - `npm exec -- vitest run convex/trialEvents.integration.test.ts --reporter=dot` - exit 0; one file and 22 tests passed, including byte-stable full replay hashes and cross-owner canonical-audit rejection.
+  - `npm exec -- tsc -p convex/tsconfig.json --noEmit --pretty false`, `npm run typecheck`, scoped ESLint with `--max-warnings 0`, and `git diff --check` - exit 0 for both records-integrity commits.
+  - `npm exec -- vitest run src/evals/v3-repeated-evals.test.ts --reporter=dot` - exit 0; one file and 11 tests passed. All three seeded scenarios individually completed with all six invariants, the real round-robin gate passed 10/10, the 9/10 threshold passed, the 8/10 threshold failed, and failure/foreign-binding/schema-tamper cases failed closed.
+  - `npm run eval -- --reporter=dot` - exit 0; three files and 17 tests passed. This is deterministic pure-engine/mock/replay evidence; no live GPT-5.6 call, microphone, physical audio output, or CUDA model was exercised by this command.
+  - `git push origin main` - exit 0 through `6ea2667`; all three checkpoint commits are on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
