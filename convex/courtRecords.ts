@@ -18,11 +18,16 @@ import {
   CourtRecordsIdentifierSchema,
   CourtRecordsViewSchema,
   projectCourtRecords,
+  projectCourtRecordsTrialSummaries,
   type CourtRecordsProjectorInput,
+  type CourtRecordsTrialSummary,
+  type CourtRecordsTrialSummaryRowInput,
   type CourtRecordsView,
 } from "../src/domain/court-records";
 import { buildKnowledgeView } from "../src/domain/knowledge";
 import {
+  TRIAL_EVENT_SCHEMA_VERSION_V3,
+  TRIAL_STATE_SCHEMA_VERSION_V3,
   TrialEventSchema,
   TrialStateV3Schema,
   type TrialEvent,
@@ -31,12 +36,19 @@ import {
 import type { HearingAudioAuditRecord } from "../src/lib/speech/hearing-audio-audit";
 import type { InternalCourtroomGeneratedArtifactList } from "./courtroomGeneratedArtifacts";
 import type { CanonicalTrialAudit } from "./trialEvents";
-import { internalAction } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import {
+  internalAction,
+  internalQuery,
+  type ActionCtx,
+} from "./_generated/server";
 import { CaseServiceOwnerIdSchema } from "./caseServiceBoundary";
 
 type ResolvedGraph = Readonly<{ graphId: string; graphJson: string }>;
 type CitationResource = CourtRecordsProjectorInput["citationResources"][number];
 type CitationKind = CitationResource["kind"];
+
+export const MAX_COURT_RECORD_TRIALS_PER_OWNER = 64;
 
 const readCanonicalAuditForOwnerReference = makeFunctionReference<
   "query",
@@ -67,6 +79,12 @@ const listAudioAuditsForOwnerTrialReference = makeFunctionReference<
   Readonly<{ ownerId: string; trialId: string }>,
   HearingAudioAuditRecord[]
 >("hearingAudioAudits:listForOwnerTrial");
+
+const listSummaryHeadsForOwnerReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string }>,
+  string[]
+>("courtRecords:listSummaryHeadsForOwner");
 
 function invalidRecords(): never {
   throw new Error("COURT_RECORDS_AUDIT_INVALID");
@@ -481,6 +499,160 @@ function finalDebriefArtifact(
   };
 }
 
+function listableTrialId(
+  projection: Doc<"trialProjections">,
+  ownerId: string,
+): string {
+  if (projection.ownerId !== ownerId) return invalidRecords();
+  if (
+    projection.graphId === undefined ||
+    projection.caseId === undefined ||
+    projection.caseVersion === undefined ||
+    projection.stateSchemaVersion !== TRIAL_STATE_SCHEMA_VERSION_V3 ||
+    projection.eventSchemaVersion !== TRIAL_EVENT_SCHEMA_VERSION_V3
+  ) {
+    throw new Error("TRIAL_MIGRATION_REQUIRED");
+  }
+  let stateInput: unknown;
+  try {
+    stateInput = JSON.parse(projection.stateJson) as unknown;
+  } catch {
+    throw new Error("TRIAL_PROJECTION_MISMATCH");
+  }
+  const state = TrialStateV3Schema.safeParse(stateInput);
+  const trialId = CourtRecordsIdentifierSchema.safeParse(projection.trialId);
+  const caseId = CourtRecordsIdentifierSchema.safeParse(projection.caseId);
+  if (
+    !state.success ||
+    !trialId.success ||
+    !caseId.success ||
+    state.data.trialId !== trialId.data ||
+    state.data.caseId !== caseId.data ||
+    state.data.caseVersion !== projection.caseVersion ||
+    state.data.version !== projection.stateVersion ||
+    state.data.lastSequence !== projection.lastSequence ||
+    state.data.version !== state.data.lastSequence ||
+    state.data.eventIds.length !== state.data.lastSequence ||
+    state.data.committedActionIds.length !== state.data.lastSequence ||
+    state.data.eventIds.at(-1) === undefined
+  ) {
+    throw new Error("TRIAL_PROJECTION_MISMATCH");
+  }
+  return trialId.data;
+}
+
+/**
+ * Return only a bounded set of validated owned trial identities. Summary
+ * content is deliberately assembled by the stable privacy projector below.
+ */
+export const listSummaryHeadsForOwner = internalQuery({
+  args: { ownerId: v.string() },
+  handler: async (ctx, args): Promise<string[]> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const projections = await ctx.db
+      .query("trialProjections")
+      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
+      .take(MAX_COURT_RECORD_TRIALS_PER_OWNER + 1);
+    if (projections.length > MAX_COURT_RECORD_TRIALS_PER_OWNER) {
+      throw new Error("COURT_RECORDS_TRIAL_LIMIT_EXCEEDED");
+    }
+    const trialIds = projections.map((projection) =>
+      listableTrialId(projection, ownerId),
+    );
+    if (new Set(trialIds).size !== trialIds.length) return invalidRecords();
+    return trialIds;
+  },
+});
+
+async function assembleCourtRecordsForOwner(
+  ctx: ActionCtx,
+  ownerIdInput: string,
+  trialIdInput: string,
+): Promise<CourtRecordsView> {
+  const ownerId = CaseServiceOwnerIdSchema.parse(ownerIdInput);
+  const trialId = CourtRecordsIdentifierSchema.parse(trialIdInput);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const audit = await ctx.runQuery(readCanonicalAuditForOwnerReference, {
+      ownerId,
+      trialId,
+    });
+    const { state, events } = parseAuditRows(audit);
+    const [graphRecord, traces, artifacts, audioAudits] = await Promise.all([
+      ctx.runQuery(loadGraphForOwnerReference, {
+        ownerId,
+        graphId: audit.graphId,
+      }),
+      ctx.runQuery(listModelCallsForOwnerTrialReference, {
+        ownerId,
+        trialId,
+      }),
+      ctx.runQuery(listGeneratedArtifactsForOwnerTrialReference, {
+        ownerId,
+        trialId,
+      }),
+      ctx.runQuery(listAudioAuditsForOwnerTrialReference, {
+        ownerId,
+        trialId,
+      }),
+    ]);
+    const closingAudit = await ctx.runQuery(readCanonicalAuditForOwnerReference, {
+      ownerId,
+      trialId,
+    });
+    parseAuditRows(closingAudit);
+    if (!sameCanonicalHead(audit, closingAudit)) continue;
+
+    let graphInput: unknown;
+    try {
+      graphInput = JSON.parse(graphRecord.graphJson) as unknown;
+    } catch {
+      return invalidRecords();
+    }
+    const graph = CaseGraphV1Schema.safeParse(graphInput);
+    if (
+      !graph.success ||
+      graphRecord.graphId !== audit.graphId ||
+      graph.data.caseId !== audit.caseId ||
+      graph.data.version !== audit.caseVersion ||
+      graph.data.compilerMetadata.sourceContentHash !== state.caseGraphHash ||
+      computeCaseGraphContentHash(graph.data) !== state.caseGraphContentHash ||
+      traces.some((trace) => trace.trialId !== trialId) ||
+      artifacts.some(
+        (artifact) =>
+          artifact.privacyProjectionRequired !== true ||
+          artifact.metadata.trialId !== trialId,
+      )
+    ) {
+      return invalidRecords();
+    }
+    const debrief = finalDebriefArtifact(ownerId, trialId, artifacts);
+    const view = projectCourtRecords({
+      schemaVersion: COURT_RECORDS_INPUT_SCHEMA_VERSION,
+      ownerId,
+      caseGraph: graph.data,
+      trialState: state,
+      events,
+      modelCalls: traces.map((trace) => ({ ownerId, trace })),
+      citationResources: deriveCourtRecordsCitationResources({
+        ownerId,
+        graph: graph.data,
+        state,
+        events,
+        traces,
+        finalDebrief: debrief.output,
+      }),
+      finalDebriefArtifact: debrief.input,
+      audioAudits: audioAudits.map((record) => ({
+        ownerId,
+        trialId,
+        record,
+      })),
+    });
+    return CourtRecordsViewSchema.parse(view);
+  }
+  throw new Error("COURT_RECORDS_HEAD_UNSTABLE");
+}
+
 /**
  * Assemble strict owner-scoped internal audits and return only the redacted
  * Court Records view. No canonical event JSON or raw generated artifact crosses
@@ -488,88 +660,38 @@ function finalDebriefArtifact(
  */
 export const readForOwner = internalAction({
   args: { ownerId: v.string(), trialId: v.string() },
-  handler: async (ctx, args): Promise<CourtRecordsView> => {
-    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
-    const trialId = CourtRecordsIdentifierSchema.parse(args.trialId);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const audit = await ctx.runQuery(readCanonicalAuditForOwnerReference, {
-        ownerId,
-        trialId,
-      });
-      const { state, events } = parseAuditRows(audit);
-      const [graphRecord, traces, artifacts, audioAudits] = await Promise.all([
-        ctx.runQuery(loadGraphForOwnerReference, {
-          ownerId,
-          graphId: audit.graphId,
-        }),
-        ctx.runQuery(listModelCallsForOwnerTrialReference, {
-          ownerId,
-          trialId,
-        }),
-        ctx.runQuery(listGeneratedArtifactsForOwnerTrialReference, {
-          ownerId,
-          trialId,
-        }),
-        ctx.runQuery(listAudioAuditsForOwnerTrialReference, {
-          ownerId,
-          trialId,
-        }),
-      ]);
-      const closingAudit = await ctx.runQuery(
-        readCanonicalAuditForOwnerReference,
-        { ownerId, trialId },
-      );
-      parseAuditRows(closingAudit);
-      if (!sameCanonicalHead(audit, closingAudit)) continue;
+  handler: async (ctx, args): Promise<CourtRecordsView> =>
+    await assembleCourtRecordsForOwner(ctx, args.ownerId, args.trialId),
+});
 
-      let graphInput: unknown;
-      try {
-        graphInput = JSON.parse(graphRecord.graphJson) as unknown;
-      } catch {
-        return invalidRecords();
-      }
-      const graph = CaseGraphV1Schema.safeParse(graphInput);
-      if (
-        !graph.success ||
-        graphRecord.graphId !== audit.graphId ||
-        graph.data.caseId !== audit.caseId ||
-        graph.data.version !== audit.caseVersion ||
-        graph.data.compilerMetadata.sourceContentHash !== state.caseGraphHash ||
-        computeCaseGraphContentHash(graph.data) !== state.caseGraphContentHash ||
-        traces.some((trace) => trace.trialId !== trialId) ||
-        artifacts.some(
-          (artifact) =>
-            artifact.privacyProjectionRequired !== true ||
-            artifact.metadata.trialId !== trialId,
-        )
-      ) {
-        return invalidRecords();
-      }
-      const debrief = finalDebriefArtifact(ownerId, trialId, artifacts);
-      const view = projectCourtRecords({
-        schemaVersion: COURT_RECORDS_INPUT_SCHEMA_VERSION,
+/** Project every bounded owned V3 trial through the same strict read path. */
+export const listForOwner = internalAction({
+  args: { ownerId: v.string() },
+  handler: async (ctx, args): Promise<readonly CourtRecordsTrialSummary[]> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    const trialIds = await ctx.runQuery(listSummaryHeadsForOwnerReference, {
+      ownerId,
+    });
+    const rows: CourtRecordsTrialSummaryRowInput[] = [];
+    for (const trialId of trialIds) {
+      const view = await assembleCourtRecordsForOwner(ctx, ownerId, trialId);
+      rows.push({
         ownerId,
-        caseGraph: graph.data,
-        trialState: state,
-        events,
-        modelCalls: traces.map((trace) => ({ ownerId, trace })),
-        citationResources: deriveCourtRecordsCitationResources({
-          ownerId,
-          graph: graph.data,
-          state,
-          events,
-          traces,
-          finalDebrief: debrief.output,
-        }),
-        finalDebriefArtifact: debrief.input,
-        audioAudits: audioAudits.map((record) => ({
-          ownerId,
-          trialId,
-          record,
-        })),
+        trialId: view.summary.trialId,
+        caseId: view.summary.caseId,
+        caseTitle: view.summary.caseTitle,
+        phase: view.summary.phase,
+        status: view.summary.status,
+        stateVersion: view.summary.stateVersion,
+        lastSequence: view.summary.lastSequence,
+        lastEventId: view.summary.lastEventId,
+        startedAt: view.summary.startedAt,
+        updatedAt: view.summary.updatedAt,
+        transcriptTurnCount: view.summary.transcriptTurnCount,
+        modelCallCount: view.summary.modelCallCount,
+        hasFinalDebrief: view.summary.hasFinalDebrief,
       });
-      return CourtRecordsViewSchema.parse(view);
     }
-    throw new Error("COURT_RECORDS_HEAD_UNSTABLE");
+    return projectCourtRecordsTrialSummaries(ownerId, rows);
   },
 });
