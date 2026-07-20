@@ -1,6 +1,6 @@
 # SUITS build-week verification
 
-This document records concrete verification evidence without treating deterministic browser fixtures as live-model, live-microphone, audible-speaker, or GPU proof. The current evidence closes Milestone 7 through implementation commit `1ccb2ff`; later milestones must extend this ledger rather than replace it.
+This document records concrete verification evidence without treating deterministic browser fixtures as live-model, live-microphone, audible-speaker, or GPU proof. It preserves the Milestone 7 history, records the completed Milestone 8 gate through `e5fc508`, and tracks Milestone 9 proof separately rather than replacing earlier results.
 
 ## Milestone 7 gate
 
@@ -62,12 +62,68 @@ The mid-sentence run also attaches objection, judge-gavel, and resumed-testimony
 
 ## Evidence boundary and open verification
 
-The browser gate uses Chromium fake media, the dedicated deterministic loopback fake speech companion, deterministic server-only scripted model decisions, and `--mute-audio`. It exercises the production page/controller/WebSocket/BFF/Convex/renderer path, but it does not verify:
+The browser gate uses Chromium fake media, the dedicated deterministic loopback fake speech companion, deterministic server-only scripted model decisions, and `--mute-audio`. It exercises the production page/controller/WebSocket/BFF/Convex/renderer path, but that browser run does not verify:
 
 - human microphone permission or STT accuracy;
 - physical speaker audibility;
 - CUDA provider readiness, latency, or quality;
-- a complete live GPT-5.6 trial; or
+- live GPT-5.6 behavior in the browser hearing; or
 - production deployment behavior.
 
-Those checks remain separate acceptance gates. `npm run verify` is also still a Milestone 9 deliverable; the commands above were executed individually and must later be orchestrated with explicit passed, skipped-live, skipped-GPU, and failed sections.
+Separate evidence already exists for a complete live GPT-5.6 protected trial and a real CUDA in-memory speech smoke; it is summarized below. Those checks do not prove an integrated live browser hearing. `npm run verify` is also still a Milestone 9 deliverable; the commands above were executed individually and must later be orchestrated with explicit passed, skipped-live, skipped-GPU, and failed sections.
+
+## Historical live-model and GPU evidence
+
+These checks were executed separately on 2026-07-19 and are not results of the deterministic Playwright or Milestone 8 gates:
+
+- With the opt-in flag and the already-configured Convex service secret loaded into one PowerShell process without printing or persisting it, `npm run test:live:courtroom-witness` passed a real protected GPT-5.6 trial in 228.802 seconds. Trial `trial_c2e0b65b75fa478ebe4cde79476f4a28` completed 30/30 accepted calls across two witnesses, opposing planning/dialogue, one objection ruling, one settlement evaluation, jury deliberation, and Terra debrief, followed by exact owner reload. This is live server-side model evidence, not a microphone/browser or production-deployment run.
+- `scripts/setup-local-speech.ps1 -Runtime local-cuda -DownloadModels` completed against an RTX 5070 and the pinned Nemotron/Kokoro snapshots. From `services/speech`, the opt-in CUDA `python -m suits_speech.smoke` then passed in 13.6 seconds: 109 ordered 20 ms frames, four partial revisions, first partial at 1,112 ms, finalization in 54 ms, and a fixed normalized transcript match in 12,001 ms total. The phrase and PCM were synthetic and in memory. This proves real local providers on that GPU, not human microphone input, physical speaker output, browser audio, or sustained performance.
+- A direct same-origin `/api/preflight` request returned ready in 5,161 ms with real Convex, Luna, and Terra probes. The browser preflight controls were not interactively exercised, and microphone/speaker permission was not granted by that check.
+
+The three live-only root tests are skipped unless explicitly opted in. A later deterministic gate that reports those skips does not invalidate the historical live runs, and it also does not count as a fresh live pass.
+
+## Milestone 8 gate
+
+Executed from the repository root in PowerShell on 2026-07-20 (IST):
+
+| Command | Result |
+| --- | --- |
+| `npm test -- --reporter=dot` | Passed in 17.99 s: 173 files and 1,557 tests passed; three intentional live-only files/tests skipped. Nine expected interruption diagnostics came only from named negative-path BFF tests. |
+| `npm run eval -- --reporter=dot` | Passed in 1.86 s: three files and 17 tests, including the deterministic 10/10 repeated gate and its 9/10-pass/8/10-fail threshold checks. |
+| `npm run lint` | Passed in 14.573 s with zero errors and four existing warnings in generated Convex files. |
+| `npm run typecheck -- --pretty false` | Passed in 2.480 s. |
+| `npx tsc --noEmit -p convex/tsconfig.json --pretty false` | Passed in 5.328 s. |
+| `npm run build` | Passed in 28.3 s; Next.js compiled/typechecked, generated 20/20 pages, and retained the owner-bound Records routes as dynamic server boundaries. |
+| `uv sync --extra dev` from `services/speech` | Passed after resolving 146 and checking 34 packages. |
+| `uv run pytest` from `services/speech` | Passed in 7.25 s: 182 tests, zero skipped, and one upstream Starlette deprecation warning. This was CPU/fake test evidence, not the historical CUDA smoke. |
+| `npm run test:e2e` | Passed in 147.1 s: all five Chromium scenarios using four workers. Individual timings were 1.0 s preflight, 5.0 s WebGL fallback, 20.5 s atlas, 29.2 s objection, and 1.6 minutes for the complete voice-to-Records trial. |
+
+The primary browser scenario started a fresh Redwood trial, called and released Rina and Theo exactly once, committed two spoken questions and a spoken closing, reached jury/debrief completion, reloaded the exact hearing, opened the exact owner-bound Records route, stabilized metadata-only audio, reloaded exact list/detail state, exercised all nine panels, downloaded byte-identical schema-valid exports twice, rejected private keys/canaries/owner ID, and retained empty browser/product-error ledgers. It also asserted that no production text composer was mounted.
+
+This completed Milestone 8 through documentation commit `e5fc508`. No live OpenAI call, real microphone/speaker, or GPU model was executed by this particular gate. Those are correctly separated from the historical live checks above.
+
+## Milestone 9 demo and recovery proof
+
+Current work adds a hard `180000` ms assertion around the primary staged path from initial hearing navigation through three consecutive stable Court Records projections. The longer nine-panel, export, privacy, and error-ledger checks remain intact outside that timed checkpoint. A final full-page Records screenshot, timing JSON, hearing screenshot, and success video are attached only on the successful path.
+
+Current local checks:
+
+| Command | Result |
+| --- | --- |
+| `npm exec -- eslint tests/e2e/hearing-objection.spec.ts --max-warnings 0` | Passed. |
+| `npm run typecheck -- --pretty false` | Passed. |
+| `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts -g "completes two witnesses by voice"` | Passed once on 2026-07-20 in 124.2 s wall time / 123.054 s Playwright report time. The test body was 99.686 s, and the new navigation-to-three-stable-Records measurement was **87,098 ms**, below the hard 180,000 ms limit. One Chromium worker ran; the linked Convex development functions became ready in 8.78 s. |
+
+The successful local report attached the following generated artifacts:
+
+| Attachment | Local report path | Bytes | Duration | SHA-256 |
+| --- | --- | ---: | ---: | --- |
+| Durable hearing screenshot | `playwright-report/data/ec5fa28f3168d28cab89be0d8b79a1266cc5e9a5.png` | 148,167 | n/a | `81219ddce0dbc9948e917546ec1367e529265917ca9024bef056947e6cea6b13` |
+| Final Records screenshot | `playwright-report/data/3005f6773634238d0e6a9bb385cecf92037c74d1.png` | 1,415,327 | n/a | `73451e5f9fd7b0f71d541166149c05b2eaebb4fd075d53d9b47b2b816492b3b6` |
+| Full selected-run video | `playwright-report/data/a8214d99c4656e6911cb0355eedcbb246f1805ec.webm` | 2,874,539 | 100.120 s | `a1c8bdb7bf12256f7953c27acda8d04208a0dc64042dc53743b5b93e569197e7` |
+
+The inline `primary-demo-timing` JSON attachment records limit `180000`, measured duration `87098`, the checkpoint `three consecutive stable Court Records projections`, and trial `trial_bf122135e775427d868af3d9572d01b5`. The same video is also present in the selected test's `test-results` directory. `playwright-report/`, `test-results/`, and WebM files are git-ignored/generated and may be replaced by the next run; these paths and hashes are local evidence, not a committed or externally retained artifact claim.
+
+The final Records PNG was visually inspected after the run. It shows the selected Rina Shah record, the educational disclaimer, stable summary counts, all nine section controls, and the bounded chronological event ledger without a visible error banner or text composer.
+
+Documentation now provides a staged sub-three-minute operator path, an honest fake-media/muted/scripted automation boundary, and recovery cards for microphone denial, speech disconnect, OpenAI timeout, malformed structured output, and refresh. Existing implementation/unit evidence supports each safe behavior; only completed-state hearing/Records refresh currently has mounted browser proof. Mounted failure-and-recovery recordings for the other paths, a pending-action refresh E2E, a three-repeat primary-demo reliability run, production deployment evidence, and an executed/documented `npm run verify` gate remain pending Milestone 9 work.

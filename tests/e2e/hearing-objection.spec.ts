@@ -90,6 +90,8 @@ const COURT_RECORDS_FORBIDDEN_KEYS = Object.freeze([
 const OWNER_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+const PRIMARY_DEMO_MAX_DURATION_MS = 180_000;
+
 const COURT_RECORDS_PRIVATE_CANARIES = Object.freeze([
   "Keep the deterministic browser flow concise and record-grounded.",
   "Complete the permitted examination step from the public record.",
@@ -1405,6 +1407,7 @@ test.describe("production-path partial objection", () => {
       }
     });
 
+    const primaryDemoStartedAtMs = Date.now();
     const navigation = await page.goto(
       "/hearing/?case=redwood-signal-retaliation",
     );
@@ -1606,6 +1609,29 @@ test.describe("production-path partial objection", () => {
       timeout: 60_000,
     });
     const stableRecord = await waitForStableCourtRecordWithAudio(page, trialId);
+    const primaryDemoCompletedAtMs = Date.now();
+    const primaryDemoDurationMs =
+      primaryDemoCompletedAtMs - primaryDemoStartedAtMs;
+    expect(
+      primaryDemoDurationMs,
+      "the staged voice-to-stable-Records demo must complete within three minutes",
+    ).toBeLessThanOrEqual(PRIMARY_DEMO_MAX_DURATION_MS);
+    await testInfo.attach("primary-demo-timing", {
+      body: Buffer.from(
+        `${JSON.stringify(
+          {
+            limitMs: PRIMARY_DEMO_MAX_DURATION_MS,
+            measuredDurationMs: primaryDemoDurationMs,
+            reached: "three consecutive stable Court Records projections",
+            trialId,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      ),
+      contentType: "application/json",
+    });
     expect(stableRecord.audio).toMatchObject({
       availability: "metadata_available",
       retentionPolicy: "metadata_only_raw_audio_not_stored",
@@ -1903,6 +1929,10 @@ test.describe("production-path partial objection", () => {
     await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
     expect(apiFailures).toEqual([]);
     expect(browserErrors).toEqual([]);
+    await testInfo.attach("complete-two-witness-records", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
     await saveSuccessVideo(page, testInfo, "complete-two-witness-trial");
   });
 });
