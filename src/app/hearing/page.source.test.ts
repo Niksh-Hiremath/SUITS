@@ -234,14 +234,95 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("Local audio telemetry");
     expect(sources.page).toContain("deriveCourtroomPresentation({");
     expect(sources.page).toContain("createCourtroomPresentationRuntime()");
-    expect(sources.page).toContain("controller.subscribePerformance((event)");
+    expect(sources.page).toContain(
+      "createHearingAudioAuditSink({ trialId: nextTrialId })",
+    );
+    expect(
+      sources.page.match(/controller\.subscribePerformance\(/gu),
+    ).toHaveLength(2);
     expect(sources.page).toContain(
       "reduceCourtroomPresentationRuntime(current, event, observedAtMs)",
     );
-    expect(sources.page).toContain("unsubscribePerformance();");
-    expect(sources.page.indexOf("unsubscribePerformance();")).toBeLessThan(
-      sources.page.indexOf("controller.close()"),
+    const controllerEffectStart = sources.page.indexOf(
+      "useEffect(() => {\n    let disposed = false;",
     );
+    const controllerEffectEnd = sources.page.indexOf(
+      "\n  }, [publishView]);",
+      controllerEffectStart,
+    );
+    expect(controllerEffectStart).toBeGreaterThan(-1);
+    expect(controllerEffectEnd).toBeGreaterThan(controllerEffectStart);
+    const controllerEffect = sources.page.slice(
+      controllerEffectStart,
+      controllerEffectEnd,
+    );
+    const auditSubscriptionStart = controllerEffect.indexOf(
+      "const unsubscribeAudioAuditPerformance",
+    );
+    const presentationSubscriptionStart = controllerEffect.indexOf(
+      "const unsubscribePresentationPerformance",
+    );
+    const lifecycleHandlersStart = controllerEffect.indexOf(
+      "const expediteAudioAudits",
+    );
+    expect(auditSubscriptionStart).toBeGreaterThan(-1);
+    expect(presentationSubscriptionStart).toBeGreaterThan(
+      auditSubscriptionStart,
+    );
+    expect(lifecycleHandlersStart).toBeGreaterThan(
+      presentationSubscriptionStart,
+    );
+    expect(
+      controllerEffect.slice(
+        auditSubscriptionStart,
+        presentationSubscriptionStart,
+      ),
+    ).toContain("audioAuditSink?.observe(event)");
+    expect(
+      controllerEffect.slice(
+        auditSubscriptionStart,
+        presentationSubscriptionStart,
+      ),
+    ).not.toContain("if (disposed) return");
+    expect(
+      controllerEffect.slice(
+        presentationSubscriptionStart,
+        lifecycleHandlersStart,
+      ),
+    ).toContain("if (disposed) return");
+    const presentationUnsubscribe = controllerEffect.indexOf(
+      "unsubscribePresentationPerformance();",
+    );
+    const controllerClose = controllerEffect.indexOf(
+      "await controller.close();",
+    );
+    const auditUnsubscribe = controllerEffect.indexOf(
+      "unsubscribeAudioAuditPerformance();",
+    );
+    const auditSinkClose = controllerEffect.indexOf(
+      "await audioAuditSink?.close();",
+    );
+    expect(presentationUnsubscribe).toBeLessThan(controllerClose);
+    expect(auditUnsubscribe).toBeGreaterThan(controllerClose);
+    expect(auditSinkClose).toBeGreaterThan(auditUnsubscribe);
+    expect(sources.page).toContain(
+      'window.addEventListener("pagehide", expediteAudioAudits)',
+    );
+    expect(sources.page).toContain(
+      'window.removeEventListener("pagehide", expediteAudioAudits)',
+    );
+    expect(sources.page).toContain(
+      'document.addEventListener("visibilitychange"',
+    );
+    expect(sources.page).toContain(
+      'document.removeEventListener(\n        "visibilitychange"',
+    );
+    expect(sources.page).toContain("audioAuditSink?.expedite()");
+    expect(sources.page).toContain("audioAuditTrialId !== nextTrialId");
+    expect(sources.page).toContain(
+      "bindAudioAuditTrialRef.current === bindAudioAuditTrial",
+    );
+    expect(sources.page).toContain("bindAudioAuditTrialRef.current = null");
     expect(sources.page).toContain("resetCourtroomPresentationRuntime({");
     expect(sources.page).toContain(
       "presentationTrialIdRef.current !== next.trial.trialId",
@@ -251,11 +332,18 @@ describe("V3 hearing page boundary", () => {
       "resetCourtroomPresentationRuntime({",
       publishViewStart,
     );
+    const bindTrialStart = sources.page.indexOf(
+      "bindAudioAuditTrialRef.current?.(next.trial.trialId)",
+      publishViewStart,
+    );
     const durableViewWrite = sources.page.indexOf(
       "viewRef.current = next",
       publishViewStart,
     );
     expect(publishViewStart).toBeGreaterThan(-1);
+    expect(bindTrialStart).toBeGreaterThan(publishViewStart);
+    expect(bindTrialStart).toBeLessThan(resetStart);
+    expect(bindTrialStart).toBeLessThan(durableViewWrite);
     expect(resetStart).toBeGreaterThan(publishViewStart);
     expect(resetStart).toBeLessThan(durableViewWrite);
     expect(sources.page).toContain(

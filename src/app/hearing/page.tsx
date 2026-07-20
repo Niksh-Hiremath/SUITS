@@ -45,6 +45,10 @@ import {
   type HearingControllerSnapshot,
   type HearingFinalSubmission,
 } from "@/lib/speech/hearing-controller";
+import {
+  createHearingAudioAuditSink,
+  type HearingAudioAuditSink,
+} from "@/lib/speech/hearing-audio-audit-sink";
 import { DeveloperTypedInput } from "./developer-typed-input";
 import {
   hearingLifecycleBlocksCourtroomControls,
@@ -261,6 +265,9 @@ function HearingPageContent() {
   );
   const pendingCommand = useRef<HearingPlayerCommand | undefined>(undefined);
   const speechControllerRef = useRef<HearingController | null>(null);
+  const bindAudioAuditTrialRef = useRef<
+    ((trialId: string) => void) | null
+  >(null);
   const speechQueueRef = useRef<PendingSpeechAdoption[]>([]);
   const speechDrainPromiseRef = useRef<Promise<void> | null>(null);
   const interruptionRecoveryPromiseRef = useRef<Promise<void> | null>(null);
@@ -298,6 +305,7 @@ function HearingPageContent() {
   const trialId = createdTrialId ?? initialTrialId;
 
   const publishView = useCallback((next: HearingRuntimeViewV1): void => {
+    bindAudioAuditTrialRef.current?.(next.trial.trialId);
     if (presentationTrialIdRef.current !== next.trial.trialId) {
       presentationTrialIdRef.current = next.trial.trialId;
       setPresentationRuntime(
@@ -325,6 +333,24 @@ function HearingPageContent() {
   useEffect(() => {
     let disposed = false;
     let controller: HearingController;
+    let audioAuditSink: HearingAudioAuditSink | null = null;
+    let audioAuditTrialId: string | null = null;
+    const bindAudioAuditTrial = (nextTrialId: string): void => {
+      if (audioAuditTrialId !== null && audioAuditTrialId !== nextTrialId) {
+        window.location.reload();
+        throw new Error(
+          "The durable hearing changed before audio auditing could continue.",
+        );
+      }
+      if (audioAuditSink !== null || audioAuditTrialId !== null) return;
+      audioAuditTrialId = nextTrialId;
+      try {
+        audioAuditSink = createHearingAudioAuditSink({ trialId: nextTrialId });
+      } catch {
+        // Metadata auditing is isolated from microphone and playback behavior.
+        audioAuditSink = null;
+      }
+    };
     try {
       controller = new HearingController({
         url: LOCAL_SPEECH_URL,
@@ -428,18 +454,33 @@ function HearingPageContent() {
       };
     }
 
+    bindAudioAuditTrialRef.current = bindAudioAuditTrial;
+    const currentTrialId = viewRef.current?.trial.trialId;
+    if (currentTrialId !== undefined) bindAudioAuditTrial(currentTrialId);
     speechControllerRef.current = controller;
     const unsubscribe = controller.subscribe((snapshot) => {
       setSpeechSnapshot(snapshot);
       if (snapshot.lifecycle === "ready") requestSpeechDrainRef.current();
     });
-    const unsubscribePerformance = controller.subscribePerformance((event) => {
-      if (disposed) return;
-      const observedAtMs = window.performance.now();
-      setPresentationRuntime((current) =>
-        reduceCourtroomPresentationRuntime(current, event, observedAtMs),
-      );
-    });
+    const unsubscribeAudioAuditPerformance = controller.subscribePerformance(
+      (event) => {
+        audioAuditSink?.observe(event);
+      },
+    );
+    const unsubscribePresentationPerformance =
+      controller.subscribePerformance((event) => {
+        if (disposed) return;
+        const observedAtMs = window.performance.now();
+        setPresentationRuntime((current) =>
+          reduceCourtroomPresentationRuntime(current, event, observedAtMs),
+        );
+      });
+    const expediteAudioAudits = (): void => audioAuditSink?.expedite();
+    const expediteHiddenAudioAudits = (): void => {
+      if (document.visibilityState === "hidden") expediteAudioAudits();
+    };
+    window.addEventListener("pagehide", expediteAudioAudits);
+    document.addEventListener("visibilitychange", expediteHiddenAudioAudits);
     queueMicrotask(() => {
       if (disposed) return;
       setSpeechController(controller);
@@ -448,14 +489,33 @@ function HearingPageContent() {
     return () => {
       disposed = true;
       interruptionRecoveryAbortRef.current?.abort();
-      unsubscribePerformance();
+      if (bindAudioAuditTrialRef.current === bindAudioAuditTrial) {
+        bindAudioAuditTrialRef.current = null;
+      }
+      window.removeEventListener("pagehide", expediteAudioAudits);
+      document.removeEventListener(
+        "visibilitychange",
+        expediteHiddenAudioAudits,
+      );
+      unsubscribePresentationPerformance();
       unsubscribe();
       if (speechControllerRef.current === controller) {
         speechControllerRef.current = null;
       }
-      void controller.close().catch(() => {
-        // close() has already fenced capture/playback and retained its safe status.
-      });
+      void (async () => {
+        try {
+          await controller.close();
+        } catch {
+          // close() has fenced capture/playback and retained its safe status.
+        } finally {
+          unsubscribeAudioAuditPerformance();
+          try {
+            await audioAuditSink?.close();
+          } catch {
+            // Audit delivery remains isolated from courtroom teardown.
+          }
+        }
+      })();
     };
   }, [publishView]);
 
