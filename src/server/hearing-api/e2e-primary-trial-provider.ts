@@ -660,7 +660,7 @@ function emptyDebriefCitations(
 function debriefOutput(providerRequest: CourtroomModelProviderRequest) {
   const request = debriefRequest(providerRequest);
   const admitted = request.knowledgeView.strata.admittedRecord.record;
-  const citations = emptyDebriefCitations({
+  const admittedProofCitations = emptyDebriefCitations({
     admittedFactIds: admitted.facts.slice(0, 1).map(({ factId }) => factId),
     admittedEvidenceIds: admitted.evidence
       .slice(0, 1)
@@ -668,6 +668,9 @@ function debriefOutput(providerRequest: CourtroomModelProviderRequest) {
     activeTestimonyIds: admitted.testimony
       .slice(0, 2)
       .map(({ testimonyId }) => testimonyId),
+  });
+  const citations = emptyDebriefCitations({
+    ...admittedProofCitations,
     transcriptTurnIds: request.transcript
       .filter(({ status }) => status === "active")
       .slice(0, 8)
@@ -700,12 +703,16 @@ function debriefOutput(providerRequest: CourtroomModelProviderRequest) {
     settlementChoices: [],
     juryMovement: [],
     improvedClosing: {
-      segments: [
-        {
-          text: "The admitted record supports the requested fictional result.",
-          citations,
-        },
-      ],
+      segments: Object.values(admittedProofCitations).some(
+        (identifiers) => identifiers.length > 0,
+      )
+        ? [
+            {
+              text: "The admitted record supports the requested fictional result.",
+              citations: admittedProofCitations,
+            },
+          ]
+        : [],
     },
     limitations: [
       "This fictional educational coaching is not legal advice or a real-case prediction.",
