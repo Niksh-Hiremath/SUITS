@@ -97,8 +97,8 @@ Codex may mark the Goal complete only when all applicable items below are proven
 - [x] Characters support idle, listening, thinking, speaking, objecting, standing, sitting, presenting, reacting, and ruling/gavel states.
 - [x] Active-speaker camera direction and smooth cuts are implemented.
 - [x] Speech drives lip/viseme movement and speaking-state timing.
-- [ ] Emotional/performance metadata influences bounded facial/body animation.
-- [ ] Evidence presentation and rulings have visible transitions.
+- [x] Emotional/performance metadata influences bounded facial/body animation.
+- [x] Evidence presentation and rulings have visible transitions.
 - [x] A reduced-quality mode preserves all interactions on weaker hardware.
 - [x] All external assets have recorded licenses/attribution.
 
@@ -566,12 +566,12 @@ Deliverables:
 - [x] evidence/ruling/settlement transitions;
 - [x] quality settings and responsive layout;
 - [x] accessibility and motion-reduction support;
-- [ ] visual regression evidence.
+- [x] visual regression evidence.
 
 Gate:
 
-- [ ] Playwright completes the primary trial flow with no console errors.
-- [ ] Screenshots/video show each required character state and a mid-sentence objection sequence.
+- [x] Playwright completes the primary trial flow with no console errors.
+- [x] Screenshots/video show each required character state and a mid-sentence objection sequence.
 - [x] Reduced-quality mode remains functional.
 
 ### Milestone 8 — Debrief, records, and evals
@@ -923,6 +923,14 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: Milestone 7 still requires the deterministic visual state atlas, success screenshots/video for every required character state and the mid-sentence objection sequence, plus a primary full-trial Playwright flow with no console errors. Fake-media/muted browser evidence still does not prove a human microphone, physical speaker audibility, or GPU speech quality.
   - Commits: `417a6d4`, `7626539`, `001cf52`, `3ec0e21`, `d56f2bc`, `7c5f92a`, `9ec01e7`, `d50bec1`, and `8859586`.
 
+- 2026-07-20 04:49-05:49 IST - Milestone 7 animated-courtroom gate complete
+  - Changed: added 24 strict public-contract visual fixtures covering all eleven character animations, the complete evidence/settlement transition lifecycle, ruling ready/gavel/holding, and reduced-motion inert model gestures; a development/test-only, exact-server-flag atlas route; and a fixed capture clock whose cache is fenced by runtime object identity, revision, and time. Added a fail-closed loopback full-trial provider that reconstructs each trusted request from the binding manifest, verifies its SHA-256 digest, and supports only the named two-witness development scenario.
+  - Browser proof: the production hearing now completes a fresh Redwood trial by voice with Rina and Theo, allows each leading partial to follow the real final-bound objection/ruling/resume path, records exactly one canonical answer per witness, releases both witnesses, delivers the player's spoken closing, completes opposing close/jury/debrief, and reloads to an exactly equal durable view without another command. The mid-sentence fixture retains objection, gavel, and resumed-testimony screenshots plus success video. The atlas commits 24 PNG baselines and retains a local success video.
+  - Verified: `npm ci`, lint, both TypeScript surfaces, 1,363 root tests with three explicit live-only skips, six evals, 182 speech tests, the six-function authenticated Convex surface, the 19-route production build, and all five Playwright fixtures passed. The browser gate took 2.0 minutes and reported no page or console errors. The screenshot corpus is 2,410,104 bytes with aggregate SHA-256 `ae3b5aee91c86f0be16f5f13f2529dbd7b23796ce2603053760185ca661b506e`; three ignored local WebM artifacts and their hashes are recorded in `docs/build-week/VERIFICATION.md`.
+  - Boundary: Chromium uses fake media, deterministic fake STT/TTS and model decisions, and muted output. This proves production-path orchestration and renderer behavior, not human microphone accuracy, physical speaker audibility, CUDA speech performance, or a live GPT-5.6 full trial. Those distinct gates remain open.
+  - Remaining: Milestone 7 is complete. Begin Milestone 8 debrief, records, and repeated-evaluation work while retaining the Milestone 5 target-hardware checks and the later live-model/live-GPU acceptance gates.
+  - Commits: `7643c77`, `8ddcc2f`, `546f46b`, `8f56ab4`, `c078190`, and `1ccb2ff`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1004,6 +1012,10 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Durable actor IDs and local speech actor IDs deliberately occupy different namespaces. A browser semantic join must bind through the canonical turn/ruling plus the local scene slot and purpose; comparing those actor strings, or comparing a durable Responses API ID with a local TTS response ID, incorrectly suppresses valid performance.
 - Schema-valid committed cues still require cross-field projection fences. Transcript cues must be active, same-trial, and no newer than the current view, while an unscoped current ruling cue must match the exact trial/version/last-event head before it can influence audible presentation.
 - `selectCourtroomPresentationRuntime` performs strict snapshot validation and can carry up to 2,048 mouth cues. Calling it independently from several R3F `useFrame` callbacks multiplies deep parsing/scanning cost; one cache keyed by immutable runtime revision plus the shared frame clock preserves exact time sampling with one selection per demand frame.
+- Fixed capture clocks can still collide across independent synthetic runtimes because each may begin at the same revision. A deterministic renderer cache must include runtime object identity as well as revision and time or the atlas can reuse another fixture's snapshot.
+- Fake STT partials may advance to the final revision before an explicit test stop reaches the service. A production-path full-flow test must let the final-bound interruption finish naturally and assert the canonical durable turn instead of attempting a second submission.
+- The no-action opposing-counsel path releases the active witness within the same `finish_witness` command in the current scenario; no redirect phase is created merely to satisfy a linear test script.
+- Next.js normalizes `/hearing/` to `/hearing` on reload. Durable recovery assertions must bind trial identity and canonical head/view equality, not the cosmetic trailing-slash spelling.
 
 ## 15. Decisions
 
@@ -1083,6 +1095,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Persist accepted GPT performance metadata in an append-only Convex sidecar bound to the exact call/action/event/turn/head/output hash, not by mutating material trial events. Project only public courtroom cues whose source and head still match canonical state; validate and lazily upgrade legacy v1 rows without inventing missing model output.
 - Join durable semantics to local presentation only at the last browser boundary and only after exact audible start. Pass the renderer a structurally reduced allowlist with no role `activity` or provenance; keep actor, lifecycle, posture, camera, mouth, display, and ruling/gavel ownership in the deterministic local runtime.
 - Sample the validated presentation runtime once per R3F demand frame and share that immutable snapshot across figures, display, gavel, and metadata. Use one prioritized atomic live region for transition or actor status so simultaneous visual changes do not create competing accessibility announcements.
+- Keep the visual atlas fail-closed behind the server-only `SUITS_ENABLE_VISUAL_ATLAS=1` flag in development/test. Construct every fixture through public reducer/schema boundaries, freeze it with a fixed page clock, and return `notFound()` in production or without the exact flag.
+- Commit the deterministic 24-image Chromium/Windows PNG baseline so visual regression is reviewable in git. Keep Playwright WebM recordings ignored as local build evidence and publish their byte counts, durations, and SHA-256 hashes instead of silently committing generated video binaries.
+- Keep the complete-trial model fixture server-only and fail-closed to development/test, exact loopback hosts, and the named scenario. Reconstruct the trusted request from the server binding manifest plus the untrusted envelope and require an exact digest match before returning any scripted decision.
 
 ## 16. Verification Evidence
 
@@ -1338,6 +1353,18 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run build` - exit 0 in 16.8 seconds; Next.js compiled/typechecked and generated all 19 routes/pages.
   - Two independent reviews found no blocking transition issues and no P0-P3 semantic-renderer issues after fixes for duplicate live regions, repeated deep selection, cross-trial/future/stricken cues, stale ruling heads, actor namespaces, and lifecycle leakage.
   - `git push origin main` - exit 0 through `417a6d4`, `7626539`, `001cf52`, `3ec0e21`, `d56f2bc`, `7c5f92a`, `9ec01e7`, `d50bec1`, and `8859586`.
+
+- 2026-07-20 04:49-05:49 IST - Milestone 7 visual and full-trial verification
+  - `npm ci` - exit 0 in 21.1 seconds; 457 packages installed. npm reported two moderate dependency advisories and three lifecycle scripts pending explicit approval; no breaking `npm audit fix --force` or implicit script approval was applied.
+  - `npm run lint` - exit 0 in 18.5 seconds with zero errors and the four existing unused-disable warnings in generated Convex files. `npm run typecheck` - exit 0. `npm exec -- tsc -p convex/tsconfig.json --noEmit --pretty false` - exit 0.
+  - `npm test -- --reporter=dot` - exit 0 in 14.29 seconds; 156 files passed, three live-only files skipped, 1,363 tests passed, and three skipped. `npm run eval` - exit 0; two files and six tests passed. `npm run verify:convex-surface` - exit 0; exactly six authenticated public functions.
+  - `uv sync --project services/speech --locked --extra dev` completed. The first immediate combined invocation exposed a transient pytest plugin-autoload failure (87 async collection/runtime failures) and is not counted as a pass; diagnostics then proved `pytest_asyncio` installed and registered. `uv run --project services/speech python -m pytest services/speech/tests -q` reran independently and exited 0 in 7.9 seconds with all 182 tests passing and one upstream Starlette/httpx deprecation warning.
+  - `npm run build` - exit 0 in 17.5 seconds; Next.js 16.2.10 compiled/typechecked, generated 19/19 pages, and retained the fail-closed dynamic atlas route.
+  - `npm run test:e2e` - exit 0 in 123.1 seconds; all five Chromium tests passed. The two production-path hearing bodies took 28.2 seconds and about 1.2 minutes; the 24-state atlas took 20.0 seconds; WebGL fallback and preflight smoke also passed. Assertions cover partial-before-final objection, cancellation, ruling, exact resumed testimony, two called/released witnesses, spoken closing, opposing close, jury/debrief completion, exact durable reload equality, no post-reload command, disabled production composer, and empty page/console error ledgers.
+  - The committed 24-PNG baseline under `tests/e2e/courtroom-visual-atlas.spec.ts-snapshots/` totals 2,410,104 bytes. Its sorted `filename sha256` corpus digest is `ae3b5aee91c86f0be16f5f13f2529dbd7b23796ce2603053760185ca661b506e`. The strict comparison permits at most 0.5% differing pixels at a 0.2 per-pixel threshold.
+  - Ignored local video evidence under `docs/build-week/artifacts/m7/`: `mid-sentence-objection.webm` is 1,481,208 bytes / 26.920 seconds / SHA-256 `f217cb1aa40647a4c3d5fe4730fd69e6fb948b7fcd647a3376b877099ff5b50e`; `complete-two-witness-trial.webm` is 2,004,921 bytes / 72.440 seconds / SHA-256 `448639d15ca559fb8efa2099a291033ef6ba50897addd8a35a279b1303961de8`; `courtroom-visual-atlas.webm` is 1,641,624 bytes / 21.600 seconds / SHA-256 `7433776a51f3718c143b7bfb5ca5fc0fe1c670982df38506c66c497db0d3d62c`.
+  - Automated Chromium used fake media, deterministic fake STT/TTS and server-only scripted model decisions, plus muted output. No human microphone, physical speaker audibility, CUDA speech performance, or live GPT-5.6 full-trial claim is made. `npm run verify` is a Milestone 9 deliverable and does not yet exist.
+  - `git push origin main` - exit 0 through `1ccb2ff`; all Milestone 7 implementation and test commits are on `origin/main`.
 
 ## 17. Blocked external prerequisites
 
