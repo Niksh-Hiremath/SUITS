@@ -82,6 +82,7 @@ function request(
     contentType?: string | null;
     contentLength?: string;
     ownerHeader?: string;
+    signal?: AbortSignal;
   }> = {},
 ): NextRequest {
   const headers = new Headers();
@@ -101,7 +102,7 @@ function request(
   }
   return new NextRequest(
     `${PUBLIC_ORIGIN}/api/hearings/${TRIAL_ID}/audio-audits?ownerId=owner:attacker`,
-    { method: "POST", headers, body: JSON.stringify(body) },
+    { method: "POST", headers, body: JSON.stringify(body), signal: options.signal },
   );
 }
 
@@ -141,7 +142,9 @@ describe("hearing audio audit BFF", () => {
       authorization: string | null;
       cache: RequestCache | undefined;
       hasSignal: boolean;
+      signalAborted: boolean;
     }> = [];
+    let disconnectedBrowser: AbortController | null = null;
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input, init) => {
@@ -152,12 +155,17 @@ describe("hearing audio audit BFF", () => {
               ? input.href
               : input.url;
         const headers = new Headers(init?.headers);
+        if (forwarded.length === 0) {
+          disconnectedBrowser?.abort();
+          await Promise.resolve();
+        }
         forwarded.push({
           path: new URL(rawUrl).pathname,
           body: JSON.parse(String(init?.body)) as unknown,
           authorization: headers.get("authorization"),
           cache: init?.cache,
           hasSignal: init?.signal !== undefined,
+          signalAborted: init?.signal?.aborted ?? false,
         });
         return Response.json({
           recordId: record.recordId,
@@ -166,11 +174,13 @@ describe("hearing audio audit BFF", () => {
       }),
     );
 
+    disconnectedBrowser = new AbortController();
+    const firstRequest = request(
+      { record },
+      { ownerHeader: "owner:attacker", signal: disconnectedBrowser.signal },
+    );
     const first = await POST(
-      request(
-        { record },
-        { ownerHeader: "owner:attacker" },
-      ),
+      firstRequest,
       { params: Promise.resolve({ trialId: TRIAL_ID }) },
     );
     const replay = await POST(request({ record }), {
@@ -198,6 +208,7 @@ describe("hearing audio audit BFF", () => {
         authorization: `Bearer ${SERVICE_SECRET}`,
         cache: "no-store",
         hasSignal: true,
+        signalAborted: false,
       })),
     );
     expect(JSON.stringify(forwarded)).not.toContain("attacker");

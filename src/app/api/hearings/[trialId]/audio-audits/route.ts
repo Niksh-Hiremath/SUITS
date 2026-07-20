@@ -161,7 +161,6 @@ export async function POST(
         record: body.record,
       },
       responseSchema: HearingAudioAuditPersistResultSchema,
-      signal: request.signal,
     });
     if (result.recordId !== body.record.recordId) {
       throw new ConvexCaseServiceError("CASE_SERVICE_RESPONSE_INVALID", 502);
