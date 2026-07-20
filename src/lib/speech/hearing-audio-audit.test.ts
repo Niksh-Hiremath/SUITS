@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  HEARING_AUDIO_AUDIT_MAX_EPOCH_MS,
   HEARING_AUDIO_AUDIT_AUTHORITY,
   HEARING_AUDIO_AUDIT_SCHEMA_VERSION,
   HEARING_AUDIO_AUDIT_SOURCE,
@@ -502,5 +503,9 @@ describe("privacy-safe hearing audio audit preparation", () => {
       clock: { nowEpochMs: () => Number.NaN },
     });
     expect(() => invalid.consume(requested())).toThrow(/nonnegative epoch/u);
+    const outsideDateRange = createHearingAudioAuditPreparer({
+      clock: { nowEpochMs: () => HEARING_AUDIO_AUDIT_MAX_EPOCH_MS + 1 },
+    });
+    expect(() => outsideDateRange.consume(requested())).toThrow(/Date range/u);
   });
 });

@@ -53,6 +53,7 @@ import {
   HearingOpponentPlanPrecommitSchema,
   HearingWitnessGenerationPrecommitSchema,
   counselResponseOutputCitations,
+  debriefGeneratorCitedTranscriptTurnIds,
   debriefGeneratorOutputCitations,
   hashCounselResponseModelOutput,
   hashDebriefGeneratorModelOutput,
@@ -1959,6 +1960,9 @@ describe("hearing command model boundary", () => {
         envelope.output,
         envelope.transcriptEventBindings,
       ),
+    );
+    expect(debriefGeneratorCitedTranscriptTurnIds(envelope.output)).toEqual(
+      envelope.transcriptEventBindings.map(({ turnId }) => turnId),
     );
   });
 

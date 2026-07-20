@@ -16,9 +16,16 @@ export const HEARING_AUDIO_AUDIT_MAX_ACTIVE_ENTRIES = 32;
 export const HEARING_AUDIO_AUDIT_MAX_TIMING_EVENTS = 256;
 export const HEARING_AUDIO_AUDIT_MAX_TIMING_MARKS = 4_096;
 export const HEARING_AUDIO_AUDIT_MAX_PENDING_RECORDS = 256;
+export const HEARING_AUDIO_AUDIT_MAX_EPOCH_MS =
+  8_640_000_000_000_000 as const;
 const MAX_COMPLETED_IDENTITIES = 1_024;
 
 const SafeIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const EpochMillisecondsSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(HEARING_AUDIO_AUDIT_MAX_EPOCH_MS);
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const IdentifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u);
 const LocalInterruptIdentifierSchema = z
@@ -61,10 +68,10 @@ const commonRecordShape = {
   recordId: Sha256Schema,
   observationSource: z.literal(HEARING_AUDIO_AUDIT_SOURCE),
   authority: z.literal(HEARING_AUDIO_AUDIT_AUTHORITY),
-  observedAtEpochMs: SafeIntegerSchema,
-  requestedAtEpochMs: SafeIntegerSchema.nullable(),
-  startedAtEpochMs: SafeIntegerSchema.nullable(),
-  endedAtEpochMs: SafeIntegerSchema,
+  observedAtEpochMs: EpochMillisecondsSchema,
+  requestedAtEpochMs: EpochMillisecondsSchema.nullable(),
+  startedAtEpochMs: EpochMillisecondsSchema.nullable(),
+  endedAtEpochMs: EpochMillisecondsSchema,
   aggregateDurationMs: SafeIntegerSchema,
 } as const;
 
@@ -190,7 +197,14 @@ export const HearingAudioAuditRecordSchema = z
     if (record.recordId !== expectedId) {
       context.addIssue({ code: "custom", path: ["recordId"], message: "Record ID does not match identity" });
     }
-    const expectedHash = computeContentHash(record);
+    let expectedHash: string;
+    try {
+      expectedHash = computeContentHash(record);
+    } catch {
+      // Base-schema issues are already present. Do not let the integrity
+      // refinement turn a safeParse failure into a thrown Zod error.
+      return;
+    }
     if (record.contentHash !== expectedHash) {
       context.addIssue({ code: "custom", path: ["contentHash"], message: "Content hash does not match record" });
     }
@@ -492,8 +506,14 @@ export class HearingAudioAuditPreparer {
 
   #readClock(): number {
     const value = this.#clock.nowEpochMs();
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new RangeError("Audio audit clock must return a nonnegative epoch millisecond integer");
+    if (
+      !Number.isSafeInteger(value) ||
+      value < 0 ||
+      value > HEARING_AUDIO_AUDIT_MAX_EPOCH_MS
+    ) {
+      throw new RangeError(
+        "Audio audit clock must return a nonnegative epoch millisecond integer within the JavaScript Date range",
+      );
     }
     if (this.#lastClockEpochMs !== null && value < this.#lastClockEpochMs) {
       throw new RangeError("Audio audit clock must be monotonic");

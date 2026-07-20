@@ -657,6 +657,21 @@ export default defineSchema({
     schemaVersion: v.string(),
   }).index("by_call_attempt", ["callId", "attempt"]),
 
+  // Browser-observed audio lifecycle metadata only. The strict record JSON
+  // deliberately has no transcript, timing-mark value, PCM, encoded audio,
+  // provider error, or other raw-media field.
+  hearingAudioAudits: defineTable({
+    recordId: v.string(),
+    ownerId: v.string(),
+    trialId: v.string(),
+    recordJson: v.string(),
+    contentHash: v.string(),
+    schemaVersion: v.string(),
+    persistedAt: v.number(),
+  })
+    .index("by_owner_trial_record", ["ownerId", "trialId", "recordId"])
+    .index("by_owner_trial", ["ownerId", "trialId"]),
+
   // Presentation-only metadata is stored separately from material trial
   // events. Rows are append-only, owner-bound, and retain the exact canonical
   // projection head at which they were accepted; raw model output and

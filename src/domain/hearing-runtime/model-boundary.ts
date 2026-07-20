@@ -504,7 +504,7 @@ function boundedStableUnique(identifiers: readonly string[]): string[] {
   return stableUnique(identifiers).slice(0, GENERIC_TRACE_CITATION_LIMIT);
 }
 
-function debriefCitedTranscriptTurnIds(
+export function debriefGeneratorCitedTranscriptTurnIds(
   output: DebriefGeneratorModelOutput,
 ): string[] {
   return stableUnique(
@@ -528,7 +528,8 @@ export function debriefGeneratorOutputCitations(
     HearingDebriefTranscriptEventBindingsSchema.parse(
       transcriptEventBindingsInput,
     );
-  const citedTranscriptTurnIds = debriefCitedTranscriptTurnIds(output);
+  const citedTranscriptTurnIds =
+    debriefGeneratorCitedTranscriptTurnIds(output);
   const boundTranscriptTurnIds = transcriptEventBindings.map(
     ({ turnId }) => turnId,
   );
