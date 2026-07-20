@@ -12,6 +12,13 @@ import {
   type CourtroomModelCallTrace,
 } from "../src/domain/courtroom-ai";
 import {
+  CourtRecordsIdentifierSchema,
+  CourtRecordsTrialSummarySchema,
+  CourtRecordsViewSchema,
+  type CourtRecordsTrialSummary,
+  type CourtRecordsView,
+} from "../src/domain/court-records";
+import {
   HearingCounselResponsePrecommitSchema,
   HearingCommandPreparationSchema,
   HearingDebriefGeneratorPrecommitSchema,
@@ -328,6 +335,16 @@ const readHearingReference = makeFunctionReference<
   { ownerId: string; trialId: string },
   HearingRuntimeViewV1
 >("hearingRuntime:read");
+const listCourtRecordsForOwnerReference = makeFunctionReference<
+  "action",
+  { ownerId: string },
+  readonly CourtRecordsTrialSummary[]
+>("courtRecords:listForOwner");
+const readCourtRecordsForOwnerReference = makeFunctionReference<
+  "action",
+  { ownerId: string; trialId: string },
+  CourtRecordsView
+>("courtRecords:readForOwner");
 
 const HearingServiceStartRequestSchema = z
   .object({
@@ -582,6 +599,18 @@ const HearingServiceReadRequestSchema = z
     trialId: z.string().trim().min(1).max(256),
   })
   .strict();
+export const CourtRecordsServiceListRequestSchema = z
+  .object({ ownerId: CaseServiceOwnerIdSchema })
+  .strict();
+export const CourtRecordsServiceReadRequestSchema = z
+  .object({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: CourtRecordsIdentifierSchema,
+  })
+  .strict();
+const CourtRecordsServiceListResponseSchema = z
+  .array(CourtRecordsTrialSummarySchema)
+  .max(64);
 
 const acquireCaseCompileClaim = httpAction(async (ctx, request) => {
   try {
@@ -1140,6 +1169,43 @@ const readHearing = httpAction(async (ctx, request) => {
   }
 });
 
+const listCourtRecords = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      CourtRecordsServiceListRequestSchema,
+    );
+    const result = await ctx.runAction(
+      listCourtRecordsForOwnerReference,
+      body,
+    );
+    return caseServiceJson(CourtRecordsServiceListResponseSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
+const readCourtRecords = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      CourtRecordsServiceReadRequestSchema,
+    );
+    const result = await ctx.runAction(readCourtRecordsForOwnerReference, body);
+    return caseServiceJson(CourtRecordsViewSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const serviceHealth = httpAction(async (_ctx, request) => {
   try {
     await authorizeCaseServiceRequest(
@@ -1212,5 +1278,7 @@ http.route({ path: "/service/hearings/jury-response/commit", method: "POST", han
 http.route({ path: "/service/hearings/debrief/commit", method: "POST", handler: commitDebriefGeneration });
 http.route({ path: "/service/hearings/model-call/terminal", method: "POST", handler: recordTerminalModelCall });
 http.route({ path: "/service/hearings/read", method: "POST", handler: readHearing });
+http.route({ path: "/service/court-records/list", method: "POST", handler: listCourtRecords });
+http.route({ path: "/service/court-records/read", method: "POST", handler: readCourtRecords });
 
 export default http;
