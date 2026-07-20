@@ -2,6 +2,7 @@ import type {
   HearingPlayerIntent,
   HearingRuntimeViewV1,
 } from "../../domain/hearing-runtime";
+import { isHearingPerformanceSpeakableActor } from "./hearing-performance";
 
 export type HearingVoiceInputMode = "question" | "closing";
 
@@ -185,18 +186,9 @@ function isSpeakableTurn(
   if (turn.status !== "active" || turn.actor.actorId === next.player.actorId) {
     return false;
   }
-  if (
-    turn.actor.role === "judge" ||
-    turn.actor.role === "witness" ||
-    turn.actor.role === "jury"
-  ) {
-    return true;
-  }
-  return (
-    (turn.actor.role === "user_counsel" ||
-      turn.actor.role === "opposing_counsel") &&
-    turn.actor.side ===
-      (next.trial.userSide === "user" ? "opposing" : "user")
+  return isHearingPerformanceSpeakableActor(
+    turn.actor,
+    next.trial.userSide,
   );
 }
 

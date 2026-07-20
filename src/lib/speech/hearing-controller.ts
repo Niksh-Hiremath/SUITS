@@ -70,8 +70,12 @@ import {
   type SpeechCapabilitiesEvent,
 } from "./protocol";
 import {
+  HEARING_COURTROOM_DIRECTOR_ACTOR_ID,
+  HEARING_JUDGE_ACTOR_ID,
+  HEARING_OBJECTION_ACTOR_ID,
   HEARING_PERFORMANCE_EVENT_SCHEMA_VERSION,
   freezeHearingPerformanceEvent,
+  hearingPerformanceActorAlias,
   type HearingPerformanceEvent,
   type HearingPerformanceSceneActor,
   type HearingPlaybackPurpose,
@@ -85,9 +89,6 @@ const SPEAKER_TEST_CLIP_ID = "courtroom.sustained.v1";
 const SPEAKER_TEST_PHRASE = "Sustained. Local courtroom audio is ready.";
 const SUSTAINED_CLIP_ID = "courtroom.sustained.v1";
 const OVERRULED_CLIP_ID = "courtroom.overruled.v1";
-const OBJECTION_ACTOR_ID = "actor.opposing_counsel.objection";
-const JUDGE_ACTOR_ID = "actor.judge";
-const COURTROOM_DIRECTOR_ACTOR_ID = "actor.courtroom.director";
 const WITHDRAWAL_CORRECTION_PHRASE =
   "Correction. The objection is withdrawn.";
 const MAX_RECENT_SAME_LEG_QUESTIONS = 32;
@@ -461,15 +462,6 @@ function supportsRequiredSpeech(capabilities: SpeechCapabilitiesEvent): boolean 
   return streamingStt && readyTts;
 }
 
-function safeActorId(actor: HearingRuntimeViewV1["transcript"][number]["actor"]): string {
-  let hash = 2_166_136_261;
-  for (const character of actor.actorId) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return `actor.${actor.role}.${(hash >>> 0).toString(36)}`;
-}
-
 function sceneActorForTurn(
   actor: HearingRuntimeViewV1["transcript"][number]["actor"],
   userSide: HearingRuntimeViewV1["trial"]["userSide"],
@@ -819,7 +811,7 @@ export class HearingController {
       Object.freeze(
         clipAvailable
           ? {
-              actor: JUDGE_ACTOR_ID,
+              actor: HEARING_JUDGE_ACTOR_ID,
               sceneActor: "judge",
               purpose: "speaker_test",
               turnId: null,
@@ -827,7 +819,7 @@ export class HearingController {
               clipId: SPEAKER_TEST_CLIP_ID,
             }
           : {
-              actor: JUDGE_ACTOR_ID,
+              actor: HEARING_JUDGE_ACTOR_ID,
               sceneActor: "judge",
               purpose: "speaker_test",
               turnId: null,
@@ -900,7 +892,7 @@ export class HearingController {
     const units: SpeechUnit[] = [];
     try {
       for (const turn of selection.turns) {
-        const actor = safeActorId(turn.actor);
+        const actor = hearingPerformanceActorAlias(turn.actor);
         const sceneActor = sceneActorForTurn(turn.actor, next.trial.userSide);
         const purpose =
           turn.actor.role === "witness" ? "testimony" : "transcript";
@@ -976,7 +968,7 @@ export class HearingController {
         Object.freeze(
           clipAvailable
             ? {
-                actor: JUDGE_ACTOR_ID,
+                actor: HEARING_JUDGE_ACTOR_ID,
                 sceneActor: "judge",
                 purpose: "ruling",
                 turnId: null,
@@ -984,7 +976,7 @@ export class HearingController {
                 clipId,
               }
             : {
-                actor: JUDGE_ACTOR_ID,
+                actor: HEARING_JUDGE_ACTOR_ID,
                 sceneActor: "judge",
                 purpose: "ruling",
                 turnId: null,
@@ -1786,7 +1778,7 @@ export class HearingController {
     return this.dispatchInterruptionClip(
       recording,
       CACHED_OBJECTION_CLIP_ID,
-      OBJECTION_ACTOR_ID,
+      HEARING_OBJECTION_ACTOR_ID,
       "opposing_counsel",
       "objection",
       reaction.interruptId,
@@ -1974,7 +1966,7 @@ export class HearingController {
       response.ruling === "sustained"
         ? SUSTAINED_CLIP_ID
         : OVERRULED_CLIP_ID,
-      JUDGE_ACTOR_ID,
+      HEARING_JUDGE_ACTOR_ID,
       "judge",
       "ruling",
       response.interruptId,
@@ -2040,7 +2032,7 @@ export class HearingController {
         await this.dispatchInterruptionSpeechUnit(
           recording,
           Object.freeze({
-            actor: COURTROOM_DIRECTOR_ACTOR_ID,
+            actor: HEARING_COURTROOM_DIRECTOR_ACTOR_ID,
             sceneActor: "clerk",
             purpose: "correction",
             turnId: null,
@@ -2131,7 +2123,7 @@ export class HearingController {
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
     }
-    const actor = safeActorId(turn.actor);
+    const actor = hearingPerformanceActorAlias(turn.actor);
     return splitSpeechPhrases(turn.text).map((text) =>
       Object.freeze({
         actor,
@@ -2176,7 +2168,7 @@ export class HearingController {
         SAFE_MESSAGES.INTERRUPTION_STALE,
       );
     }
-    const actor = safeActorId(turn.actor);
+    const actor = hearingPerformanceActorAlias(turn.actor);
     return splitSpeechPhrases(turn.text).map((text) =>
       Object.freeze({
         actor,

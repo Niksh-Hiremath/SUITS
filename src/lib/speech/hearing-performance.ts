@@ -3,6 +3,12 @@ import { z } from "zod";
 export const HEARING_PERFORMANCE_EVENT_SCHEMA_VERSION =
   "hearing-performance-event.v1" as const;
 
+export const HEARING_OBJECTION_ACTOR_ID =
+  "actor.opposing_counsel.objection" as const;
+export const HEARING_JUDGE_ACTOR_ID = "actor.judge" as const;
+export const HEARING_COURTROOM_DIRECTOR_ACTOR_ID =
+  "actor.courtroom.director" as const;
+
 export const HearingPerformanceSceneActorSchema = z.enum([
   "judge",
   "user_counsel",
@@ -158,6 +164,44 @@ export type HearingPlaybackPurpose = z.infer<
 export type HearingPerformanceEvent = z.infer<
   typeof HearingPerformanceEventSchema
 >;
+
+/**
+ * Produce the privacy-safe actor alias carried by browser audio lifecycle
+ * observations. The durable actor ID is intentionally never written to those
+ * records, but the server can recompute this alias to verify a transcript-turn
+ * binding.
+ */
+export function hearingPerformanceActorAlias(
+  actor: Readonly<{ actorId: string; role: string }>,
+): string {
+  let hash = 2_166_136_261;
+  for (const character of actor.actorId) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `actor.${actor.role}.${(hash >>> 0).toString(36)}`;
+}
+
+/** Match the actor-side policy used by the production transcript TTS path. */
+export function isHearingPerformanceSpeakableActor(
+  actor: Readonly<{
+    role: string;
+    side: "user" | "opposing" | "neutral";
+  }>,
+  userSide: "user" | "opposing",
+): boolean {
+  if (
+    actor.role === "judge" ||
+    actor.role === "witness" ||
+    actor.role === "jury"
+  ) {
+    return true;
+  }
+  return (
+    (actor.role === "user_counsel" || actor.role === "opposing_counsel") &&
+    actor.side === (userSide === "user" ? "opposing" : "user")
+  );
+}
 
 export function freezeHearingPerformanceEvent(
   input: z.input<typeof HearingPerformanceEventSchema>,

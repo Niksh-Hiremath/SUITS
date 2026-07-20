@@ -4,6 +4,7 @@ import {
   HEARING_PERFORMANCE_EVENT_SCHEMA_VERSION,
   HearingPerformanceEventSchema,
   freezeHearingPerformanceEvent,
+  hearingPerformanceActorAlias,
 } from "./hearing-performance";
 
 const identity = {
@@ -21,6 +22,15 @@ const identity = {
 };
 
 describe("hearing performance event contract", () => {
+  it("derives a stable privacy-safe actor alias", () => {
+    expect(
+      hearingPerformanceActorAlias({
+        actorId: "actor:witness:rina",
+        role: "witness",
+      }),
+    ).toBe("actor.witness.va334j");
+  });
+
   it("accepts and freezes exact audio-clock timing", () => {
     const event = freezeHearingPerformanceEvent({
       type: "timing_scheduled",
