@@ -19,6 +19,7 @@ import type * as caseStorageReconciler from "../caseStorageReconciler.js";
 import type * as caseUploadCleanup from "../caseUploadCleanup.js";
 import type * as caseUploads from "../caseUploads.js";
 import type * as cases from "../cases.js";
+import type * as courtRecords from "../courtRecords.js";
 import type * as courtroomGeneratedArtifacts from "../courtroomGeneratedArtifacts.js";
 import type * as courtroomModelCalls from "../courtroomModelCalls.js";
 import type * as crons from "../crons.js";
@@ -55,6 +56,7 @@ declare const fullApi: ApiFromModules<{
   caseUploadCleanup: typeof caseUploadCleanup;
   caseUploads: typeof caseUploads;
   cases: typeof cases;
+  courtRecords: typeof courtRecords;
   courtroomGeneratedArtifacts: typeof courtroomGeneratedArtifacts;
   courtroomModelCalls: typeof courtroomModelCalls;
   crons: typeof crons;
