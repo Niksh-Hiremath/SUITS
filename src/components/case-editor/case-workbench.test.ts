@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { createThreeWitnessCaseGraphV1Fixture } from "../../domain/case-graph";
@@ -36,5 +38,12 @@ describe("publication lifecycle guard", () => {
     expect(publicationTargetIsCurrent({ ...target, uploadId: `upload:${"c".repeat(48)}` }, 4, current)).toBe(false);
     expect(publicationTargetIsCurrent({ ...target, caseId: `case:${"d".repeat(48)}` }, 4, current)).toBe(false);
     expect(publicationTargetIsCurrent(target, 4, null)).toBe(false);
+  });
+
+  it("keeps the educational and not-legal-advice disclaimer on the upload surface", () => {
+    const source = readFileSync(new URL("./case-workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("fictional educational simulation, not legal advice");
+    expect(source).toContain("does not predict real-case outcomes");
   });
 });

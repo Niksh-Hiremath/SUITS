@@ -264,6 +264,7 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
             <h2>Upload a case packet</h2>
             <p>
               SUITS extracts source segments, compiles a structured case, and pauses for your review before anything is published.
+              It is a fictional educational simulation, not legal advice, and does not predict real-case outcomes.
             </p>
           </div>
           <label className={styles.dropZone}>
