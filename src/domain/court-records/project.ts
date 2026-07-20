@@ -462,8 +462,16 @@ function filteredCitations(
   citations: CitationSet,
   resources: ResourceIndex,
 ): CitationSet {
-  const keep = (ids: readonly string[], kinds: ReadonlySet<ResourceKind>) =>
-    [...new Set(ids.filter((identifier) => permitted(resources, identifier, kinds, true)))];
+  const keep = (ids: readonly string[], kinds: ReadonlySet<ResourceKind>) => {
+    if (new Set(ids).size !== ids.length) {
+      fail("DUPLICATE_CITATION_IDENTIFIER");
+    }
+    return ids.filter((identifier) => {
+      const resource = matchingResource(resources, identifier, kinds);
+      if (resource === undefined) fail("CITATION_RESOURCE_MISSING");
+      return resource.scope === "owner_record";
+    });
+  };
   return {
     factIds: keep(citations.factIds, FACT_KINDS),
     evidenceIds: keep(citations.evidenceIds, EVIDENCE_KINDS),

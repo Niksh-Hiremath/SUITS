@@ -1228,6 +1228,13 @@ function completedDebriefInput(
             kind: "active_testimony",
             scope: "owner_record",
           },
+          {
+            ownerId: OWNER_ID,
+            trialId: harness.trialId,
+            resourceId: "fact_complaint_sent",
+            kind: "unadmitted_fact",
+            scope: "owner_record",
+          },
           ...["turn:z:debrief-question", "turn:a:debrief-answer"].map(
             (resourceId) => ({
               ownerId: OWNER_ID,
@@ -1570,6 +1577,16 @@ describe("Court Records privacy-safe projection", () => {
     const committed = commitAction(input.trialState, action);
     input.trialState = committed.state;
     input.events.push(committed.event);
+    expect(() => projectCourtRecords(input)).toThrow(
+      "COURT_RECORDS_CITATION_RESOURCE_MISSING",
+    );
+    input.citationResources.push({
+      ownerId: OWNER_ID,
+      trialId: input.trialState.trialId,
+      resourceId: factId,
+      kind: "unadmitted_fact",
+      scope: "debrief_only",
+    });
 
     const view = projectCourtRecords(input);
     expect(view.lifecycles.facts.map((fact) => fact.factId)).not.toContain(
@@ -1578,13 +1595,14 @@ describe("Court Records privacy-safe projection", () => {
     expect(JSON.stringify(view)).not.toContain(proposition);
 
     const laundering = structuredClone(input);
-    laundering.citationResources.push({
-      ownerId: OWNER_ID,
-      trialId: input.trialState.trialId,
-      resourceId: factId,
-      kind: "unadmitted_fact",
-      scope: "owner_record",
-    });
+    const restrictedResource = laundering.citationResources.find(
+      (resource) =>
+        resource.resourceId === factId && resource.kind === "unadmitted_fact",
+    );
+    if (restrictedResource === undefined) {
+      throw new Error("Missing restricted resource fixture");
+    }
+    restrictedResource.scope = "owner_record";
     expect(() => projectCourtRecords(laundering)).toThrow(
       "COURT_RECORDS_CITATION_RESOURCE_SCOPE_INVALID",
     );
