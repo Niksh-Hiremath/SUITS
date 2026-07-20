@@ -20,6 +20,12 @@ export type CourtRecordsInitialSelection = z.infer<
   typeof CourtRecordsInitialSelectionSchema
 >;
 
+/** Build an exact owner-bound Records URL from one validated V3 trial ID. */
+export function courtRecordsUrl(trialIdInput: string): string {
+  const trialId = HearingTrialIdSchema.parse(trialIdInput);
+  return `/records?trial=${encodeURIComponent(trialId)}`;
+}
+
 /**
  * Convert the untrusted records query into a small serializable page contract.
  * Duplicate or malformed trial parameters remain invalid without retaining the

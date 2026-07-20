@@ -30,6 +30,8 @@ export const COURT_RECORDS_VIEW_SCHEMA_VERSION =
   "court-records-view.v2" as const;
 export const COURT_RECORDS_SUMMARY_SCHEMA_VERSION =
   "court-records-summary.v1" as const;
+export const COURT_RECORDS_MAX_LIFECYCLE_TRANSITIONS = 20_000;
+export const COURT_RECORDS_MAX_MODEL_CALL_ATTEMPTS = 4;
 
 export const CourtRecordsIdentifierSchema = z.string().trim().min(1).max(256);
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -207,7 +209,9 @@ export const CourtRecordsFactLifecycleSchema = z
     title: z.string().trim().min(1).max(8_000),
     status: FactStatusSchema,
     visibility: z.enum(["public", "restricted"]),
-    transitions: z.array(LifecycleTransitionSchema),
+    transitions: z
+      .array(LifecycleTransitionSchema)
+      .max(COURT_RECORDS_MAX_LIFECYCLE_TRANSITIONS),
   })
   .strict();
 
@@ -216,7 +220,9 @@ export const CourtRecordsEvidenceLifecycleSchema = z
     evidenceId: CourtRecordsIdentifierSchema,
     title: z.string().trim().min(1).max(500),
     status: EvidenceStatusSchema,
-    transitions: z.array(LifecycleTransitionSchema),
+    transitions: z
+      .array(LifecycleTransitionSchema)
+      .max(COURT_RECORDS_MAX_LIFECYCLE_TRANSITIONS),
   })
   .strict();
 
@@ -436,7 +442,9 @@ export const CourtRecordsModelCallSchema = z
       priorStatementIds: z.array(CourtRecordsIdentifierSchema),
     }).strict(),
     safeFailureCode: CourtRecordsIdentifierSchema.nullable(),
-    attempts: z.array(ModelCallAttemptSchema),
+    attempts: z
+      .array(ModelCallAttemptSchema)
+      .max(COURT_RECORDS_MAX_MODEL_CALL_ATTEMPTS),
   })
   .strict()
   .superRefine((call, context) => {

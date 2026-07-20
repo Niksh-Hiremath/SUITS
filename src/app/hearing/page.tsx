@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { CourtroomStage } from "@/components/courtroom/courtroom-stage";
+import { courtRecordsUrl } from "@/domain/court-records/navigation";
 import {
   advanceCourtroomPresentationRuntime,
   createCourtroomPresentationRuntime,
@@ -1246,6 +1247,14 @@ function HearingPageContent() {
         </Link>
         <div className="phase-chip">{phaseLabel(view)}</div>
         <div className="hearing-header-links">
+          {view && (
+            <Link
+              className="text-link"
+              href={courtRecordsUrl(view.trial.trialId)}
+            >
+              Open Court Records
+            </Link>
+          )}
           <Link className="text-link" href="/preflight/">System preflight</Link>
           <Link className="text-link" href="/cases/">Case library</Link>
         </div>

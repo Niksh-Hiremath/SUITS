@@ -21,6 +21,9 @@ const SOURCE_PATHS = {
   courtroomPresentation: fileURLToPath(
     new URL("../../domain/courtroom-presentation/derive.ts", import.meta.url),
   ),
+  courtRecordsNavigation: fileURLToPath(
+    new URL("../../domain/court-records/navigation.ts", import.meta.url),
+  ),
   sessionPolicy: fileURLToPath(
     new URL("./session-policy.ts", import.meta.url),
   ),
@@ -84,7 +87,14 @@ describe("V3 hearing page boundary", () => {
 
     expect(sources.page).toContain('fetch("/api/hearings"');
     expect(sources.page).toContain("/commands");
-    expect(sources.page).not.toContain('href="/records/"');
+    expect(sources.page).toContain("Open Court Records");
+    expect(sources.page).toContain(
+      "href={courtRecordsUrl(view.trial.trialId)}",
+    );
+    expect(sources.page).not.toMatch(/href=["']\/records/u);
+    expect(sources.courtRecordsNavigation).toContain(
+      "HearingTrialIdSchema.parse(trialIdInput)",
+    );
     expect(sources.startRoute).toContain('path: "/service/hearings/start"');
     expect(sources.readRoute).toContain('path: "/service/hearings/read"');
     expect(sources.durableService).toContain(
