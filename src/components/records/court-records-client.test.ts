@@ -11,6 +11,7 @@ import {
 import {
   COURT_RECORDS_CLIENT_ERROR_DETAILS,
   CourtRecordsClientError,
+  downloadCourtRecord,
   isCourtRecordsRequestAbort,
   listCourtRecords,
   readCourtRecord,
@@ -177,6 +178,35 @@ describe("Court Records browser client", () => {
     ).toBe(false);
   });
 
+  it("validates and preserves the exact redacted download bytes", async () => {
+    const json = JSON.stringify(VIEW);
+    const controller = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(json, {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadCourtRecord(TRIAL_ID, { signal: controller.signal }),
+    ).resolves.toEqual({
+      fileName: `suits-court-record-${TRIAL_ID}.json`,
+      json,
+      view: VIEW,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/records/${TRIAL_ID}/download`,
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
+  });
+
   it("fails closed on malformed successful list and detail payloads", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -197,18 +227,26 @@ describe("Court Records browser client", () => {
   });
 
   it("rejects a response bound to a different trial", async () => {
+    const mismatched = {
+      ...VIEW,
+      summary: { ...SUMMARY, trialId: OTHER_TRIAL_ID },
+    };
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(
-        Response.json({
-          ...VIEW,
-          summary: { ...SUMMARY, trialId: OTHER_TRIAL_ID },
-        }),
-      ),
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(Response.json(mismatched))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(mismatched)),
+        ),
     );
 
     expectClientError(
       await captureRejection(readCourtRecord(TRIAL_ID)),
+      "COURT_RECORD_UNAVAILABLE",
+    );
+    expectClientError(
+      await captureRejection(downloadCourtRecord(TRIAL_ID)),
       "COURT_RECORD_UNAVAILABLE",
     );
   });
@@ -221,6 +259,10 @@ describe("Court Records browser client", () => {
       await captureRejection(
         readCourtRecord("../../service/court-records/read"),
       ),
+      "COURT_RECORD_UNAVAILABLE",
+    );
+    expectClientError(
+      await captureRejection(downloadCourtRecord("trial_legacy")),
       "COURT_RECORD_UNAVAILABLE",
     );
     expect(fetchMock).not.toHaveBeenCalled();
@@ -263,6 +305,12 @@ describe("Court Records browser client", () => {
       )
       .mockRejectedValueOnce(
         new Error("network detail with an upstream hostname and token"),
+      )
+      .mockResolvedValueOnce(
+        new Response("not-json and not safe for download", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -274,6 +322,12 @@ describe("Court Records browser client", () => {
     expectClientError(networkError, "COURT_RECORD_UNAVAILABLE");
     expect(String(networkError)).not.toContain("upstream hostname");
     expect(String(networkError)).not.toContain("token");
+
+    const invalidDownload = await captureRejection(
+      downloadCourtRecord(TRIAL_ID),
+    );
+    expectClientError(invalidDownload, "COURT_RECORD_UNAVAILABLE");
+    expect(String(invalidDownload)).not.toContain("not-json");
   });
 
   it("passes the caller signal and preserves abort identity", async () => {

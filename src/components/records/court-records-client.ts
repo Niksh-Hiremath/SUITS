@@ -45,6 +45,12 @@ export type CourtRecordsClientRequestOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
+export type CourtRecordDownload = Readonly<{
+  fileName: string;
+  json: string;
+  view: CourtRecordsView;
+}>;
+
 export function isCourtRecordsRequestAbort(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -67,10 +73,10 @@ function errorCodeForStatus(status: number): CourtRecordsClientErrorCode {
   }
 }
 
-async function requestJson(
+async function request(
   path: string,
   options: CourtRecordsClientRequestOptions,
-): Promise<unknown> {
+): Promise<Response> {
   const response = await globalThis.fetch(path, {
     method: "GET",
     headers: { Accept: "application/json" },
@@ -81,7 +87,30 @@ async function requestJson(
   if (!response.ok) {
     throw new CourtRecordsClientError(errorCodeForStatus(response.status));
   }
-  return response.json() as Promise<unknown>;
+  return response;
+}
+
+async function requestJson(
+  path: string,
+  options: CourtRecordsClientRequestOptions,
+): Promise<unknown> {
+  return (await request(path, options)).json() as Promise<unknown>;
+}
+
+function parseTrialId(trialId: string): string {
+  const parsed = HearingTrialIdSchema.safeParse(trialId);
+  if (!parsed.success) {
+    throw new CourtRecordsClientError("COURT_RECORD_UNAVAILABLE");
+  }
+  return parsed.data;
+}
+
+function parseBoundView(payload: unknown, trialId: string): CourtRecordsView {
+  const parsed = CourtRecordsViewSchema.safeParse(payload);
+  if (!parsed.success || parsed.data.summary.trialId !== trialId) {
+    throw new CourtRecordsClientError("COURT_RECORD_UNAVAILABLE");
+  }
+  return parsed.data;
 }
 
 function normalizeFailure(
@@ -113,22 +142,39 @@ export async function readCourtRecord(
   options: CourtRecordsClientRequestOptions = {},
 ): Promise<CourtRecordsView> {
   try {
-    const parsedTrialId = HearingTrialIdSchema.safeParse(trialId);
-    if (!parsedTrialId.success) {
-      throw new CourtRecordsClientError("COURT_RECORD_UNAVAILABLE");
-    }
+    const parsedTrialId = parseTrialId(trialId);
     const payload = await requestJson(
-      `/api/records/${encodeURIComponent(parsedTrialId.data)}`,
+      `/api/records/${encodeURIComponent(parsedTrialId)}`,
       options,
     );
-    const parsed = CourtRecordsViewSchema.safeParse(payload);
-    if (
-      !parsed.success ||
-      parsed.data.summary.trialId !== parsedTrialId.data
-    ) {
+    return parseBoundView(payload, parsedTrialId);
+  } catch (error) {
+    return normalizeFailure(error, options.signal);
+  }
+}
+
+export async function downloadCourtRecord(
+  trialId: string,
+  options: CourtRecordsClientRequestOptions = {},
+): Promise<CourtRecordDownload> {
+  try {
+    const parsedTrialId = parseTrialId(trialId);
+    const response = await request(
+      `/api/records/${encodeURIComponent(parsedTrialId)}/download`,
+      options,
+    );
+    const json = await response.text();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(json) as unknown;
+    } catch {
       throw new CourtRecordsClientError("COURT_RECORD_UNAVAILABLE");
     }
-    return parsed.data;
+    return Object.freeze({
+      fileName: `suits-court-record-${parsedTrialId}.json`,
+      json,
+      view: parseBoundView(payload, parsedTrialId),
+    });
   } catch (error) {
     return normalizeFailure(error, options.signal);
   }
