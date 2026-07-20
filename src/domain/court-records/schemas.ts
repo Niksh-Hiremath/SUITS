@@ -159,6 +159,10 @@ export const CourtRecordsTrialSummarySchema =
     .extend({ schemaVersion: z.literal(COURT_RECORDS_SUMMARY_SCHEMA_VERSION) })
     .strict();
 
+export const CourtRecordsListResponseSchema = z
+  .array(CourtRecordsTrialSummarySchema)
+  .max(64);
+
 export const CourtRecordsEventNodeSchema = z
   .object({
     eventId: CourtRecordsIdentifierSchema,
@@ -411,4 +415,7 @@ export type CourtRecordsView = DeepReadonly<
 >;
 export type CourtRecordsTrialSummary = DeepReadonly<
   z.infer<typeof CourtRecordsTrialSummarySchema>
+>;
+export type CourtRecordsListResponse = DeepReadonly<
+  z.infer<typeof CourtRecordsListResponseSchema>
 >;

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 
-import { CourtRecordsTrialSummarySchema } from "@/domain/court-records";
+import { CourtRecordsListResponseSchema } from "@/domain/court-records";
 import {
   callConvexCaseService,
   isTrustedRequestOrigin,
@@ -13,9 +13,6 @@ import {
 } from "@/server/court-records/http";
 
 export const runtime = "nodejs";
-
-const CourtRecordsListResponseSchema = CourtRecordsTrialSummarySchema.array()
-  .max(64);
 
 export async function GET(request: NextRequest) {
   if (!isTrustedRequestOrigin(request)) {
