@@ -1,6 +1,11 @@
 import Link from "next/link";
 
-const agents = ["Court Director", "Opposing Counsel", "Witness", "Jury"];
+const courtroomRoles = [
+  "Deterministic trial engine",
+  "Opposing counsel",
+  "Witness bench",
+  "Judge and jury",
+];
 
 export default function Home() {
   return (
@@ -23,9 +28,9 @@ export default function Home() {
           <span>Leave a stronger advocate.</span>
         </h1>
         <p className="hero-copy">
-          Argue a fictional case, cross-examine a grounded AI witness, and
-          receive a coaching debrief linked to every decisive moment in your
-          transcript.
+          Argue a fictional case, examine multiple knowledge-isolated witnesses,
+          handle objections and evidence, and receive coaching linked to the
+          admitted record.
         </p>
         <div className="hero-actions">
           <Link className="primary-button" href="/cases/">
@@ -42,35 +47,35 @@ export default function Home() {
 
       <section className="proof-grid" aria-label="Product capabilities">
         <article className="case-card">
-          <div className="card-kicker">Golden case</div>
-          <h2>Asha Mehta v. Vertex Logistics</h2>
+          <div className="card-kicker">Three seeded cases</div>
+          <h2>Rina Shah v. Redwood Signal Systems</h2>
           <p>
-            A focused retaliation hearing where a pre-complaint draft competes
-            with a revealing post-complaint revision.
+            Start with a multi-witness retaliation hearing, choose another
+            grounded fictional matter, or compile and review your own packet.
           </p>
           <dl>
             <div>
               <dt>Mode</dt>
-              <dd>Participatory</dd>
+              <dd>Voice-first</dd>
             </div>
             <div>
               <dt>Format</dt>
-              <dd>Cross + closing</dd>
+              <dd>Full hearing</dd>
             </div>
             <div>
               <dt>Output</dt>
-              <dd>Case Debrief</dd>
+              <dd>Records + debrief</dd>
             </div>
           </dl>
         </article>
 
         <article className="agent-card">
-          <div className="card-kicker">Managed agent team</div>
+          <div className="card-kicker">Validated courtroom roles</div>
           <ul>
-            {agents.map((agent, index) => (
-              <li key={agent}>
+            {courtroomRoles.map((role, index) => (
+              <li key={role}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
-                {agent}
+                {role}
                 <i aria-hidden="true">→</i>
               </li>
             ))}
