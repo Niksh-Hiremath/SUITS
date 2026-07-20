@@ -1,11 +1,21 @@
+import { readFile } from "node:fs/promises";
+
 import {
   expect,
   test,
+  type Download,
   type Locator,
   type Page,
   type Response,
   type TestInfo,
 } from "@playwright/test";
+
+import {
+  COURT_RECORDS_VIEW_SCHEMA_VERSION,
+  CourtRecordsListResponseSchema,
+  CourtRecordsViewSchema,
+  type CourtRecordsView,
+} from "../../src/domain/court-records";
 
 import {
   HearingPlayerCommandSchema,
@@ -14,11 +24,79 @@ import {
   type HearingRuntimeViewV1,
 } from "../../src/domain/hearing-runtime";
 import {
+  HearingAudioAuditIngestRequestSchema,
+  type HearingAudioAuditRecord,
+} from "../../src/lib/speech/hearing-audio-audit";
+import { CASE_OWNER_COOKIE_NAME } from "../../src/server/case-api/session";
+import {
   FinalBoundInterruptionRequestSchema,
   FinalBoundInterruptionResolutionSchema,
 } from "../../src/domain/objections/final-bound-contracts";
 
 type JsonControl = Readonly<Record<string, unknown>>;
+
+const COURT_RECORDS_FORBIDDEN_KEYS = Object.freeze([
+  "ownerId",
+  "payload",
+  "caseGraph",
+  "policySnapshot",
+  "modelMetadata",
+  "opposingStrategy",
+  "strategyId",
+  "objectives",
+  "witnessPriorityIds",
+  "evidencePriorityIds",
+  "settlementPosture",
+  "privateNotes",
+  "pendingDirectiveJson",
+  "proposedMoves",
+  "rationale",
+  "promptAudit",
+  "promptHash",
+  "knowledgeView",
+  "knowledgeViewHash",
+  "inputHash",
+  "outputHash",
+  "providerRequestId",
+  "providerResponseId",
+  "artifactJson",
+  "rawJuryArtifact",
+  "rawArtifact",
+  "rawEvent",
+  "stateJson",
+  "eventJsons",
+  "eventStreamHash",
+  "eventStreamSha256",
+  "replayedStateHash",
+  "stateSha256",
+  "requestJson",
+  "recordJson",
+  "rawAudio",
+  "audioBytes",
+  "audioChunk",
+  "pcm",
+  "samples",
+  "timingMarks",
+  "markValues",
+  "transcriptText",
+  "providerError",
+  "providerErrorMessage",
+  "errorMessage",
+  "stepId",
+  "userMessage",
+  "exportedAt",
+]);
+
+const OWNER_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+const COURT_RECORDS_PRIVATE_CANARIES = Object.freeze([
+  "Keep the deterministic browser flow concise and record-grounded.",
+  "Complete the permitted examination step from the public record.",
+  "No further examination is needed for this appearance.",
+  "A short record-grounded closing completes the opposing case.",
+  "The admitted record and every issued instruction support a fictional verdict.",
+]);
 
 type Observation =
   | Readonly<{
@@ -522,6 +600,139 @@ async function readDurableHearing(
   );
   expect(response.ok()).toBe(true);
   return HearingRuntimeViewV1Schema.parse(await response.json());
+}
+
+async function readCourtRecord(
+  page: Page,
+  trialId: string,
+): Promise<CourtRecordsView> {
+  const response = await page.request.get(
+    `/api/records/${encodeURIComponent(trialId)}`,
+  );
+  expect(response.ok()).toBe(true);
+  return CourtRecordsViewSchema.parse(await response.json());
+}
+
+async function waitForStableCourtRecordWithAudio(
+  page: Page,
+  trialId: string,
+): Promise<CourtRecordsView> {
+  let latest: CourtRecordsView | undefined;
+  let previous = "";
+  let consecutiveStableReads = 0;
+
+  await expect
+    .poll(
+      async () => {
+        const current = await readCourtRecord(page, trialId);
+        latest = current;
+        const recordIds = current.audio.entries.map(
+          ({ record }) => record.recordId,
+        );
+        const completedQuestions = current.audio.entries.filter(
+          ({ record }) =>
+            record.kind === "user_speech" &&
+            record.mode === "question" &&
+            record.terminalStatus === "completed",
+        );
+        const completedClosings = current.audio.entries.filter(
+          ({ record }) =>
+            record.kind === "user_speech" &&
+            record.mode === "closing" &&
+            record.terminalStatus === "completed",
+        );
+        const verifiedPlayback = current.audio.entries.filter(
+          ({ canonicalBinding, record }) =>
+            record.kind === "playback" &&
+            record.terminalStatus === "completed" &&
+            (canonicalBinding.status === "transcript_turn_verified" ||
+              canonicalBinding.status === "interruption_verified"),
+        );
+        const verifiedBindingsAreExact =
+          current.audio.entries.every(audioBindingIsExact);
+        const metadataBoundaryIsExact = current.audio.entries.every(
+          ({ rawAudioRetained, record }) =>
+            !rawAudioRetained &&
+            record.observationSource === "client_observed" &&
+            record.authority === "noncanonical",
+        );
+        const recordIdsAreUnique = new Set(recordIds).size === recordIds.length;
+        if (
+          completedQuestions.length < 2 ||
+          completedClosings.length < 1 ||
+          verifiedPlayback.length < 1 ||
+          !verifiedBindingsAreExact ||
+          !metadataBoundaryIsExact ||
+          !recordIdsAreUnique
+        ) {
+          previous = "";
+          consecutiveStableReads = 0;
+          return consecutiveStableReads;
+        }
+
+        const serialized = JSON.stringify({
+          privacySafeProjectionHash:
+            current.replayIntegrity.privacySafeProjectionHash,
+          recordIds: [...recordIds].sort(),
+        });
+        consecutiveStableReads =
+          serialized === previous ? consecutiveStableReads + 1 : 1;
+        previous = serialized;
+        return consecutiveStableReads;
+      },
+      {
+        intervals: [500, 750, 1_000],
+        timeout: 60_000,
+      },
+    )
+    .toBeGreaterThanOrEqual(3);
+
+  if (latest === undefined) {
+    throw new Error("Expected a stable owner-bound Court Records projection");
+  }
+  return latest;
+}
+
+async function readDownload(download: Download): Promise<Buffer> {
+  const path = await download.path();
+  if (path === null)
+    throw new Error("Downloaded Court Records export has no path");
+  return readFile(path);
+}
+
+function collectObjectKeys(value: unknown, keys: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectObjectKeys(item, keys);
+    return keys;
+  }
+  if (typeof value !== "object" || value === null) return keys;
+  for (const [key, nested] of Object.entries(value)) {
+    keys.push(key);
+    collectObjectKeys(nested, keys);
+  }
+  return keys;
+}
+
+function audioBindingIsExact(
+  entry: CourtRecordsView["audio"]["entries"][number],
+): boolean {
+  const { canonicalBinding, record } = entry;
+  if (canonicalBinding.status === "local_observation") {
+    return (
+      canonicalBinding.turnId === null && canonicalBinding.interruptId === null
+    );
+  }
+  if (canonicalBinding.status === "transcript_turn_verified") {
+    return (
+      canonicalBinding.turnId !== null && canonicalBinding.interruptId === null
+    );
+  }
+  if (canonicalBinding.interruptId === null || record.kind !== "playback") {
+    return false;
+  }
+  return record.purpose === "ruling"
+    ? canonicalBinding.turnId === null
+    : record.purpose === "testimony" && canonicalBinding.turnId !== null;
 }
 
 test.describe("production-path partial objection", () => {
@@ -1116,10 +1327,13 @@ test.describe("production-path partial objection", () => {
   test("completes two witnesses by voice and resumes the exact durable record", async ({
     page,
   }, testInfo) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     const browserErrors: string[] = [];
     const apiFailures: string[] = [];
     const commandIntents: string[] = [];
+    const acceptedAudioAudits: HearingAudioAuditRecord[] = [];
+    const recordsResponseValidationFailures: string[] = [];
+    const recordsResponseChecks: Promise<void>[] = [];
     let startRequestCount = 0;
     page.on("console", (message) => {
       if (message.type() === "error") browserErrors.push(message.text());
@@ -1147,7 +1361,46 @@ test.describe("production-path partial objection", () => {
     });
     page.on("response", (response) => {
       const pathname = new URL(response.url()).pathname;
-      if (pathname.startsWith("/api/hearings") && !response.ok()) {
+      if (
+        response.ok() &&
+        response.request().method() === "POST" &&
+        /\/api\/hearings\/[^/]+\/audio-audits$/u.test(pathname)
+      ) {
+        try {
+          acceptedAudioAudits.push(
+            HearingAudioAuditIngestRequestSchema.parse(
+              response.request().postDataJSON(),
+            ).record,
+          );
+        } catch {
+          recordsResponseValidationFailures.push(
+            `invalid audio audit request ${pathname}`,
+          );
+        }
+      }
+      if (pathname.startsWith("/api/records") && response.status() === 200) {
+        const check = (async (): Promise<void> => {
+          try {
+            const payload = (await response.json()) as unknown;
+            if (pathname === "/api/records") {
+              CourtRecordsListResponseSchema.parse(payload);
+            } else {
+              CourtRecordsViewSchema.parse(payload);
+            }
+          } catch {
+            recordsResponseValidationFailures.push(
+              `invalid success response ${pathname}`,
+            );
+          }
+        })();
+        recordsResponseChecks.push(check);
+      }
+      if (
+        (pathname.startsWith("/api/hearings") ||
+          pathname.startsWith("/api/records")) &&
+        !(pathname.startsWith("/api/records") && response.status() === 499) &&
+        !response.ok()
+      ) {
         apiFailures.push(`${response.status()} ${pathname}`);
       }
     });
@@ -1267,6 +1520,27 @@ test.describe("production-path partial objection", () => {
       contentType: "image/png",
     });
 
+    await expect
+      .poll(
+        () => {
+          const questions = acceptedAudioAudits.filter(
+            (record) =>
+              record.kind === "user_speech" &&
+              record.mode === "question" &&
+              record.terminalStatus === "completed",
+          ).length;
+          const closings = acceptedAudioAudits.filter(
+            (record) =>
+              record.kind === "user_speech" &&
+              record.mode === "closing" &&
+              record.terminalStatus === "completed",
+          ).length;
+          return { questions, closings };
+        },
+        { timeout: 15_000 },
+      )
+      .toMatchObject({ questions: 2, closings: 1 });
+
     const durableBeforeReload = await readDurableHearing(page, trialId);
     expect(durableBeforeReload).toEqual(finalView);
     const finalUrl = new URL(page.url());
@@ -1307,6 +1581,324 @@ test.describe("production-path partial objection", () => {
     expect(
       commandIntents.filter((intent) => intent === "finish_trial"),
     ).toHaveLength(1);
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
+
+    const recordsLink = page.getByRole("link", {
+      name: "Open Court Records",
+      exact: true,
+    });
+    const expectedRecordsPath = `/records?trial=${trialId}`;
+    await expect(recordsLink).toBeVisible();
+    await expect(recordsLink).toHaveAttribute("href", expectedRecordsPath);
+    await Promise.all([
+      page.waitForURL((url) => {
+        return (
+          url.pathname === "/records" &&
+          url.searchParams.toString() === `trial=${trialId}`
+        );
+      }),
+      recordsLink.click(),
+    ]);
+
+    const workspace = page.getByTestId("court-records-workspace");
+    await expect(workspace).toHaveAttribute("data-records-state", "ready", {
+      timeout: 60_000,
+    });
+    const stableRecord = await waitForStableCourtRecordWithAudio(page, trialId);
+    expect(stableRecord.audio).toMatchObject({
+      availability: "metadata_available",
+      retentionPolicy: "metadata_only_raw_audio_not_stored",
+    });
+    expect(stableRecord.audio.entries.length).toBeGreaterThan(0);
+    const stableRecordIds = stableRecord.audio.entries.map(
+      ({ record }) => record.recordId,
+    );
+    expect(new Set(stableRecordIds).size).toBe(stableRecordIds.length);
+    expect(
+      stableRecord.audio.entries.filter(
+        ({ record }) =>
+          record.kind === "user_speech" &&
+          record.mode === "question" &&
+          record.terminalStatus === "completed",
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      stableRecord.audio.entries.filter(
+        ({ record }) =>
+          record.kind === "user_speech" &&
+          record.mode === "closing" &&
+          record.terminalStatus === "completed",
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      stableRecord.audio.entries.some(
+        ({ canonicalBinding, record }) =>
+          record.kind === "playback" &&
+          record.terminalStatus === "completed" &&
+          (canonicalBinding.status === "transcript_turn_verified" ||
+            canonicalBinding.status === "interruption_verified"),
+      ),
+    ).toBe(true);
+    expect(stableRecord.audio.entries.every(audioBindingIsExact)).toBe(true);
+    expect(
+      stableRecord.audio.entries.every(
+        ({ rawAudioRetained, record }) =>
+          !rawAudioRetained &&
+          record.observationSource === "client_observed" &&
+          record.authority === "noncanonical",
+      ),
+    ).toBe(true);
+
+    const ownerListResponse = await page.request.get("/api/records");
+    expect(ownerListResponse.ok()).toBe(true);
+    const ownerList = CourtRecordsListResponseSchema.parse(
+      await ownerListResponse.json(),
+    );
+    const selectedSummaries = ownerList.filter(
+      ({ trialId: listedTrialId }) => listedTrialId === trialId,
+    );
+    expect(selectedSummaries).toEqual([stableRecord.summary]);
+
+    const recordsUrlBeforeReload = page.url();
+    const recordsCommandCountBeforeReload = commandIntents.length;
+    const mountedListResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === "/api/records",
+      { timeout: 60_000 },
+    );
+    const mountedDetailResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === `/api/records/${trialId}`,
+      { timeout: 60_000 },
+    );
+    const [recordsReload, mountedListResponse, mountedDetailResponse] =
+      await Promise.all([
+        page.reload(),
+        mountedListResponsePromise,
+        mountedDetailResponsePromise,
+      ]);
+    expect(recordsReload?.ok()).toBe(true);
+    expect(mountedListResponse.ok()).toBe(true);
+    expect(mountedDetailResponse.ok()).toBe(true);
+    const mountedList = CourtRecordsListResponseSchema.parse(
+      await mountedListResponse.json(),
+    );
+    expect(
+      mountedList.filter(
+        ({ trialId: mountedTrialId }) => mountedTrialId === trialId,
+      ),
+    ).toEqual([stableRecord.summary]);
+    const mountedDetailJson = await mountedDetailResponse.text();
+    expect(CourtRecordsViewSchema.parse(JSON.parse(mountedDetailJson))).toEqual(
+      stableRecord,
+    );
+    await expect(workspace).toHaveAttribute("data-records-state", "ready", {
+      timeout: 60_000,
+    });
+    expect(page.url()).toBe(recordsUrlBeforeReload);
+    expect(commandIntents).toHaveLength(recordsCommandCountBeforeReload);
+    const selectedRecordLink = page
+      .getByRole("complementary", { name: "Your Court Records", exact: true })
+      .locator('a[aria-current="page"]');
+    await expect(selectedRecordLink).toHaveCount(1);
+    await expect(selectedRecordLink).toHaveAttribute(
+      "href",
+      expectedRecordsPath,
+    );
+    await expect(selectedRecordLink).toContainText(
+      stableRecord.summary.caseTitle,
+    );
+    await expect(
+      page.getByRole("heading", {
+        name: stableRecord.summary.caseTitle,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(stableRecord.replayIntegrity.privacySafeProjectionHash, {
+        exact: true,
+      }),
+    ).toBeVisible();
+
+    const ownerBoundRecord = await readCourtRecord(page, trialId);
+    expect(ownerBoundRecord).toEqual(stableRecord);
+    const sectionNav = page.getByRole("navigation", {
+      name: "Record sections",
+      exact: true,
+    });
+    const sectionContracts = [
+      ["Overview", "overview", "Record overview"],
+      ["Transcript", "transcript", "Transcript"],
+      ["Procedure", "procedure", "Objections, rulings & recovery"],
+      ["Facts & evidence", "lifecycles", "Facts & evidence"],
+      ["Model calls", "modelCalls", "Model-call audit"],
+      ["Audio audit", "audio", "Local audio audit"],
+      ["Citations", "citations", "Citation resources"],
+      ["Debrief", "debrief", "Final debrief"],
+      ["Event ledger", "eventTree", "Chronological event ledger"],
+    ] as const;
+
+    for (const [buttonName, sectionName, headingName] of sectionContracts) {
+      const button = sectionNav.getByRole("button", {
+        name: buttonName,
+        exact: true,
+      });
+      await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "true");
+      const activePanel = page.locator(
+        `[data-records-section="${sectionName}"]`,
+      );
+      await expect(activePanel).toBeVisible();
+      await expect(activePanel).toHaveCount(1);
+      await expect(page.locator("[data-records-section]")).toHaveCount(1);
+      await expect(
+        activePanel.getByRole("heading", {
+          name: headingName,
+          exact: true,
+        }),
+      ).toBeVisible();
+
+      if (sectionName === "overview") {
+        await expect(activePanel).toContainText(
+          "Validated model or fail; no alternate-provider or deterministic fallback is available.",
+        );
+      }
+      if (sectionName === "transcript") {
+        await expect(
+          activePanel.getByText("I do not recall that.", { exact: true }),
+        ).toHaveCount(2);
+      }
+      if (sectionName === "procedure") {
+        await expect(activePanel).toContainText(
+          "Normalized rulings are authoritative.",
+        );
+        await expect(
+          activePanel.getByRole("heading", {
+            name: "Normalized rulings",
+            exact: true,
+          }),
+        ).toBeVisible();
+      }
+      if (sectionName === "modelCalls") {
+        await expect(activePanel).toContainText(
+          "Fallback: unavailable and unused. Repairs are not fallbacks.",
+        );
+      }
+      if (sectionName === "audio") {
+        await expect(activePanel).toContainText(
+          "Client-observed metadata only; raw audio and transcript fragments are not retained.",
+        );
+        await expect(activePanel).toContainText(
+          "it does not verify audio content.",
+        );
+        await expect(
+          activePanel.getByText("Raw audio retained", { exact: true }),
+        ).toHaveCount(Math.min(stableRecord.audio.entries.length, 20));
+        await expect(
+          activePanel.getByText("No", { exact: true }).first(),
+        ).toBeVisible();
+      }
+      if (sectionName === "debrief") {
+        await expect(activePanel).toContainText(
+          "The examination created a coherent admitted record for this fictional hearing.",
+        );
+      }
+      if (sectionName === "eventTree") {
+        const visibleEventRows = activePanel.locator("[data-record-event-row]");
+        const visibleEventCount = await visibleEventRows.count();
+        expect(visibleEventCount).toBeGreaterThan(0);
+        expect(visibleEventCount).toBeLessThanOrEqual(50);
+      }
+    }
+
+    await expect(workspace.getByRole("alert")).toHaveCount(0);
+    const downloadButton = page.getByRole("button", {
+      name: "Download JSON",
+      exact: true,
+    });
+    const firstDownloadPromise = page.waitForEvent("download");
+    await downloadButton.click();
+    const firstDownload = await firstDownloadPromise;
+    const firstBytes = await readDownload(firstDownload);
+    await expect(downloadButton).toBeEnabled();
+    const secondDownloadPromise = page.waitForEvent("download");
+    await downloadButton.click();
+    const secondDownload = await secondDownloadPromise;
+    const secondBytes = await readDownload(secondDownload);
+    expect(firstDownload.suggestedFilename()).toBe(
+      `suits-court-record-${trialId}.json`,
+    );
+    expect(secondDownload.suggestedFilename()).toBe(
+      firstDownload.suggestedFilename(),
+    );
+    expect(secondBytes.equals(firstBytes)).toBe(true);
+
+    const exportedRecord = CourtRecordsViewSchema.parse(
+      JSON.parse(firstBytes.toString("utf8")),
+    );
+    expect(exportedRecord.schemaVersion).toBe(
+      COURT_RECORDS_VIEW_SCHEMA_VERSION,
+    );
+    const ownerBoundRecordAfterDownloads = await readCourtRecord(page, trialId);
+    expect(ownerBoundRecordAfterDownloads).toEqual(ownerBoundRecord);
+    expect(exportedRecord).toEqual(ownerBoundRecordAfterDownloads);
+
+    const exportedKeys = collectObjectKeys(exportedRecord);
+    for (const forbiddenKey of COURT_RECORDS_FORBIDDEN_KEYS) {
+      expect(exportedKeys).not.toContain(forbiddenKey);
+    }
+
+    const forbiddenAudioKeys = new Set([
+      "text",
+      "transcript",
+      "pcm",
+      "bytes",
+      "samples",
+      "providererror",
+      "ownerid",
+    ]);
+    for (const entry of exportedRecord.audio.entries) {
+      expect(entry.rawAudioRetained).toBe(false);
+      const audioKeys = collectObjectKeys(entry).map((key) =>
+        key.toLowerCase(),
+      );
+      expect(audioKeys.some((key) => forbiddenAudioKeys.has(key))).toBe(false);
+    }
+
+    const exportedJson = firstBytes.toString("utf8");
+    const ownerCookie = (await page.context().cookies()).find(
+      ({ name }) => name === CASE_OWNER_COOKIE_NAME,
+    );
+    const ownerSessionId = ownerCookie?.value.split(".")[1];
+    expect(ownerSessionId).toMatch(OWNER_SESSION_ID_PATTERN);
+    if (ownerSessionId === undefined) {
+      throw new Error("Expected a signed owner session cookie");
+    }
+    expect(exportedJson).not.toContain(ownerSessionId);
+    expect(mountedDetailJson).not.toContain(ownerSessionId);
+    const mountedText = await workspace.innerText();
+    expect(mountedText).not.toContain(ownerSessionId);
+    for (const canary of COURT_RECORDS_PRIVATE_CANARIES) {
+      expect(exportedJson).not.toContain(canary);
+      expect(mountedDetailJson).not.toContain(canary);
+      expect(mountedText).not.toContain(canary);
+    }
+    for (const privateArtifact of [
+      "ownerId",
+      "privateNotes",
+      "artifactJson",
+      "promptHash",
+      "knowledgeViewHash",
+    ]) {
+      expect(mountedText).not.toContain(privateArtifact);
+    }
+
+    await Promise.all(recordsResponseChecks);
+    expect(recordsResponseValidationFailures).toEqual([]);
+    expect(commandIntents).toHaveLength(recordsCommandCountBeforeReload);
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
     expect(apiFailures).toEqual([]);
