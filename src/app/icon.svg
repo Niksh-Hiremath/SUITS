@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>SUITS courthouse mark</title>
+  <rect width="64" height="64" rx="12" fill="#6e1731"/>
+  <path d="M9 23 32 9l23 14H9Z" fill="#f8f3e9"/>
+  <path d="M13 25h38v5H13zm3 8h7v18h-7zm13 0h7v18h-7zm13 0h7v18h-7zM11 53h42v5H11Z" fill="#f8f3e9"/>
+  <circle cx="32" cy="20" r="3" fill="#6e1731"/>
+</svg>
