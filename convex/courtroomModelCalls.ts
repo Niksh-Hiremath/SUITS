@@ -15,9 +15,11 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { CaseServiceOwnerIdSchema } from "./caseServiceBoundary";
 
 const MAX_TRACE_JSON_CHARACTERS = 512_000;
+const MAX_MODEL_CALLS_PER_TRIAL = 1_024;
 
 type TerminalCourtroomModelCallTrace = CourtroomModelCallTrace & {
   trialId: string;
@@ -78,7 +80,7 @@ function timestamp(value: string): number {
 }
 
 async function requireOwnedV3Projection(
-  ctx: Pick<MutationCtx, "db">,
+  ctx: Pick<QueryCtx, "db">,
   ownerId: string,
   trialId: string,
 ): Promise<void> {
@@ -239,13 +241,45 @@ async function readOwnedTrace(
   if (!record || record.ownerId !== ownerId) return null;
 
   const trace = parseTraceJson(record.traceJson);
+  if (
+    trace.trialId !== record.trialId ||
+    trace.callId !== record.callId ||
+    trace.responseId !== record.responseId ||
+    trace.actorId !== record.actorId ||
+    trace.actorRole !== record.actorRole ||
+    trace.callClass !== record.callClass ||
+    trace.task !== record.task ||
+    trace.status !== record.status ||
+    trace.provider !== record.provider ||
+    trace.model !== record.model ||
+    trace.promptVersion !== record.promptVersion ||
+    trace.outputSchemaVersion !== record.outputSchemaVersion ||
+    timestamp(trace.startedAt) !== record.startedAt ||
+    timestamp(trace.completedAt) !== record.completedAt ||
+    trace.latencyMs !== record.latencyMs ||
+    trace.attempts.length !== record.attemptCount ||
+    trace.retryCount !== record.retryCount ||
+    trace.validationFailureCount !== record.validationFailureCount ||
+    trace.acceptedCitationCount !== record.acceptedCitationCount ||
+    trace.outputCharacterCount !== record.outputCharacterCount ||
+    trace.schemaVersion !== record.schemaVersion
+  ) {
+    throw new Error("COURTROOM_MODEL_CALL_AUDIT_INVALID");
+  }
   const attempts = await ctx.db
     .query("courtroomModelCallAttempts")
     .withIndex("by_call_attempt", (index) => index.eq("callId", callId))
     .collect();
   if (
     attempts.length !== trace.attempts.length ||
-    attempts.some((attempt, index) => attempt.attempt !== index + 1)
+    attempts.some((attempt, index) =>
+      !storedAttemptMatchesTrace(
+        attempt,
+        trace.attempts[index],
+        ownerId,
+        trace.trialId,
+      ),
+    )
   ) {
     throw new Error("COURTROOM_MODEL_CALL_AUDIT_INVALID");
   }
@@ -253,6 +287,41 @@ async function readOwnedTrace(
     trace,
     attempts: trace.attempts,
   };
+}
+
+function storedAttemptMatchesTrace(
+  row: Doc<"courtroomModelCallAttempts">,
+  attempt: CourtroomModelCallTrace["attempts"][number] | undefined,
+  ownerId: string,
+  trialId: string,
+): boolean {
+  if (!attempt) return false;
+  return (
+    row.ownerId === ownerId &&
+    row.trialId === trialId &&
+    row.attempt === attempt.attempt &&
+    row.mode === attempt.mode &&
+    row.status === attempt.status &&
+    row.providerRequestId === attempt.providerRequestId &&
+    row.providerResponseId === attempt.providerResponseId &&
+    row.startedAt === timestamp(attempt.startedAt) &&
+    row.completedAt === timestamp(attempt.completedAt) &&
+    row.latencyMs === attempt.latencyMs &&
+    row.firstStructuredDeltaMs === attempt.firstStructuredDeltaMs &&
+    row.streamEventCount === attempt.streamEventCount &&
+    row.structuredDeltaCount === attempt.structuredDeltaCount &&
+    row.streamedCharacterCount === attempt.streamedCharacterCount &&
+    row.outputHash === attempt.outputHash &&
+    row.proposedCitationCount === attempt.proposedCitationCount &&
+    row.inputTokens === (attempt.usage?.inputTokens ?? null) &&
+    row.outputTokens === (attempt.usage?.outputTokens ?? null) &&
+    row.totalTokens === (attempt.usage?.totalTokens ?? null) &&
+    row.cachedInputTokens === (attempt.usage?.cachedInputTokens ?? null) &&
+    row.cacheWriteTokens === (attempt.usage?.cacheWriteTokens ?? null) &&
+    row.reasoningTokens === (attempt.usage?.reasoningTokens ?? null) &&
+    row.safeErrorCode === attempt.safeErrorCode &&
+    row.schemaVersion === attempt.schemaVersion
+  );
 }
 
 /** Owner-scoped internal read for server-side Court Records and integration tests. */
@@ -263,4 +332,39 @@ export const readForOwner = internalQuery({
   },
   handler: async (ctx, args) =>
     await readOwnedTrace(ctx, args.ownerId, args.callId),
+});
+
+/** Strict owner/trial listing used only by the server-side Court Records read. */
+export const listForOwnerTrial = internalQuery({
+  args: {
+    ownerId: v.string(),
+    trialId: v.string(),
+  },
+  handler: async (ctx, args): Promise<CourtroomModelCallTrace[]> => {
+    const ownerId = CaseServiceOwnerIdSchema.parse(args.ownerId);
+    await requireOwnedV3Projection(ctx, ownerId, args.trialId);
+    const records = await ctx.db
+      .query("courtroomModelCalls")
+      .withIndex("by_owner_trial", (index) =>
+        index.eq("ownerId", ownerId).eq("trialId", args.trialId),
+      )
+      .take(MAX_MODEL_CALLS_PER_TRIAL + 1);
+    if (records.length > MAX_MODEL_CALLS_PER_TRIAL) {
+      throw new Error("COURTROOM_MODEL_CALL_AUDIT_LIMIT_EXCEEDED");
+    }
+    const traces = await Promise.all(
+      records.map(async (record) => {
+        const result = await readOwnedTrace(ctx, ownerId, record.callId);
+        if (!result || result.trace.trialId !== args.trialId) {
+          throw new Error("COURTROOM_MODEL_CALL_AUDIT_INVALID");
+        }
+        return result.trace;
+      }),
+    );
+    return traces.sort(
+      (left, right) =>
+        timestamp(left.startedAt) - timestamp(right.startedAt) ||
+        left.callId.localeCompare(right.callId),
+    );
+  },
 });

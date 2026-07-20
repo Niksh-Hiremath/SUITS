@@ -52,6 +52,11 @@ const readReference = makeFunctionReference<
   Readonly<{ ownerId: string; callId: string }>,
   ReadResult
 >("courtroomModelCalls:readForOwner");
+const listReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string; trialId: string }>,
+  CourtroomModelCallTrace[]
+>("courtroomModelCalls:listForOwnerTrial");
 
 async function startTrial(backend: TestBackend): Promise<HearingRuntimeViewV1> {
   return HearingRuntimeViewV1Schema.parse(
@@ -321,6 +326,44 @@ describe("courtroom model-call audit persistence", () => {
         callId: accepted.callId,
       }),
     ).toBeNull();
+    await expect(
+      backend.query(listReference, {
+        ownerId: OTHER_OWNER_ID,
+        trialId: trial.trial.trialId,
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+    await expect(
+      backend.query(listReference, {
+        ownerId: OWNER_ID,
+        trialId: trial.trial.trialId,
+      }),
+    ).resolves.toEqual([accepted, failed]);
+  });
+
+  it("rejects a model-attempt sidecar that no longer matches its trace", async () => {
+    const backend = convexTest({ schema, modules });
+    const trial = await startTrial(backend);
+    const trace = acceptedTrace(trial.trial.trialId);
+    await backend.mutation(recordReference, {
+      ownerId: OWNER_ID,
+      traceJson: JSON.stringify(trace),
+    });
+    await backend.run(async (ctx) => {
+      const attempt = await ctx.db
+        .query("courtroomModelCallAttempts")
+        .withIndex("by_call_attempt", (index) =>
+          index.eq("callId", trace.callId).eq("attempt", 1),
+        )
+        .unique();
+      if (!attempt) throw new Error("Expected stored attempt");
+      await ctx.db.patch(attempt._id, { latencyMs: attempt.latencyMs + 1 });
+    });
+    await expect(
+      backend.query(listReference, {
+        ownerId: OWNER_ID,
+        trialId: trial.trial.trialId,
+      }),
+    ).rejects.toThrow("COURTROOM_MODEL_CALL_AUDIT_INVALID");
   });
 
   it("replays an exact trace without writes and rejects a differing call replay", async () => {
