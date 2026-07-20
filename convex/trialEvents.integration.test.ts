@@ -29,6 +29,7 @@ import {
   type TrialActionV3,
 } from "../src/domain/trial-engine";
 import schema from "./schema";
+import type { CanonicalTrialAudit } from "./trialEvents";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
@@ -203,6 +204,11 @@ const reloadForOwnerReference = makeFunctionReference<
   }>,
   ReloadResult
 >("trialEvents:reloadForOwnerSession");
+const canonicalAuditForOwnerReference = makeFunctionReference<
+  "query",
+  Readonly<{ ownerId: string; trialId: string }>,
+  CanonicalTrialAudit
+>("trialEvents:readCanonicalAuditForOwner");
 
 async function insertGraph(
   backend: TestBackend,
@@ -778,6 +784,40 @@ async function appendJudgeResponse(
 }
 
 describe("owner-bound trial event persistence", () => {
+  it("returns only a complete owner-bound byte-stable canonical replay", async () => {
+    const { backend } = await setup();
+    const trialId = "trial:canonical-record-audit";
+    await backend.mutation(createForOwnerReference, {
+      ownerId: OWNER_ID,
+      ...createArgs(trialId),
+    });
+    const first = await backend.query(canonicalAuditForOwnerReference, {
+      ownerId: OWNER_ID,
+      trialId,
+    });
+    const second = await backend.query(canonicalAuditForOwnerReference, {
+      ownerId: OWNER_ID,
+      trialId,
+    });
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      trialId,
+      graphId: GRAPH_ID,
+      stateVersion: 1,
+      lastSequence: 1,
+      lastEventId: `event:action:${trialId}:start`,
+    });
+    expect(first.eventJsons).toHaveLength(1);
+    expect(first.stateSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first.eventStreamSha256).toMatch(/^[a-f0-9]{64}$/u);
+    await expect(
+      backend.query(canonicalAuditForOwnerReference, {
+        ownerId: OTHER_OWNER_ID,
+        trialId,
+      }),
+    ).rejects.toThrow("TRIAL_NOT_FOUND");
+  });
+
   it("creates, reloads, and appends only for the authenticated owner", async () => {
     const { backend, owner, otherOwner } = await setup();
     const trialId = "trial:owner-bound";

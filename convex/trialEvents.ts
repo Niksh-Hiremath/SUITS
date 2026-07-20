@@ -5304,3 +5304,79 @@ export const reloadForOwnerSession = internalQuery({
     return await reloadForOwner(ctx, reloadInput, ownerId);
   },
 });
+
+export type CanonicalTrialAudit = Readonly<{
+  trialId: string;
+  graphId: string;
+  caseId: string;
+  caseVersion: number;
+  stateVersion: number;
+  lastSequence: number;
+  lastEventId: string;
+  stateJson: string;
+  stateSha256: string;
+  eventJsons: string[];
+  eventStreamSha256: string;
+  createdAt: number;
+  updatedAt: number;
+}>;
+
+/**
+ * Replays the complete owned V3 stream from event one and returns only
+ * server-internal canonical JSON. Court Records must project these rows
+ * through its privacy boundary before anything reaches a browser or export.
+ */
+export const readCanonicalAuditForOwner = internalQuery({
+  args: { ownerId: v.string(), trialId: v.string() },
+  handler: async (ctx, args): Promise<CanonicalTrialAudit> => {
+    assertIdentifier(args.ownerId, "ownerId");
+    assertIdentifier(args.trialId, "trialId");
+    const projection = requireOwnedProjection(
+      await ctx.db
+        .query("trialProjections")
+        .withIndex("by_trial", (index) => index.eq("trialId", args.trialId))
+        .unique(),
+      args.ownerId,
+    );
+    requireActiveProjectionMetadata(projection);
+    const claimedState = await loadActiveHead(ctx, projection);
+    const rows = await ctx.db
+      .query("trialEvents")
+      .withIndex("by_trial_sequence", (index) =>
+        index.eq("trialId", args.trialId),
+      )
+      .order("asc")
+      .take(MAX_REPLAY_EVENTS + 1);
+    if (
+      rows.length === 0 ||
+      rows.length > MAX_REPLAY_EVENTS ||
+      rows.length !== projection.lastSequence
+    ) {
+      throw new Error("TRIAL_REPLAY_LIMIT_EXCEEDED");
+    }
+    const events = rows.map(storedEventToV3);
+    const replayed = TrialStateV3Schema.parse(reduceTrial(events));
+    if (!sameCanonicalJson(replayed, claimedState)) {
+      throw new Error("TRIAL_PROJECTION_MISMATCH");
+    }
+    const lastEventId = replayed.eventIds.at(-1);
+    if (!lastEventId) throw new Error("TRIAL_EVENT_HEAD_REQUIRED");
+    const stateJson = canonicalJson(replayed);
+    const eventJsons = events.map((event) => canonicalJson(event));
+    return {
+      trialId: projection.trialId,
+      graphId: projection.graphId,
+      caseId: projection.caseId,
+      caseVersion: projection.caseVersion,
+      stateVersion: projection.stateVersion,
+      lastSequence: projection.lastSequence,
+      lastEventId,
+      stateJson,
+      stateSha256: sha256Utf8(stateJson),
+      eventJsons,
+      eventStreamSha256: sha256Utf8(`[${eventJsons.join(",")}]`),
+      createdAt: projection.createdAt,
+      updatedAt: projection.updatedAt,
+    };
+  },
+});
