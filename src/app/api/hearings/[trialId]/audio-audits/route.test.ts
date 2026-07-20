@@ -276,6 +276,10 @@ describe("hearing audio audit BFF", () => {
         { error: "HEARING_AUDIO_AUDIT_CONFLICT" },
         { status: 409 },
       ),
+      Response.json(
+        { error: "HEARING_AUDIO_AUDIT_SEMANTICS_INVALID" },
+        { status: 422 },
+      ),
       Response.json({ recordId: "b".repeat(64), replayed: false }),
       Response.json({ unexpected: true }),
       new Error("network unavailable"),
@@ -291,7 +295,7 @@ describe("hearing audio audit BFF", () => {
     );
 
     const results = [];
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       results.push(
         await POST(request({ record }), {
           params: Promise.resolve({ trialId: TRIAL_ID }),
@@ -302,6 +306,7 @@ describe("hearing audio audit BFF", () => {
       [404, "HEARING_AUDIO_AUDIT_TRIAL_NOT_FOUND"],
       [409, "HEARING_AUDIO_AUDIT_MIGRATION_REQUIRED"],
       [409, "HEARING_AUDIO_AUDIT_REJECTED"],
+      [422, "HEARING_AUDIO_AUDIT_REJECTED"],
       [503, "HEARING_AUDIO_AUDIT_UNAVAILABLE"],
       [503, "HEARING_AUDIO_AUDIT_UNAVAILABLE"],
       [503, "HEARING_AUDIO_AUDIT_UNAVAILABLE"],

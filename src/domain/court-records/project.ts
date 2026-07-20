@@ -1920,7 +1920,13 @@ function sceneActorForTurn(
   }
 }
 
-function projectAudioAudits(input: CourtRecordsProjectorInput) {
+export function projectCourtRecordsAudioAudits(
+  input: Readonly<{
+    trialState: TrialStateV3;
+    events: readonly TrialEvent[];
+    records: readonly HearingAudioAuditRecord[];
+  }>,
+) {
   const eventById = new Map(input.events.map((event) => [event.eventId, event]));
   const interruptionHistory = interruptionProjection(input.events);
   const interruptionById = new Map(
@@ -1993,8 +1999,8 @@ function projectAudioAudits(input: CourtRecordsProjectorInput) {
     );
   };
 
-  return input.audioAudits
-    .map(({ record }) => {
+  return input.records
+    .map((record) => {
       let status:
         | "local_observation"
         | "transcript_turn_verified"
@@ -2228,7 +2234,11 @@ export function projectCourtRecords(
     )
     .map((resource) => projectResource(input, resource));
   const lastEvent = input.events.at(-1) ?? fail("TRIAL_HEAD_MISMATCH");
-  const audioEntries = projectAudioAudits(input);
+  const audioEntries = projectCourtRecordsAudioAudits({
+    trialState: input.trialState,
+    events: input.events,
+    records: input.audioAudits.map(({ record }) => record),
+  });
   const privacySafeProjection = {
     schemaVersion: COURT_RECORDS_VIEW_SCHEMA_VERSION,
     summary: {

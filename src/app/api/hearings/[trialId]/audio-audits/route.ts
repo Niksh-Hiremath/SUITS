@@ -80,6 +80,16 @@ function serviceError(error: unknown): NextResponse {
         "The audio timing record could not be appended.",
       );
     }
+    if (
+      error.code === "HEARING_AUDIO_AUDIT_RECORD_INVALID" ||
+      error.code === "HEARING_AUDIO_AUDIT_SEMANTICS_INVALID"
+    ) {
+      return jsonError(
+        422,
+        "HEARING_AUDIO_AUDIT_REJECTED",
+        "The audio timing record could not be validated.",
+      );
+    }
   }
   return jsonError(
     503,

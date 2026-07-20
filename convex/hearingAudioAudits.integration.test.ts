@@ -10,6 +10,7 @@ import {
 } from "../src/lib/speech/hearing-audio-audit";
 import { sha256Utf8 } from "../src/domain/case-graph/hash";
 import {
+  HEARING_JUDGE_ACTOR_ID,
   HEARING_PERFORMANCE_EVENT_SCHEMA_VERSION,
   freezeHearingPerformanceEvent,
   type HearingPerformanceEvent,
@@ -122,6 +123,7 @@ function playbackRecord(
   requestedAt: number,
   startedAt: number,
   endedAt: number,
+  binding: "speaker_test" | "forged_testimony" = "speaker_test",
 ): HearingAudioAuditRecord {
   let now = requestedAt;
   const preparer = createHearingAudioAuditPreparer({
@@ -133,11 +135,15 @@ function playbackRecord(
     playbackFence: generation,
     jobId: `job:${generation}`,
     responseId: `response:${generation}`,
-    actor: "actor.witness.rina",
+    actor:
+      binding === "speaker_test"
+        ? HEARING_JUDGE_ACTOR_ID
+        : "actor.witness.rina",
     sequence: generation,
-    sceneActor: "witness",
-    purpose: "testimony",
-    turnId: `turn:testimony:${generation}`,
+    sceneActor: binding === "speaker_test" ? "judge" : "witness",
+    purpose: binding === "speaker_test" ? "speaker_test" : "testimony",
+    turnId:
+      binding === "speaker_test" ? null : `turn:testimony:${generation}`,
     interruptId: null,
   } satisfies PlaybackCommon;
   preparer.consume(
@@ -326,6 +332,27 @@ describe("hearing audio-audit persistence", () => {
         trialId: trial.trial.trialId,
       }),
     ).rejects.toThrow("TRIAL_NOT_FOUND");
+    expect(await storedRows(backend)).toEqual([]);
+  });
+
+  it("rejects schema-valid playback metadata with forged canonical bindings", async () => {
+    const backend = convexTest({ schema, modules });
+    const trial = await startTrial(backend);
+    const record = playbackRecord(
+      9,
+      9_000,
+      9_020,
+      9_500,
+      "forged_testimony",
+    );
+
+    await expect(
+      backend.mutation(recordReference, {
+        ownerId: OWNER_ID,
+        trialId: trial.trial.trialId,
+        recordJson: JSON.stringify(record),
+      }),
+    ).rejects.toThrow("HEARING_AUDIO_AUDIT_SEMANTICS_INVALID");
     expect(await storedRows(backend)).toEqual([]);
   });
 

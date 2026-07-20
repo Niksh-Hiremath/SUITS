@@ -11,6 +11,7 @@ import {
   TRIAL_STATE_SCHEMA_VERSION_V3,
   TrialStateV3Schema,
 } from "../src/domain/trial-engine";
+import { projectCourtRecordsAudioAudits } from "../src/domain/court-records";
 import {
   internalMutation,
   internalQuery,
@@ -19,6 +20,7 @@ import {
 } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { CaseServiceOwnerIdSchema } from "./caseServiceBoundary";
+import { loadCanonicalTrialReplayForOwner } from "./trialEvents";
 
 const MAX_RECORD_JSON_CHARACTERS = 128_000;
 export const MAX_HEARING_AUDIO_AUDITS_PER_TRIAL = 4_096;
@@ -118,11 +120,20 @@ export async function persistHearingAudioAuditForOwner(
   }>,
 ): Promise<PersistHearingAudioAuditResult> {
   const { record, canonicalJson } = parseRecordJson(input.recordJson);
-  const ownerId = await requireOwnedV3Projection(
-    ctx,
-    input.ownerId,
-    input.trialId,
-  );
+  const ownerId = CaseServiceOwnerIdSchema.parse(input.ownerId);
+  const replay = await loadCanonicalTrialReplayForOwner(ctx, {
+    ownerId,
+    trialId: input.trialId,
+  });
+  try {
+    projectCourtRecordsAudioAudits({
+      trialState: replay.state,
+      events: replay.events,
+      records: [record],
+    });
+  } catch {
+    throw new Error("HEARING_AUDIO_AUDIT_SEMANTICS_INVALID");
+  }
   const existing = await ctx.db
     .query("hearingAudioAudits")
     .withIndex("by_owner_trial_record", (index) =>
