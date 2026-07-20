@@ -17,7 +17,8 @@
     "test:live:courtroom-witness": "node --env-file-if-exists=.env.local --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/server/courtroom-ai/witness-runtime.live.test.ts --reporter=verbose",
     "eval": "vitest run src/evals",
     "eval:gate3": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-legacy-gate3.ps1",
-    "verify:convex-surface": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-convex-public-surface.ps1"
+    "verify:convex-surface": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-convex-public-surface.ps1",
+    "verify": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1"
   },
   "dependencies": {
     "@react-three/fiber": "9.6.1",
