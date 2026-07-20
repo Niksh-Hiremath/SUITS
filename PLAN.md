@@ -44,50 +44,50 @@ Codex may mark the Goal complete only when all applicable items below are proven
 
 ### A. User case ingestion
 
-- [ ] A user can create a case by uploading at least text, Markdown, and text-based PDF files; image/scanned-page support is implemented when the selected GPT-5.6 input path supports it.
-- [ ] Files are privately stored, indexed, and represented with source/page/segment provenance.
-- [ ] GPT-5.6 compiles the packet into a strict, versioned `CaseGraph`.
-- [ ] Uploaded text is treated as untrusted data and cannot override system instructions.
-- [ ] A review screen lets the user inspect and correct parties, issues, timeline, facts, evidence, witnesses, knowledge boundaries, and simulation settings before publication.
-- [ ] The repository contains at least two seeded fictional cases in addition to user upload support.
+- [x] A user can create a case by uploading at least text, Markdown, and text-based PDF files; the selected ingestion/compiler path is text-only, so image-only/scanned PDF OCR is explicitly unsupported rather than misrepresented.
+- [x] Files are privately stored, indexed, and represented with source/page/segment provenance.
+- [x] GPT-5.6 compiles the packet into a strict, versioned `CaseGraph`.
+- [x] Uploaded text is treated as untrusted data and cannot override system instructions.
+- [x] A review screen lets the user inspect and correct parties, issues, timeline, facts, evidence, witnesses, knowledge boundaries, and simulation settings before publication.
+- [x] The repository contains at least two seeded fictional cases in addition to user upload support.
 
 ### B. Dynamic courtroom
 
-- [ ] A case supports at least three distinct witnesses with separate knowledge views and prior-statement memory.
-- [ ] The user and opposing AI can call, examine, cross-examine, recall, and release witnesses when permitted.
-- [ ] The opposing AI chooses strategy based on the current record rather than a fixed script.
-- [ ] The judge can rule, instruct, maintain order, handle recess, and enforce phase/action constraints.
-- [ ] Facts and evidence have explicit lifecycles; proposed assertions never become admitted truth automatically.
-- [ ] Parties can offer evidence, object, withdraw it, move to strike, and obtain a ruling.
-- [ ] Stricken testimony remains in the audit transcript but cannot influence jury reasoning.
-- [ ] Hidden authored facts may be revealed through valid testimony or evidence events.
-- [ ] Truly new assertions are tracked as proposed/disputed until verified or excluded.
-- [ ] Both sides can propose, counter, accept, reject, expire, or withdraw settlement offers using private negotiation state.
-- [ ] A complete trial can be paused, resumed after reload, and deterministically replayed from events.
+- [x] A case supports at least three distinct witnesses with separate knowledge views and prior-statement memory.
+- [x] The user and opposing AI can call, examine, cross-examine, recall, and release witnesses when permitted.
+- [x] The opposing AI chooses strategy based on the current record rather than a fixed script.
+- [x] The judge can rule, instruct, maintain order, handle recess, and enforce phase/action constraints.
+- [x] Facts and evidence have explicit lifecycles; proposed assertions never become admitted truth automatically.
+- [x] Parties can offer evidence, object, withdraw it, move to strike, and obtain a ruling.
+- [x] Stricken testimony remains in the audit transcript but cannot influence jury reasoning.
+- [x] Hidden authored facts may be revealed through valid testimony or evidence events.
+- [x] Truly new assertions are tracked as proposed/disputed until verified or excluded.
+- [x] Both sides can propose, counter, accept, reject, expire, or withdraw settlement offers using private negotiation state.
+- [x] A complete trial can be paused, resumed after reload, and deterministically replayed from events.
 
 ### C. Voice and interruption
 
-- [ ] The canonical courtroom UI is microphone/voice controlled with no visible typed composer.
-- [ ] A developer-only typed control exists only behind an explicit non-production flag.
-- [ ] A local Python speech companion performs streaming STT and TTS without sending raw audio to OpenAI or Convex.
-- [ ] The default STT adapter supports NVIDIA GPU streaming and emits revisioned partial/final transcripts.
-- [ ] The default TTS adapter is local, supports multiple character voices, phrase streaming, cancellation, and timing metadata.
-- [ ] User barge-in cancels queued/current speech safely.
-- [ ] A high-confidence partial transcript can trigger an immediate cached “Objection!” clip and animation before the utterance ends.
-- [ ] GPT-5.6 receives the objection candidate and record context, and the deterministic engine commits the resulting objection/ruling only after schema and rule validation.
-- [ ] False/overruled objections, sustained objections, rephrasing, motion to strike, and resume/cancel behavior are handled coherently.
-- [ ] The system exposes speech-service readiness, GPU/provider status, warmup, and actionable errors.
+- [x] The canonical courtroom UI is microphone/voice controlled with no visible typed composer.
+- [x] A developer-only typed control exists only behind an explicit non-production flag.
+- [x] A local Python speech companion performs streaming STT and TTS without sending raw audio to OpenAI or Convex.
+- [x] The default STT adapter supports NVIDIA GPU streaming and emits revisioned partial/final transcripts.
+- [x] The default TTS adapter is local, supports multiple character voices, phrase streaming, cancellation, and timing metadata.
+- [x] User barge-in cancels queued/current speech safely.
+- [x] A high-confidence partial transcript can trigger an immediate cached “Objection!” clip and animation before the utterance ends.
+- [x] GPT-5.6 receives the objection candidate and record context, and the deterministic engine commits the resulting objection/ruling only after schema and rule validation.
+- [x] False/overruled objections, sustained objections, rephrasing, motion to strike, and resume/cancel behavior are handled coherently.
+- [x] The system exposes speech-service readiness, GPU/provider status, warmup, and actionable errors.
 
 ### D. GPT-5.6 runtime integration
 
-- [ ] `gpt-5.6-luna` is the default interactive runtime model, while `gpt-5.6-terra` is used for case compilation and final coaching.
-- [ ] GPT-5.6 performs case compilation, courtroom role reasoning, opposing strategy, rulings, negotiation reasoning, jury deliberation, and final coaching where applicable.
-- [ ] All action-producing calls use strict structured outputs and versioned schemas.
-- [ ] Each role receives only its authorized `KnowledgeView`.
-- [ ] User-visible dynamic answers come from validated GPT-5.6 output; deterministic authored case answers are not the normal runtime path.
-- [ ] Streaming output begins TTS at safe phrase boundaries.
-- [ ] Stale/cancelled model output cannot update trial state or reach TTS.
-- [ ] Prompt caching/context compaction is implemented and measured.
+- [x] `gpt-5.6-luna` is the default interactive runtime model, while `gpt-5.6-terra` is used for case compilation and final coaching.
+- [x] GPT-5.6 performs case compilation, courtroom role reasoning, opposing strategy, rulings, negotiation reasoning, jury deliberation, and final coaching where applicable.
+- [x] All action-producing calls use strict structured outputs and versioned schemas.
+- [x] Each role receives only its authorized `KnowledgeView`.
+- [x] User-visible dynamic answers come from validated GPT-5.6 output; deterministic authored case answers are not the normal runtime path.
+- [x] Streaming output begins TTS at safe phrase boundaries.
+- [x] Stale/cancelled model output cannot update trial state or reach TTS.
+- [x] Prompt caching/context compaction is implemented and measured.
 - [x] Model latency, usage, cost, validation, retries, citations, and failures appear in Court Records.
 
 ### E. Courtroom presentation
@@ -110,16 +110,16 @@ Codex may mark the Goal complete only when all applicable items below are proven
 - [x] Court Records displays the event tree, model calls, role knowledge scope, citations, rulings, interruptions, audio timing, retries, costs, and fallbacks.
 - [x] At least two multi-case automated evaluation scenarios run repeatedly.
 - [x] The core eval gate passes at least 9 of 10 full mocked/replay runs and all deterministic invariant tests.
-- [ ] At least one live GPT-5.6 end-to-end run and one live local-GPU speech run are recorded when credentials/hardware are available.
+- [x] At least one live GPT-5.6 end-to-end run and one live local-GPU speech run are recorded when credentials/hardware are available.
 
 ### G. Quality and delivery
 
-- [ ] `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, `npm run build`, `npm run test:e2e`, and `npm run verify` pass, with external skips reported honestly.
-- [ ] Speech-service tests pass in CI/mock mode and on the target local environment when available.
-- [ ] No secret is present in tracked files or client bundles.
-- [ ] README and required architecture/setup/security/case-format/build-week/demo documents are complete.
-- [ ] The primary demo path can be completed reliably in under three minutes without manual database edits.
-- [ ] A recovery path exists for microphone permission denial, speech-service disconnect, OpenAI timeout, malformed model output, and browser refresh—without exposing the production text composer.
+- [x] `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, `npm run build`, `npm run test:e2e`, and `npm run verify` pass, with external skips reported honestly.
+- [x] Speech-service tests pass in CI/mock mode and on the target local environment when available.
+- [x] No secret is present in tracked files or client bundles.
+- [x] README and required architecture/setup/security/case-format/build-week/demo documents are complete.
+- [x] The primary demo path can be completed reliably in under three minutes without manual database edits.
+- [x] A recovery path exists for microphone permission denial, speech-service disconnect, OpenAI timeout, malformed model output, and browser refresh—without exposing the production text composer.
 
 ---
 
@@ -535,8 +535,8 @@ Deliverables:
 Gate:
 
 - [x] Protocol and cancellation tests pass without GPU.
-- [ ] On target hardware when available, microphone speech produces partial/final transcripts and local spoken responses with measured timings.
-- [ ] Raw audio is absent from OpenAI requests and Convex records.
+- [ ] **BLOCKED-EXTERNAL:** on target hardware, a human microphone utterance and physically audible local response still require a person to grant browser permission, speak, and attest speaker output; the real RTX 5070 in-memory provider loop is verified separately.
+- [x] Raw audio is absent from OpenAI requests and Convex records by strict transport/source/schema, production-client, and owner-bound persistence tests.
 
 ### Milestone 6 — Mid-sentence objections and live orchestration
 
@@ -595,21 +595,21 @@ Gate:
 
 Deliverables:
 
-- [ ] full verification script;
-- [ ] security/privacy review;
-- [ ] prompt-injection and authorization tests;
-- [ ] setup/architecture/case/speech/assets/build-week docs;
-- [ ] polished README;
-- [ ] deterministic under-three-minute demo case;
-- [ ] recorded fallback/recovery path;
-- [ ] Codex session documentation placeholders and `/feedback` reminder.
+- [x] full verification script;
+- [x] security/privacy review;
+- [x] prompt-injection and authorization tests;
+- [x] setup/architecture/case/speech/assets/build-week docs;
+- [x] polished README;
+- [x] deterministic under-three-minute demo case;
+- [x] recorded fallback/recovery path;
+- [x] Codex session documentation placeholders and `/feedback` reminder.
 
 Gate:
 
-- [ ] All Definition of Done items have evidence or explicit external blockers.
-- [ ] Full verification passes.
-- [ ] Fresh setup instructions have been exercised as far as the current environment permits.
-- [ ] No production route exposes secrets or visible typed courtroom input.
+- [x] All Definition of Done items have evidence or explicit external blockers.
+- [x] Full verification passes.
+- [x] Fresh setup instructions have been exercised as far as the current environment permits.
+- [x] No production route exposes secrets or visible typed courtroom input.
 
 ---
 
@@ -686,18 +686,18 @@ Performance misses do not justify unsafe state shortcuts. Optimize after correct
 
 ## 11. Security and privacy checklist
 
-- [ ] API keys server-side only and absent from client bundles/logs.
-- [ ] `.env.example` contains names and safe defaults only.
-- [ ] Uploaded files are private and access-controlled.
-- [ ] File size/type/page limits and parser timeouts exist.
-- [ ] Uploaded text is isolated as untrusted content.
-- [ ] Trial/action authorization is checked server-side.
-- [ ] Role-specific knowledge is filtered server-side.
-- [ ] Logs avoid raw secrets and unnecessary full document contents.
-- [ ] Raw audio remains local by default.
-- [ ] Delete/export controls for user case/trial data are documented or implemented.
-- [ ] Educational disclaimer appears during upload and hearing.
-- [ ] Real-person voice cloning is not implemented.
+- [x] API keys server-side only and absent from client bundles/logs.
+- [x] `.env.example` contains names and safe defaults only.
+- [x] Uploaded files are private and access-controlled.
+- [x] File size/type/page limits and parser timeouts exist.
+- [x] Uploaded text is isolated as untrusted content.
+- [x] Trial/action authorization is checked server-side.
+- [x] Role-specific knowledge is filtered server-side.
+- [x] Logs avoid raw secrets and unnecessary full document contents.
+- [x] Raw audio remains local by default.
+- [x] Delete/export controls for user case/trial data are documented or implemented; stable Records export exists and the lack of self-service deletion is explicit.
+- [x] Educational disclaimer appears during upload and hearing.
+- [x] Real-person voice cloning is not implemented.
 
 ---
 
@@ -743,11 +743,11 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Milestone 2 complete.
 - [x] Milestone 3 complete.
 - [x] Milestone 4 complete.
-- [ ] Milestone 5 complete.
+- [ ] Milestone 5 complete — implementation, deterministic browser orchestration, and the real CUDA provider smoke are complete; only the human microphone/physical-speaker gate is `BLOCKED-EXTERNAL` in section 17.
 - [x] Milestone 6 complete.
 - [x] Milestone 7 complete.
 - [x] Milestone 8 complete.
-- [ ] Milestone 9 complete.
+- [x] Milestone 9 complete.
 
 - 2026-07-18 17:09 IST — Milestone 0 baseline and preservation gate
   - Changed: recorded the environment, repository map, git boundary, legacy behavior, preserve/migrate/retire classification, baseline blockers, and exact verification evidence; created `docs/build-week/BASELINE.md`.
@@ -993,9 +993,24 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: begin Milestone 9 verification orchestration, security/privacy review, documentation, demo/recovery proof, and honest external/live-check reporting. Milestone 5 target-hardware verification remains open.
   - Commits: implementation and browser proof are on `origin/main` through `57d6d65`; the plan-only gate closure follows.
 
+- 2026-07-20 12:14-12:53 IST - Milestone 9 hardening, documentation, and demo gate complete
+  - Changed: added a classified non-billable-by-default PowerShell verification orchestrator; strict tracked-secret, production-client sentinel, and typed-input scans; an exact 34-route Convex HTTP allowlist; direct owner/cross-origin case-route authorization regressions; the upload disclaimer; current setup, architecture, case-format, speech, security/privacy, assets, Build Week delta, verification, Codex-session, and demo documentation; a hard three-minute primary-demo assertion; and an original repository-authored SVG icon replacing the unknown-provenance favicon.
+  - Verified: fresh `npm ci` passed. `npm run verify` passed in 218.9 seconds with zero required failures: 177 test files and 1,577 tests passed with three live-only files/tests explicitly skipped; 17 evals passed; root and Convex TypeScript, lint, exact six-function Convex public surface, locked speech sync, Ruff format/lint, strict mypy, 182 speech tests, the 20-route production build, the 539-tracked-file/33-client-asset boundary scan, and all five Chromium scenarios passed. The three optional live OpenAI suites and CUDA smoke were classified under separate skip headings, not counted as passes.
+  - Demo reliability: the exact production-path deterministic two-witness voice-to-Records test passed three times serially in 302.9 seconds total. Its timed navigation-to-three-stable-Records checkpoints were 84,335 ms, 79,632 ms, and 78,864 ms against the hard 180,000 ms limit; every repetition retained the full reload, privacy, all-panels, repeat-export, and error-ledger assertions.
+  - Live evidence boundary: the previously recorded real 30-call GPT-5.6 trial and RTX 5070 Kokoro-to-Nemotron smoke remain the applicable live proofs. This M9 aggregate did not rebill or rerun them and says so explicitly. The real speech smoke's 1,112 ms first partial misses the aspirational 450 ms warm target and is retained as a measured limitation rather than hidden.
+  - Remaining: a person must run the documented browser preflight with a real microphone, speak through Nemotron, and attest physically audible Kokoro output. Production deployment is also unverified but is not presented as a completed capability. The user must run `/feedback` and paste the real returned ID into `docs/build-week/CODEX_SESSIONS.md`.
+  - Blocked: `BLOCKED-EXTERNAL` only for human microphone permission/input and physical-speaker attestation; exact commands and steps are in section 17.
+  - Commits: `f74552d`, `77cbc3c`, `96abafb`, `ec261c7`, `7a0099c`, `6c4589a`, and `bb310eb`; this plan/evidence reconciliation follows.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
+
+- A full verification script must reject a skipped live Vitest suite even when Vitest exits zero. The M9 orchestrator therefore parses strict JSON test counts for explicit live runs, requires zero pending suites/tests, and prints separate `PASSED`, `FAILED`, `SKIPPED-OPENAI`, and `SKIPPED-GPU` sections.
+- Build-time secret absence is stronger when verified with sentinels, not only source-name searches. The production gate builds with harmless server-only sentinel values, then scans every client asset for those exact values, server environment names, production typed-input markers, and common secret formats; the passing gate checked 539 tracked files and 33 client assets.
+- The pre-Build Week `favicon.ico` had no recoverable source/license metadata. It was removed from the runtime tree without rewriting history and replaced by the original path-only `src/app/icon.svg`; `docs/ASSETS.md` records the replacement rather than guessing provenance.
+- The staged demo is stable well inside its budget under deterministic production-path automation: three serial complete runs measured 84,335 ms, 79,632 ms, and 78,864 ms to stable Court Records. These results still use fake media, muted output, and server-scripted model decisions and cannot be relabelled as live speech/GPT evidence.
+- The recorded real CUDA smoke produced its first Nemotron partial at 1,112 ms, above the 450 ms warm target. Correctness, exact final output, local-only PCM, four revisions, and 54 ms finalization passed, but no percentile or target-latency claim is made.
 
 - The clean repository is on `main` at `92c00e3ccca51ae6c4734fe621de68ce81d839b0`, exactly aligned with `origin/main`. The existing lightweight `hermes-hackathon-v1` tag points to `2fec9bc87cfda70a7b8cb46b966b65699cfe5c20`, the final legacy runtime commit. HEAD only adds the SUITS 2.0 contract/config documentation, so moving the tag would weaken provenance.
 - The current tracked app has three routes (`/`, `/hearing`, `/records`), nine domain modules with tests, ten Convex implementation modules, five generated Convex files, and an empty `public/` directory. There are no API routes, case editor, reusable courtroom components, speech service, Playwright tests, or current `docs/` tree at baseline.
@@ -1528,8 +1543,34 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run test:e2e` - exit 0 in 147.1 seconds; all five Chromium scenarios passed using four workers. Timings were 1.0 seconds preflight, 5.0 seconds WebGL fallback, 20.5 seconds visual atlas, 29.2 seconds mid-sentence objection, and 1.6 minutes for the complete two-witness voice-to-Records trial.
   - No live OpenAI, real microphone/speaker, or GPU-model check was executed by this gate. Those items are neither counted as passed nor silently folded into deterministic browser/speech evidence.
 
+- 2026-07-20 12:14-12:53 IST - Milestone 9 final hardening and verification
+  - `npm ci` - exit 0 in 21.6 seconds; 457 packages installed and 458 audited. npm retained two moderate advisories and three unapproved lifecycle-script notices (`esbuild`, `sharp`, and `unrs-resolver`); no breaking `npm audit fix --force` or implicit script approval was applied.
+  - Focused M9 authorization/security slice - exit 0: `src/app/api/cases/ownership-routes.test.ts`, `convex/http.security.test.ts`, and the upload disclaimer/lifecycle tests passed 11/11. Root TypeScript and zero-warning scoped ESLint passed. The tests prove cross-origin rejection, forged/missing-cookie rejection, server-derived owner propagation, bounded publication, and the exact 34-route POST-only secret-protected Convex HTTP source surface.
+  - Focused verifier slice - exit 0: eight tests passed for required command coverage, live-skip rejection, sentinel synchronization, tracked-environment rejection, tracked-secret redaction, client-marker rejection, and missing-build failure. PowerShell parsing, root TypeScript, scoped ESLint, and `git diff --check` passed.
+  - `npm run verify` - exit 0 in 218.9 seconds. `PASSED` contained all 14 required groups: root ESLint; root and Convex TypeScript; unit/integration tests; deterministic evals; the exact deployed Convex public surface; locked speech sync; Ruff format/lint; strict mypy; speech pytest; production build; tracked/client boundary; and Chromium E2E. `FAILED` was empty.
+  - Root test detail inside the aggregate: 177 files passed, three live-only files skipped, 1,577 tests passed, and three skipped in 15.15 seconds. The nine `hearing_interruption_failed` stderr entries are expected assertions from named negative-path lease/recovery tests, not unhandled failures. Eval passed three files and 17 tests in 1.83 seconds.
+  - Speech detail inside the aggregate: locked dev sync resolved 146 packages and checked 34; Ruff reported 38 files formatted and no lint issue; strict mypy reported no issue in 20 source files; pytest passed all 182 tests with one upstream Starlette/httpx deprecation warning. This aggregate speech run is CPU/fake test evidence.
+  - Build/security detail inside the aggregate: Next.js 16.2.10 compiled in 3.4 seconds, typechecked in 11.1 seconds, generated 20/20 pages, and exposed the original `/icon.svg`. The production boundary checked 539 tracked files and 33 client assets with no tracked secret, server sentinel/environment name, or production typed-input marker. Lint had zero errors and four unused-disable warnings only in generated Convex files.
+  - Browser detail inside the aggregate: all five tests passed in 2.5 minutes using four workers - preflight 1.1 seconds, WebGL fallback 4.9 seconds, visual atlas 20.9 seconds, mid-sentence objection 29.5 seconds, and complete two-witness voice-to-Records 1.6 minutes. The linked `cheery-bandicoot-36` development functions synchronized without a login prompt.
+  - The aggregate's `SKIPPED-OPENAI` section named the Terra compiler, Terra injection, and Luna courtroom suites because `-LiveOpenAI` was not supplied. `SKIPPED-GPU` named the Kokoro-to-Nemotron smoke because `-LiveCudaSmoke` was not supplied. These four checks were not counted as passing; the separate historical live trial and real RTX 5070 smoke remain recorded above and in `docs/build-week/VERIFICATION.md`.
+  - `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts --grep "completes two witnesses by voice" --repeat-each=3 --workers=1` - exit 0 in 302.9 seconds; all three serial runs passed. Exact navigation-to-three-stable-Records timings embedded in the report were 84,335 ms, 79,632 ms, and 78,864 ms, each below the 180,000 ms gate while retaining all later Records/privacy/export assertions.
+  - Generated repeat artifacts under `playwright-report/data/` (ignored, local, and replaceable): shared durable-hearing PNG `ec5fa28f3168d28cab89be0d8b79a1266cc5e9a5.png`, 148,167 bytes, SHA-256 `81219ddce0dbc9948e917546ec1367e529265917ca9024bef056947e6cea6b13`; Records PNGs `8165686de54fa219b8eb1d02f39db708c1b43503.png` / `7cd2e33239cadbedc4e05c37817b39ebea1599ec.png` / `bfa0af414c56197a831e4d35725d485d4ca4a859.png`, SHA-256 `5cfb080bf54e5410d3631a4356c0f9e6992c86c964dd90d5e05b618d50584f1d` / `95315a33f509242dd5a8e6a686ffe1e4ac8c8e35895d9cf5cf0310eb9aae2e1b` / `3886366488fb9c55f2be7ba5367df98f171431e8909ee15668d9f9707250faeb`; WebMs `ec072c5fd6e568c1343a39ceba67dbb3410dda83.webm` / `12b732551572ccd24f5168bff492f9550046c889.webm` / `bdfc591fdc840f042797e8647e71a1d051f32bc8.webm`, 96.76 / 92.00 / 91.28 seconds, SHA-256 `b7906f15aa96e388cceda974556c9c94dbc8aa7e58297a39ee9419f3e2d54c7d` / `cd57f24e547958bb54a52ef23bc4b7d256b22fef36fdc7b2a0e07697fa367a45` / `fe75c733ba4a875838cb5d30f69f469584a74eea7aae5395728acaf3ddc5ef6f`.
+  - Visual review of the final repeated Records screenshot confirmed the selected Rina Shah record, educational disclaimer, stable counts, all nine controls, bounded event ledger, download affordance, and no visible error/composer. The videos and screenshots remain generated local evidence and are not claimed as committed or externally retained artifacts.
+
 ## 17. Blocked external prerequisites
 
 Only list genuine external blockers such as absent API credentials, unavailable CUDA hardware, unavailable microphone permission, or missing deployment access. Include the command that will verify the item once unblocked.
 
-- None yet.
+- **BLOCKED-EXTERNAL — human microphone and physical-speaker acceptance.** The implementation, automated fake-media browser flow, RTX 5070 provider readiness, and synthetic real-model loop have passed, but this agent cannot supply/attest a human utterance or physical audibility. A person must run the following in PowerShell, then use `/preflight` to select **Run server checks**, **Prepare local audio**, grant microphone permission, speak a fixed fictional phrase until partial/final revisions appear, select **Test speakers**, and personally confirm audible output before completing one hearing turn:
+
+  ```powershell
+  .\scripts\setup-local-speech.ps1 -Runtime local-cuda -DownloadModels
+  Push-Location .\services\speech
+  $env:SUITS_SPEECH_MODE = 'cuda'
+  $env:SUITS_SPEECH_CACHE_DIR = Join-Path $env:LOCALAPPDATA 'SUITS\speech'
+  uv run --no-sync --no-python-downloads suits-speech
+  Pop-Location
+  npm run dev
+  ```
+
+  Record the browser/device/provider timing report and an explicit human audibility result in `docs/build-week/VERIFICATION.md`. Do not relabel the existing synthetic or muted automation as this proof.

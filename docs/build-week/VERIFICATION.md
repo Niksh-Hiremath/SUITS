@@ -70,7 +70,7 @@ The browser gate uses Chromium fake media, the dedicated deterministic loopback 
 - live GPT-5.6 behavior in the browser hearing; or
 - production deployment behavior.
 
-Separate evidence already exists for a complete live GPT-5.6 protected trial and a real CUDA in-memory speech smoke; it is summarized below. Those checks do not prove an integrated live browser hearing. `npm run verify` is also still a Milestone 9 deliverable; the commands above were executed individually and must later be orchestrated with explicit passed, skipped-live, skipped-GPU, and failed sections.
+Separate evidence already exists for a complete live GPT-5.6 protected trial and a real CUDA in-memory speech smoke; it is summarized below. Those checks do not prove an integrated live browser hearing. At the Milestone 7 checkpoint, `npm run verify` was still a future deliverable; the completed classified Milestone 9 run is recorded below.
 
 ## Historical live-model and GPU evidence
 
@@ -126,4 +126,58 @@ The inline `primary-demo-timing` JSON attachment records limit `180000`, measure
 
 The final Records PNG was visually inspected after the run. It shows the selected Rina Shah record, the educational disclaimer, stable summary counts, all nine section controls, and the bounded chronological event ledger without a visible error banner or text composer.
 
-Documentation now provides a staged sub-three-minute operator path, an honest fake-media/muted/scripted automation boundary, and recovery cards for microphone denial, speech disconnect, OpenAI timeout, malformed structured output, and refresh. Existing implementation/unit evidence supports each safe behavior; only completed-state hearing/Records refresh currently has mounted browser proof. Mounted failure-and-recovery recordings for the other paths, a pending-action refresh E2E, a three-repeat primary-demo reliability run, production deployment evidence, and an executed/documented `npm run verify` gate remain pending Milestone 9 work.
+Documentation now provides a staged sub-three-minute operator path, an honest fake-media/muted/scripted automation boundary, and recovery cards for microphone denial, speech disconnect, OpenAI timeout, malformed structured output, and refresh. Existing implementation/unit evidence supports each safe behavior; only completed-state hearing/Records refresh currently has mounted browser proof. The required aggregate and repeated-demo evidence are recorded next.
+
+## Milestone 9 aggregate verification
+
+Executed from the repository root in PowerShell on 2026-07-20 (IST):
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | Passed in 21.6 s; 457 packages installed and 458 audited. Two moderate advisories and three unapproved lifecycle scripts remain reported. No breaking fix or implicit approval was applied. |
+| `npm run verify` | Passed in 218.9 s with 14 required groups passed, no failed group, three explicit OpenAI skips, and one explicit GPU skip. |
+
+The aggregate result was:
+
+- root test: 177 files and 1,577 tests passed; three live-only files/tests skipped;
+- deterministic eval: three files and 17 tests passed;
+- root and Convex TypeScript passed;
+- lint passed with zero errors and four unused-disable warnings only in generated Convex files;
+- deployed Convex surface remained exactly six authenticated public functions;
+- locked speech sync, Ruff format/lint, strict mypy over 20 source files, and all 182 pytest cases passed; one upstream Starlette/httpx warning remains;
+- Next.js 16.2.10 compiled in 3.4 s, typechecked in 11.1 s, and generated 20/20 pages;
+- the production boundary scanned 539 tracked files and 33 client assets without finding a tracked secret, server sentinel/environment name, or production typed-input marker; and
+- all five Chromium scenarios passed in 2.5 minutes: preflight 1.1 s, WebGL fallback 4.9 s, atlas 20.9 s, objection 29.5 s, and complete voice-to-Records 1.6 minutes.
+
+`SKIPPED-OPENAI` named the Terra compiler, Terra injection, and Luna courtroom suites because `-LiveOpenAI` was not supplied. `SKIPPED-GPU` named the Kokoro-to-Nemotron smoke because `-LiveCudaSmoke` was not supplied. They were not counted as passes. The separately recorded real 30-call GPT-5.6 trial and RTX 5070 smoke above remain the live evidence for this build.
+
+The aggregate can opt into those checks with PowerShell switches:
+
+```powershell
+npm run verify -- -LiveOpenAI
+npm run verify -- -LiveCudaSmoke
+```
+
+The OpenAI switch is billable. It rejects a Vitest exit-zero result if any selected suite or test was skipped. The CUDA switch requires the pinned local model cache and reports the speech smoke's strict JSON outcome.
+
+## Three-run demo reliability
+
+```powershell
+npm run test:e2e -- tests/e2e/hearing-objection.spec.ts --grep "completes two witnesses by voice" --repeat-each=3 --workers=1
+```
+
+Exit 0 in 302.9 seconds: all three serial runs passed. Exact navigation-to-three-stable-Records timings were 84,335 ms, 79,632 ms, and 78,864 ms against the hard 180,000 ms limit. The complete test bodies remained about 1.6, 1.5, and 1.5 minutes and retained the later nine-panel, reload, privacy, byte-stable repeat-export, and empty-error-ledger checks.
+
+Generated local artifacts from that report are ignored and replaceable:
+
+| Run | Records PNG (bytes / SHA-256) | WebM (duration / SHA-256) |
+| ---: | --- | --- |
+| 1 | `8165686de54fa219b8eb1d02f39db708c1b43503.png` — 1,411,551 / `5cfb080bf54e5410d3631a4356c0f9e6992c86c964dd90d5e05b618d50584f1d` | `ec072c5fd6e568c1343a39ceba67dbb3410dda83.webm` — 96.76 s / `b7906f15aa96e388cceda974556c9c94dbc8aa7e58297a39ee9419f3e2d54c7d` |
+| 2 | `7cd2e33239cadbedc4e05c37817b39ebea1599ec.png` — 1,412,460 / `95315a33f509242dd5a8e6a686ffe1e4ac8c8e35895d9cf5cf0310eb9aae2e1b` | `12b732551572ccd24f5168bff492f9550046c889.webm` — 92.00 s / `cd57f24e547958bb54a52ef23bc4b7d256b22fef36fdc7b2a0e07697fa367a45` |
+| 3 | `bfa0af414c56197a831e4d35725d485d4ca4a859.png` — 1,416,663 / `3886366488fb9c55f2be7ba5367df98f171431e8909ee15668d9f9707250faeb` | `bdfc591fdc840f042797e8647e71a1d051f32bc8.webm` — 91.28 s / `fe75c733ba4a875838cb5d30f69f469584a74eea7aae5395728acaf3ddc5ef6f` |
+
+All three runs share the durable-hearing screenshot `ec5fa28f3168d28cab89be0d8b79a1266cc5e9a5.png`, 148,167 bytes, SHA-256 `81219ddce0dbc9948e917546ec1367e529265917ca9024bef056947e6cea6b13`. The final repeated Records PNG was visually inspected and showed the expected owner record, disclaimer, stable counts, all nine controls, bounded event ledger, and no visible error/composer.
+
+## Remaining external and deployment boundary
+
+The implementation and deterministic/browser/live-provider gates are complete. A human microphone utterance and physically audible speaker result remain `BLOCKED-EXTERNAL`: a person must grant browser permission, speak, and attest output through the documented CUDA preflight path. Mounted recordings for microphone denial, speech disconnect, timeout, malformed-output recovery, and refresh while an action is pending would strengthen the evidence but are not substituted for by unit tests. Production deployment is unverified and is not claimed as a completed capability.
