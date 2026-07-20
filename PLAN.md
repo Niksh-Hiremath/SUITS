@@ -965,6 +965,12 @@ Update after each meaningful checkpoint using dated entries:
   - Verified: the two Convex hearing/event integration files passed 48 tests. Root and Convex TypeScript, scoped ESLint, and `git diff --check` passed.
   - Remaining: expose privacy-safe normalized rulings and recovery events in the versioned Court Records projection, then build the bounded records workspace and browser proof.
 
+- 2026-07-20 10:03-10:20 IST - Milestone 8 Court Records v2 procedure checkpoint
+  - Changed: versioned the strict owner-facing view as `court-records-view.v2` and added chronological normalized objection, evidence, assertion, and strike rulings derived from each canonical event's pre-state. Evidence and assertion rows obey the existing owner scope; strike grants preserve a new validated reason when present and return `null` for legacy events without fabricating one. Added deterministic failure/recovery rows bound to exact event IDs, sequence, timestamps, and retryability.
+  - Privacy and semantics: free-form `FAIL_STEP` code, step ID, and user message are always redacted because no production writer or closed public enum proves those strings safe. Every V3 model-call row explicitly reports the pinned `validated_model_or_fail` policy, fallback availability `not_available`, `used: false`, and that repair attempts are not fallbacks; no trace-derived inference or alternate-provider claim is made.
+  - Verified: 60 focused projector/Convex/API/client tests passed, followed by the full root suite with 170 files passed, three intentional live-only files skipped, 1,525 tests passed, and three skipped. Both TypeScript surfaces, scoped ESLint, `git diff --check`, the 20-route production build, and the linked Convex development sync passed.
+  - Remaining: build the owner list/detail/download records workspace against this v2 contract and prove navigation, bounded rendering, stable download bytes, persisted audio metadata, reload, and privacy in Chromium.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1057,6 +1063,9 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A repeated gate is meaningful only when its contract binds every distinct run index and deterministic seed, validates the requested scenario identity/content hash, catches execution failures without fabricating passed invariants, and tests the nine-of-ten threshold itself. Ten identical unchecked success objects are not gate evidence.
 - A schema-valid client audio-audit row can still name a forged canonical turn, actor, ruling, or interruption. Persisting first and rejecting only during Court Records projection makes one bad noncanonical row deny all later record reads; exact semantic projection must therefore run against a canonical owner-bound replay inside the insertion transaction.
 - The structured judge-response contract always carries a strike-ruling reason, but granted AI strike events previously discarded it while denied rulings persisted it. Making the V3 grant reason optional preserves legacy replay while retaining exact provenance for every new generated ruling.
+- The strict browser/download Court Records DTO cannot gain required procedure fields under the existing literal without making version claims ambiguous. The view is projected on read rather than stored, so moving from `court-records-view.v1` to v2 requires an atomic producer/consumer deployment but no durable row migration.
+- V3 has no production `FAIL_STEP`/`RECOVER_STEP` writer and its failure code, step ID, and user message accept free-form strings. Syntax alone cannot establish confidentiality, so Court Records must redact all three until a canonical writer introduces a closed public-safe code enum.
+- The current courtroom model path has one initial attempt and at most one targeted semantic repair with provider retries disabled. A repair attempt, mock adapter, terminal provider failure, or later recovery is not evidence of an alternate-provider or deterministic fallback; Court Records can state the static `validated_model_or_fail` policy explicitly without deriving usage from those signals.
 - A browser `keepalive` request may disconnect during `pagehide` even though its server work should finish. Forwarding `NextRequest.signal` into the Convex service client cancels that append; the BFF must decouple the browser signal while retaining its own bounded service timeout.
 - React Strict Mode preserves component refs across its setup-cleanup-setup probe while asynchronous controller close may emit a late playback terminal. One component-global audio sink can therefore be closed or fed by the wrong controller generation; effect-local sink ownership plus a binder identity fence is required.
 
@@ -1149,6 +1158,8 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Deliver browser audio audits through a trial-pinned, bounded, single-flight keepalive queue. Cache the exact validated JSON bytes for idempotent retry, retry only network/408/425/429/5xx outcomes, and fail closed on permanent 4xx, malformed success, receipt mismatch, identity conflict, or capacity exhaustion without affecting courtroom audio.
 - Own each browser audit sink within one controller effect. Bind it only from the first validated owner-bound view, reload and reject a cross-trial publish, keep its performance subscription until `controller.close()` completes, then unsubscribe and close it with all teardown promises handled.
 - Preserve a generated strike grant's validated judicial reason in the append-only V3 event and verify it against the accepted proposal at the atomic commit boundary. Keep the field optional so historical V3 events remain replayable without fabricating a reason.
+- Version the strict Court Records view as v2 for required procedure additions. Reconstruct rulings from canonical pre-state in event order, filter evidence/assertion subjects through owner scope, and never derive reasons from ruling speech or motion text.
+- Project `FAIL_STEP`/`RECOVER_STEP` only as event-bound status, time, sequence, and retryability. Redact code, step ID, and user message unconditionally until a closed public-safe writer contract exists. Attach the immutable V3 `validated_model_or_fail`/fallback-unavailable policy to each model call, while keeping repairs, providers, and deterministic events out of fallback inference.
 
 ## 16. Verification Evidence
 
@@ -1454,6 +1465,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run typecheck`, `npx tsc --noEmit -p convex/tsconfig.json`, scoped ESLint, and `git diff --check` - exit 0.
   - `npx convex dev --once --typecheck enable --tail-logs disable` - exit 0; linked development deployment `cheery-bandicoot-36` accepted the updated functions without another login prompt.
   - The new field is optional in `trial-event.v3`; these checks do not claim that historical events acquired a reason or that the Court Records browser workspace is complete.
+
+- 2026-07-20 10:03-10:20 IST - Milestone 8 Court Records v2 procedure verification
+  - `npm test -- src/domain/court-records/project.test.ts convex/courtRecords.integration.test.ts convex/courtRecordsHttp.integration.test.ts src/app/api/records/route.test.ts src/components/records/court-records-client.test.ts` and the strict read/download transitive surface - exit 0; five discovered files and 60 tests passed.
+  - `npm test -- src/domain/court-records/project.test.ts` after the granted-strike regression - exit 0; 28 tests passed. Coverage includes all four ruling kinds, direct authored-fact source binding, old/new granted-strike reason semantics, restricted assertion/ruling canaries, exact failure/recovery pairing, unconditional free-form failure redaction, explicit fallback-unavailable policy, strict DTO refinements, and forged recovery rejection.
+  - `npm run typecheck`, `npx tsc --noEmit -p convex/tsconfig.json`, scoped ESLint, and `git diff --check` - exit 0.
+  - `npm test -- --reporter=dot` - exit 0 in 16.3 seconds; 170 files passed, three live-only files skipped, 1,525 tests passed, and three skipped. Expected mocked interruption failure-path diagnostics were printed to stderr and did not fail the suite.
+  - `npm run build` - exit 0 in 17.5 seconds; Next.js compiled/typechecked and generated all 20 routes. `npx convex dev --once --typecheck enable --tail-logs disable` - exit 0; linked deployment `cheery-bandicoot-36` accepted the v2 producer atomically without another login prompt.
+  - Independent re-review found no remaining P0-P2 correctness, privacy, compatibility, or fallback-semantics finding after the explicit policy and historical grant regressions.
+  - This is contract/projector evidence. It does not yet prove the records workspace in a mounted browser, physical audio, CUDA inference, or a live GPT-5.6 run.
 
 ## 17. Blocked external prerequisites
 

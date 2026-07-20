@@ -50,7 +50,7 @@ const SUMMARY = CourtRecordsTrialSummarySchema.parse({
 });
 
 const VIEW = CourtRecordsViewSchema.parse({
-  schemaVersion: "court-records-view.v1",
+  schemaVersion: "court-records-view.v2",
   summary: SUMMARY,
   eventTree: {
     rootEventIds: [EVENT_ID],
@@ -77,7 +77,12 @@ const VIEW = CourtRecordsViewSchema.parse({
     ],
   },
   transcript: [],
-  procedure: { objections: [], interruptions: [] },
+  procedure: {
+    objections: [],
+    rulings: [],
+    recoveries: [],
+    interruptions: [],
+  },
   lifecycles: { facts: [], evidence: [] },
   modelCalls: [],
   finalDebrief: null,

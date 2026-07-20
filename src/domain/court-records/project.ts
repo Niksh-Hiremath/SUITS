@@ -43,6 +43,7 @@ import {
   CourtRecordsTrialSummaryRowInputSchema,
   CourtRecordsViewSchema,
   type CourtRecordsProjectorInput,
+  type CourtRecordsRuling,
   type CourtRecordsTrialSummary,
   type CourtRecordsTrialSummaryRowInput,
   type CourtRecordsView,
@@ -691,6 +692,235 @@ function interruptionProjection(events: readonly TrialEvent[]) {
     }
   }
   return [...interruptions.values()];
+}
+
+function sameUniqueIdentifierSet(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === new Set(left).size &&
+    right.length === new Set(right).size &&
+    stableJson([...left].sort(compareIds)) ===
+      stableJson([...right].sort(compareIds))
+  );
+}
+
+function rulingProjection(
+  events: readonly TrialEvent[],
+  ownerScope: OwnerRecordScope,
+) {
+  const eventById = new Map(events.map((event) => [event.eventId, event]));
+  const rulings: CourtRecordsRuling[] = [];
+  let prior: TrialStateV3 | null = null;
+  const sourceBefore = (sourceEventId: string, ruling: TrialEvent) => {
+    const source = eventById.get(sourceEventId);
+    if (source === undefined || source.sequence >= ruling.sequence) {
+      fail("RULING_SOURCE_INVALID");
+    }
+    return source;
+  };
+
+  for (const event of events) {
+    if (prior !== null) {
+      switch (event.type) {
+        case "RULE_ON_OBJECTION": {
+          const objection = prior.objections[event.payload.objectionId];
+          if (
+            objection === undefined ||
+            objection.status !== "pending" ||
+            objection.rulingEventId !== null
+          ) {
+            fail("RULING_SOURCE_INVALID");
+          }
+          const source = sourceBefore(objection.sourceEventId, event);
+          if (
+            source.type !== "OBJECT" ||
+            source.payload.objectionId !== objection.objectionId ||
+            source.payload.questionId !== objection.questionId ||
+            source.payload.interruptedResponseId !==
+              objection.interruptedResponseId
+          ) {
+            fail("RULING_SOURCE_INVALID");
+          }
+          const remedy = event.payload.remedy;
+          if (remedy === null || remedy === "strike") {
+            fail("RULING_SOURCE_INVALID");
+          }
+          rulings.push({
+            kind: "objection",
+            rulingSequence: event.sequence,
+            sourceEventId: objection.sourceEventId,
+            rulingEventId: event.eventId,
+            objectionId: objection.objectionId,
+            questionId: objection.questionId,
+            interruptedResponseId: objection.interruptedResponseId,
+            disposition: event.payload.ruling,
+            remedy,
+            reason: event.payload.reason,
+          });
+          break;
+        }
+        case "RULE_ON_EVIDENCE": {
+          const evidence = prior.evidence[event.payload.evidenceId];
+          if (evidence === undefined || evidence.status !== "offered") {
+            fail("RULING_SOURCE_INVALID");
+          }
+          const source = sourceBefore(evidence.lastEventId, event);
+          if (
+            source.type !== "OFFER_EVIDENCE" ||
+            source.payload.evidenceId !== evidence.evidenceId
+          ) {
+            fail("RULING_SOURCE_INVALID");
+          }
+          if (ownerScope.evidenceIds.has(evidence.evidenceId)) {
+            rulings.push({
+              kind: "evidence",
+              rulingSequence: event.sequence,
+              sourceEventId: evidence.lastEventId,
+              rulingEventId: event.eventId,
+              evidenceId: evidence.evidenceId,
+              disposition: event.payload.ruling,
+              reason: event.payload.reason,
+            });
+          }
+          break;
+        }
+        case "RULE_ON_ASSERTION": {
+          const fact = prior.facts[event.payload.factId];
+          if (
+            fact === undefined ||
+            (fact.status !== "verified" && fact.status !== "disputed")
+          ) {
+            fail("RULING_SOURCE_INVALID");
+          }
+          sourceBefore(fact.lastEventId, event);
+          if (ownerScope.factIds.has(fact.factId)) {
+            rulings.push({
+              kind: "assertion",
+              rulingSequence: event.sequence,
+              sourceEventId: fact.lastEventId,
+              rulingEventId: event.eventId,
+              factId: fact.factId,
+              disposition: event.payload.ruling,
+              reason: event.payload.reason,
+            });
+          }
+          break;
+        }
+        case "STRIKE_TESTIMONY":
+        case "DENY_STRIKE_MOTION": {
+          const motion = prior.strikeMotions[event.payload.motionId];
+          if (motion === undefined || motion.status !== "pending") {
+            fail("RULING_SOURCE_INVALID");
+          }
+          const source = sourceBefore(motion.sourceEventId, event);
+          if (
+            source.type !== "MOVE_TO_STRIKE" ||
+            source.payload.motionId !== motion.motionId ||
+            !sameUniqueIdentifierSet(
+              source.payload.testimonyIds,
+              motion.testimonyIds,
+            ) ||
+            (event.type === "STRIKE_TESTIMONY" &&
+              !sameUniqueIdentifierSet(
+                event.payload.testimonyIds,
+                motion.testimonyIds,
+              ))
+          ) {
+            fail("RULING_SOURCE_INVALID");
+          }
+          rulings.push({
+            kind: "strike",
+            rulingSequence: event.sequence,
+            sourceEventId: motion.sourceEventId,
+            rulingEventId: event.eventId,
+            motionId: motion.motionId,
+            testimonyIds: [...motion.testimonyIds],
+            disposition:
+              event.type === "STRIKE_TESTIMONY" ? "granted" : "denied",
+            motionReason: motion.reason,
+            reason:
+              event.type === "STRIKE_TESTIMONY"
+                ? (event.payload.reason ?? null)
+                : event.payload.reason,
+          });
+          break;
+        }
+      }
+    }
+    prior = (prior === null
+      ? initializeTrialFromEvent(event)
+      : applyTrialEvent(prior, event)) as TrialStateV3;
+  }
+
+  return rulings.sort(
+    (left, right) =>
+      left.rulingSequence - right.rulingSequence ||
+      compareIds(left.rulingEventId, right.rulingEventId),
+  );
+}
+
+type RecoveryProjectionRow = {
+  failureEventId: string;
+  failureSequence: number;
+  failedAt: string;
+  status: "awaiting_recovery" | "recovered";
+  retryable: boolean;
+  safeFailureCode: null;
+  failureCodeRedacted: true;
+  recoveryEventId: string | null;
+  recoverySequence: number | null;
+  recoveredAt: string | null;
+};
+
+function recoveryProjection(events: readonly TrialEvent[]) {
+  const recoveries: RecoveryProjectionRow[] = [];
+  let currentFailure:
+    | Readonly<{ rowIndex: number; stepId: string }>
+    | null = null;
+  for (const event of events) {
+    if (event.type === "FAIL_STEP") {
+      if (event.actor.role !== "system") fail("RECOVERY_HISTORY_INVALID");
+      recoveries.push({
+        failureEventId: event.eventId,
+        failureSequence: event.sequence,
+        failedAt: event.occurredAt,
+        status: "awaiting_recovery",
+        retryable: event.payload.retryable,
+        safeFailureCode: null,
+        failureCodeRedacted: true,
+        recoveryEventId: null,
+        recoverySequence: null,
+        recoveredAt: null,
+      });
+      currentFailure = {
+        rowIndex: recoveries.length - 1,
+        stepId: event.payload.stepId,
+      };
+    } else if (event.type === "RECOVER_STEP") {
+      if (
+        event.actor.role !== "system" ||
+        currentFailure === null ||
+        currentFailure.stepId !== event.payload.stepId
+      ) {
+        fail("RECOVERY_HISTORY_INVALID");
+      }
+      const failure = recoveries[currentFailure.rowIndex];
+      if (failure === undefined || failure.status !== "awaiting_recovery") {
+        fail("RECOVERY_HISTORY_INVALID");
+      }
+      recoveries[currentFailure.rowIndex] = {
+        ...failure,
+        status: "recovered",
+        recoveryEventId: event.eventId,
+        recoverySequence: event.sequence,
+        recoveredAt: event.occurredAt,
+      };
+      currentFailure = null;
+    }
+  }
+  return recoveries;
 }
 
 type ModelTrace = CourtRecordsProjectorInput["modelCalls"][number]["trace"];
@@ -1460,6 +1690,12 @@ function projectModelCalls(
         callClass: trace.callClass,
         task: trace.task,
         status: trace.status,
+        fallback: {
+          policy: "validated_model_or_fail" as const,
+          availability: "not_available" as const,
+          used: false as const,
+          repairAttemptsAreFallbacks: false as const,
+        },
         provider: trace.provider,
         providerProtocolVersion: trace.providerProtocolVersion,
         model: trace.model,
@@ -2263,6 +2499,8 @@ export function projectCourtRecords(
       objections: Object.values(input.trialState.objections).sort(
         (left, right) => compareIds(left.sourceEventId, right.sourceEventId),
       ),
+      rulings: rulingProjection(input.events, ownerScope),
+      recoveries: recoveryProjection(input.events),
       interruptions: interruptionProjection(input.events),
     },
     lifecycles: lifecycleProjection(

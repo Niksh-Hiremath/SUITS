@@ -48,6 +48,8 @@ import {
   COURT_RECORDS_INPUT_SCHEMA_VERSION,
   CourtRecordsModelCallSchema,
   CourtRecordsProjectorInputSchema,
+  CourtRecordsRecoverySchema,
+  CourtRecordsRulingSchema,
   type CourtRecordsProjectorInput,
 } from "./schemas";
 import {
@@ -374,6 +376,7 @@ function playbackAudioRecord(input: Readonly<{
 function activeRecordsInput(
   includeJudgeTrace = false,
   includeObjectionTrace = false,
+  grantStrike = false,
 ): CourtRecordsProjectorInput {
   const harness = createHarness("active");
   const userCounsel = harness.actor(
@@ -799,34 +802,52 @@ function activeRecordsInput(
         })),
       },
     };
-    const ruling = harness.commit(
-      "DENY_STRIKE_MOTION",
-      {
-        motionId: "motion:records:judge",
-        reason: "The testimony remains part of the fictional record.",
-        speech: {
-          turnId: "turn:records:strike-ruling",
-          text: "Denied. The testimony remains in the record.",
-          citations: strikeCitations,
-        },
+    const modelOptions = {
+      source: "ai" as const,
+      modelMetadata: {
+        model: "gpt-5.6-luna" as const,
+        requestId: "request:records:judge",
+        promptVersion: "role-responder.judge.prompt.v1",
+        schemaVersion: "role-responder.judge.output.v1",
+        latencyMs: 1_000,
+        inputTokens: 100,
+        outputTokens: 20,
+        estimatedCostUsd: 0.001,
+        retryCount: 0,
+        validationFailureCount: 0,
       },
-      judge,
-      {
-        source: "ai",
-        modelMetadata: {
-          model: "gpt-5.6-luna",
-          requestId: "request:records:judge",
-          promptVersion: "role-responder.judge.prompt.v1",
-          schemaVersion: "role-responder.judge.output.v1",
-          latencyMs: 1_000,
-          inputTokens: 100,
-          outputTokens: 20,
-          estimatedCostUsd: 0.001,
-          retryCount: 0,
-          validationFailureCount: 0,
-        },
-      },
-    );
+    };
+    const ruling = grantStrike
+      ? harness.commit(
+          "STRIKE_TESTIMONY",
+          {
+            motionId: "motion:records:judge",
+            testimonyIds: ["testimony:records"],
+            factIds: ["fact_complaint_sent"],
+            reason: "The answer lacks an adequate foundation.",
+            speech: {
+              turnId: "turn:records:strike-ruling",
+              text: "Granted. The testimony is stricken.",
+              citations: strikeCitations,
+            },
+          },
+          judge,
+          modelOptions,
+        )
+      : harness.commit(
+          "DENY_STRIKE_MOTION",
+          {
+            motionId: "motion:records:judge",
+            reason: "The testimony remains part of the fictional record.",
+            speech: {
+              turnId: "turn:records:strike-ruling",
+              text: "Denied. The testimony remains in the record.",
+              citations: strikeCitations,
+            },
+          },
+          judge,
+          modelOptions,
+        );
     const judgeTrace = acceptedTrace({
       callId: "call:records:judge",
       trialId: harness.trialId,
@@ -873,7 +894,7 @@ function activeRecordsInput(
       ownerId: OWNER_ID,
       trialId: harness.trialId,
       resourceId: "testimony:records",
-      kind: "active_testimony",
+      kind: grantStrike ? "stricken_testimony" : "active_testimony",
       scope: "owner_record",
     });
   }
@@ -1292,6 +1313,133 @@ function completedDebriefInput(
   });
 }
 
+function projectorInputFromHarness(
+  harness: ReturnType<typeof createHarness>,
+  citationResources: CourtRecordsProjectorInput["citationResources"] = [],
+): CourtRecordsProjectorInput {
+  return CourtRecordsProjectorInputSchema.parse({
+    schemaVersion: COURT_RECORDS_INPUT_SCHEMA_VERSION,
+    ownerId: OWNER_ID,
+    caseGraph: harness.graph,
+    trialState: harness.state,
+    events: harness.events,
+    modelCalls: [],
+    citationResources,
+    finalDebriefArtifact: null,
+    audioAudits: [],
+  });
+}
+
+describe("Court Records procedure DTO schemas", () => {
+  const reference = {
+    rulingSequence: 2,
+    sourceEventId: "event:source",
+    rulingEventId: "event:ruling",
+  } as const;
+
+  it("accepts only internally coherent normalized ruling rows", () => {
+    const valid = [
+      {
+        ...reference,
+        kind: "objection",
+        objectionId: "objection:one",
+        questionId: "question:one",
+        interruptedResponseId: "response:one",
+        disposition: "overruled",
+        remedy: "resume_response",
+        reason: "The response may continue.",
+      },
+      {
+        ...reference,
+        kind: "evidence",
+        evidenceId: "evidence:one",
+        disposition: "admitted",
+        reason: "Foundation is sufficient.",
+      },
+      {
+        ...reference,
+        kind: "assertion",
+        factId: "fact:one",
+        disposition: "excluded",
+        reason: "The assertion is not supported.",
+      },
+      {
+        ...reference,
+        kind: "strike",
+        motionId: "motion:one",
+        testimonyIds: ["testimony:one"],
+        disposition: "granted",
+        motionReason: "The answer lacks foundation.",
+        reason: null,
+      },
+      {
+        ...reference,
+        kind: "strike",
+        motionId: "motion:two",
+        testimonyIds: ["testimony:two"],
+        disposition: "denied",
+        motionReason: "The answer lacks foundation.",
+        reason: "The witness established personal knowledge.",
+      },
+    ];
+    valid.forEach((ruling) =>
+      expect(CourtRecordsRulingSchema.safeParse(ruling).success).toBe(true),
+    );
+
+    const invalid = [
+      { ...valid[0], remedy: "none" },
+      { ...valid[0], disposition: "sustained", remedy: "resume_response" },
+      {
+        ...valid[0],
+        interruptedResponseId: null,
+        disposition: "overruled",
+        remedy: "resume_response",
+      },
+      { ...valid[3], testimonyIds: ["testimony:one", "testimony:one"] },
+      { ...valid[4], reason: null },
+      { ...valid[1], rulingSequence: 0 },
+      { ...valid[1], rulingEventId: "event:source" },
+      { ...valid[1], unexpected: "private-payload" },
+    ];
+    invalid.forEach((ruling) =>
+      expect(CourtRecordsRulingSchema.safeParse(ruling).success).toBe(false),
+    );
+  });
+
+  it("requires recovery metadata and redaction state to agree exactly", () => {
+    const awaiting = {
+      failureEventId: "event:failure",
+      failureSequence: 2,
+      failedAt: "2026-07-20T01:00:02.000Z",
+      status: "awaiting_recovery",
+      retryable: true,
+      safeFailureCode: null,
+      failureCodeRedacted: true,
+      recoveryEventId: null,
+      recoverySequence: null,
+      recoveredAt: null,
+    } as const;
+    const recovered = {
+      ...awaiting,
+      status: "recovered",
+      recoveryEventId: "event:recovery",
+      recoverySequence: 3,
+      recoveredAt: "2026-07-20T01:00:03.000Z",
+    } as const;
+    expect(CourtRecordsRecoverySchema.safeParse(awaiting).success).toBe(true);
+    expect(CourtRecordsRecoverySchema.safeParse(recovered).success).toBe(true);
+    for (const invalid of [
+      { ...awaiting, failureCodeRedacted: false },
+      { ...awaiting, safeFailureCode: "apparently.safe_code" },
+      { ...recovered, recoverySequence: null },
+      { ...recovered, recoverySequence: 2 },
+      { ...awaiting, unexpected: "private-message" },
+    ]) {
+      expect(CourtRecordsRecoverySchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+});
+
 describe("Court Records privacy-safe projection", () => {
   it("projects payload-free records and filters every public citation allowlist", () => {
     const input = activeRecordsInput();
@@ -1304,6 +1452,31 @@ describe("Court Records privacy-safe projection", () => {
     expect(view.procedure.objections).toMatchObject([
       { objectionId: "objection:records", status: "overruled" },
     ]);
+    const objectionEvent = input.events.find(
+      (event) =>
+        event.type === "OBJECT" &&
+        event.payload.objectionId === "objection:records",
+    );
+    const rulingEvent = input.events.find(
+      (event) =>
+        event.type === "RULE_ON_OBJECTION" &&
+        event.payload.objectionId === "objection:records",
+    );
+    expect(view.procedure.rulings).toEqual([
+      {
+        kind: "objection",
+        rulingSequence: rulingEvent?.sequence,
+        sourceEventId: objectionEvent?.eventId,
+        rulingEventId: rulingEvent?.eventId,
+        objectionId: "objection:records",
+        questionId: "question:records",
+        interruptedResponseId: "response:records",
+        disposition: "overruled",
+        remedy: "resume_response",
+        reason: "The question may proceed in this fictional simulation.",
+      },
+    ]);
+    expect(view.procedure.recoveries).toEqual([]);
     expect(view.procedure.interruptions).toMatchObject([
       { interruptId: "interrupt:records", status: "resumed" },
     ]);
@@ -1315,6 +1488,12 @@ describe("Court Records privacy-safe projection", () => {
     expect(view.modelCalls[0]).toMatchObject({
       provider: "openai",
       providerProtocolVersion: "responses-api.v1",
+      fallback: {
+        policy: "validated_model_or_fail",
+        availability: "not_available",
+        used: false,
+        repairAttemptsAreFallbacks: false,
+      },
       retryCount: 0,
       validationFailureCount: 0,
       knowledgeScope: {
@@ -1381,6 +1560,133 @@ describe("Court Records privacy-safe projection", () => {
     );
     expect(JSON.stringify(projectCourtRecords(input))).not.toContain(
       PRIVATE_CANARY,
+    );
+  });
+
+  it("uses the exact pre-ruling fact head for a directly ruled assertion", () => {
+    const harness = createHarness("assertion-ruling");
+    const judge = harness.actor(
+      (actor) => actor.role === "judge",
+      "JUDGE_MISSING",
+    );
+    harness.commit("BEGIN_PHASE", { phase: "case_in_chief" }, judge);
+    const sourceEventId =
+      harness.state.facts.fact_complaint_sent?.lastEventId ??
+      (() => {
+        throw new Error("Missing verified assertion fixture");
+      })();
+    const ruling = harness.commit(
+      "RULE_ON_ASSERTION",
+      {
+        factId: "fact_complaint_sent",
+        ruling: "admitted",
+        reason: "The authored assertion has direct packet provenance.",
+      },
+      judge,
+    );
+    const input = projectorInputFromHarness(harness, [
+      {
+        ownerId: OWNER_ID,
+        trialId: harness.trialId,
+        resourceId: "fact_complaint_sent",
+        kind: "admitted_fact",
+        scope: "owner_record",
+      },
+    ]);
+
+    expect(projectCourtRecords(input).procedure.rulings).toEqual([
+      {
+        kind: "assertion",
+        rulingSequence: ruling.sequence,
+        sourceEventId,
+        rulingEventId: ruling.eventId,
+        factId: "fact_complaint_sent",
+        disposition: "admitted",
+        reason: "The authored assertion has direct packet provenance.",
+      },
+    ]);
+    expect(sourceEventId).toBe(harness.events[0]?.eventId);
+  });
+
+  it("pairs the exact deterministic failure and redacts all free-form fields", () => {
+    const harness = createHarness("recovery-history");
+    const system = harness.actor(
+      (actor) => actor.role === "system",
+      "SYSTEM_MISSING",
+    );
+    const unsafeFailure = harness.commit(
+      "FAIL_STEP",
+      {
+        stepId: "PRIVATE_FAILURE_STEP_CANARY",
+        code: "PRIVATE_FAILURE_CODE_CANARY",
+        userMessage: "PRIVATE_FAILURE_MESSAGE_CANARY",
+        retryable: true,
+      },
+      system,
+      { source: "system" },
+    );
+    const recovery = harness.commit(
+      "RECOVER_STEP",
+      { stepId: "PRIVATE_FAILURE_STEP_CANARY" },
+      system,
+      { source: "system" },
+    );
+    const awaitingFailure = harness.commit(
+      "FAIL_STEP",
+      {
+        stepId: "step:awaiting",
+        code: "speech.disconnected",
+        userMessage: "Another safe fixed message.",
+        retryable: false,
+      },
+      system,
+      { source: "system" },
+    );
+    const input = projectorInputFromHarness(harness);
+    const view = projectCourtRecords(input);
+    const serialized = JSON.stringify(view);
+
+    expect(view.procedure.recoveries).toEqual([
+      {
+        failureEventId: unsafeFailure.eventId,
+        failureSequence: unsafeFailure.sequence,
+        failedAt: unsafeFailure.occurredAt,
+        status: "recovered",
+        retryable: true,
+        safeFailureCode: null,
+        failureCodeRedacted: true,
+        recoveryEventId: recovery.eventId,
+        recoverySequence: recovery.sequence,
+        recoveredAt: recovery.occurredAt,
+      },
+      {
+        failureEventId: awaitingFailure.eventId,
+        failureSequence: awaitingFailure.sequence,
+        failedAt: awaitingFailure.occurredAt,
+        status: "awaiting_recovery",
+        retryable: false,
+        safeFailureCode: null,
+        failureCodeRedacted: true,
+        recoveryEventId: null,
+        recoverySequence: null,
+        recoveredAt: null,
+      },
+    ]);
+    expect(serialized).not.toContain("PRIVATE_FAILURE_CODE_CANARY");
+    expect(serialized).not.toContain("PRIVATE_FAILURE_MESSAGE_CANARY");
+    expect(serialized).not.toContain("PRIVATE_FAILURE_STEP_CANARY");
+    expect(serialized).not.toContain("speech.disconnected");
+
+    const forged = structuredClone(input);
+    const forgedRecovery = forged.events.find(
+      (event) => event.type === "RECOVER_STEP",
+    );
+    if (forgedRecovery?.type !== "RECOVER_STEP") {
+      throw new Error("Missing recovery fixture event");
+    }
+    forgedRecovery.payload.stepId = "step:unmatched";
+    expect(() => projectCourtRecords(forged)).toThrow(
+      "COURT_RECORDS_EVENT_STREAM_INVALID",
     );
   });
 
@@ -1580,11 +1886,60 @@ describe("Court Records privacy-safe projection", () => {
     expect(() => projectCourtRecords(input)).toThrow(
       "COURT_RECORDS_CITATION_RESOURCE_MISSING",
     );
+    const judge = Object.values(input.trialState.actors).find(
+      (actor) => actor.role === "judge",
+    );
+    if (judge === undefined) throw new Error("Missing judge fixture");
+    const append = <K extends TrialActionType>(
+      identity: string,
+      type: K,
+      payload: TrialActionByType<K>["payload"],
+      actor: ActorRef,
+    ) => {
+      const head = input.trialState.eventIds.at(-1);
+      if (head === undefined) throw new Error("Missing assertion head");
+      const next = commitAction(
+        input.trialState,
+        TrialActionV3Schema.parse({
+          schemaVersion: TRIAL_ACTION_SCHEMA_VERSION,
+          actionId: `action:records:restricted-assertion:${identity}`,
+          trialId: input.trialState.trialId,
+          expectedStateVersion: input.trialState.version,
+          actor,
+          source: "deterministic",
+          requestedAt: new Date(
+            BASE_TIME + 40_000 + input.events.length,
+          ).toISOString(),
+          causationId: head,
+          correlationId: input.trialState.trialId,
+          responseId: null,
+          interruptId: null,
+          modelMetadata: null,
+          type,
+          payload,
+        }),
+      );
+      input.trialState = next.state;
+      input.events.push(next.event);
+    };
+    append(
+      "dispute",
+      "DISPUTE_ASSERTION",
+      { factId },
+      opposingCounsel,
+    );
+    const rulingReason = "OPPOSING_RESTRICTED_RULING_MUST_NOT_LEAK";
+    append(
+      "ruling",
+      "RULE_ON_ASSERTION",
+      { factId, ruling: "excluded", reason: rulingReason },
+      judge,
+    );
     input.citationResources.push({
       ownerId: OWNER_ID,
       trialId: input.trialState.trialId,
       resourceId: factId,
-      kind: "unadmitted_fact",
+      kind: "excluded_fact",
       scope: "debrief_only",
     });
 
@@ -1592,12 +1947,17 @@ describe("Court Records privacy-safe projection", () => {
     expect(view.lifecycles.facts.map((fact) => fact.factId)).not.toContain(
       factId,
     );
+    expect(view.procedure.rulings).not.toContainEqual(
+      expect.objectContaining({ factId }),
+    );
     expect(JSON.stringify(view)).not.toContain(proposition);
+    expect(JSON.stringify(view)).not.toContain(rulingReason);
+    expect(JSON.stringify(view)).not.toContain(factId);
 
     const laundering = structuredClone(input);
     const restrictedResource = laundering.citationResources.find(
       (resource) =>
-        resource.resourceId === factId && resource.kind === "unadmitted_fact",
+        resource.resourceId === factId && resource.kind === "excluded_fact",
     );
     if (restrictedResource === undefined) {
       throw new Error("Missing restricted resource fixture");
@@ -1653,6 +2013,12 @@ describe("Court Records privacy-safe projection", () => {
       CourtRecordsModelCallSchema.safeParse({
         ...call,
         acceptedCitationCount: call.acceptedCitationCount + 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      CourtRecordsModelCallSchema.safeParse({
+        ...call,
+        fallback: { ...call.fallback, used: true },
       }).success,
     ).toBe(false);
   });
@@ -1835,7 +2201,8 @@ describe("Court Records privacy-safe projection", () => {
   });
 
   it("reconstructs the provenance-redacted judge request used by the writer", () => {
-    const view = projectCourtRecords(activeRecordsInput(true));
+    const input = activeRecordsInput(true);
+    const view = projectCourtRecords(input);
     const judgeCall = view.modelCalls.find(
       (call) => call.task === "judge_response",
     );
@@ -1851,6 +2218,79 @@ describe("Court Records privacy-safe projection", () => {
         testimonyIds: ["testimony:records"],
       },
     });
+    expect(view.procedure.rulings.map((ruling) => ruling.kind)).toEqual([
+      "objection",
+      "evidence",
+      "strike",
+    ]);
+    const evidenceOffer = input.events.find(
+      (event) => event.type === "OFFER_EVIDENCE",
+    );
+    const evidenceRuling = input.events.find(
+      (event) => event.type === "RULE_ON_EVIDENCE",
+    );
+    const strikeMotion = input.events.find(
+      (event) => event.type === "MOVE_TO_STRIKE",
+    );
+    const strikeRuling = input.events.find(
+      (event) => event.type === "DENY_STRIKE_MOTION",
+    );
+    expect(view.procedure.rulings.slice(1)).toEqual([
+      {
+        kind: "evidence",
+        rulingSequence: evidenceRuling?.sequence,
+        sourceEventId: evidenceOffer?.eventId,
+        rulingEventId: evidenceRuling?.eventId,
+        evidenceId: "evidence_complaint_email",
+        disposition: "admitted",
+        reason: "The fictional exhibit has a sufficient foundation.",
+      },
+      {
+        kind: "strike",
+        rulingSequence: strikeRuling?.sequence,
+        sourceEventId: strikeMotion?.eventId,
+        rulingEventId: strikeRuling?.eventId,
+        motionId: "motion:records:judge",
+        testimonyIds: ["testimony:records"],
+        disposition: "denied",
+        motionReason:
+          "The answer should be stricken for this educational motion.",
+        reason: "The testimony remains part of the fictional record.",
+      },
+    ]);
+  });
+
+  it("retains a new granted-strike reason without relabeling ruling speech", () => {
+    const view = projectCourtRecords(activeRecordsInput(true, false, true));
+    const strike = view.procedure.rulings.find(
+      (ruling) => ruling.kind === "strike",
+    );
+    expect(strike).toMatchObject({
+      kind: "strike",
+      motionId: "motion:records:judge",
+      testimonyIds: ["testimony:records"],
+      disposition: "granted",
+      motionReason:
+        "The answer should be stricken for this educational motion.",
+      reason: "The answer lacks an adequate foundation.",
+    });
+    expect(JSON.stringify(strike)).not.toContain(
+      "Granted. The testimony is stricken.",
+    );
+
+    const historical = activeRecordsInput(true, false, true);
+    const historicalGrant = historical.events.find(
+      (event) => event.type === "STRIKE_TESTIMONY",
+    );
+    if (historicalGrant?.type !== "STRIKE_TESTIMONY") {
+      throw new Error("Missing historical strike fixture");
+    }
+    delete historicalGrant.payload.reason;
+    expect(
+      projectCourtRecords(historical).procedure.rulings.find(
+        (ruling) => ruling.kind === "strike",
+      ),
+    ).toMatchObject({ disposition: "granted", reason: null });
   });
 
   it("allows only the pending question event in objection-ruling citations", () => {

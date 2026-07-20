@@ -27,7 +27,7 @@ import { HearingAudioAuditRecordSchema } from "../../lib/speech/hearing-audio-au
 export const COURT_RECORDS_INPUT_SCHEMA_VERSION =
   "court-records-projector-input.v1" as const;
 export const COURT_RECORDS_VIEW_SCHEMA_VERSION =
-  "court-records-view.v1" as const;
+  "court-records-view.v2" as const;
 export const COURT_RECORDS_SUMMARY_SCHEMA_VERSION =
   "court-records-summary.v1" as const;
 
@@ -220,6 +220,150 @@ export const CourtRecordsEvidenceLifecycleSchema = z
   })
   .strict();
 
+const CourtRecordsRulingReferenceShape = {
+  rulingSequence: z.number().int().positive(),
+  sourceEventId: CourtRecordsIdentifierSchema,
+  rulingEventId: CourtRecordsIdentifierSchema,
+} as const;
+
+export const CourtRecordsRulingSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        ...CourtRecordsRulingReferenceShape,
+        kind: z.literal("objection"),
+        objectionId: CourtRecordsIdentifierSchema,
+        questionId: CourtRecordsIdentifierSchema,
+        interruptedResponseId: CourtRecordsIdentifierSchema.nullable(),
+        disposition: z.enum(["sustained", "overruled"]),
+        remedy: z.enum([
+          "none",
+          "rephrase",
+          "cancel_response",
+          "resume_response",
+        ]),
+        reason: z.string().trim().min(1).max(4_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...CourtRecordsRulingReferenceShape,
+        kind: z.literal("evidence"),
+        evidenceId: CourtRecordsIdentifierSchema,
+        disposition: z.enum(["admitted", "excluded"]),
+        reason: z.string().trim().min(1).max(4_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...CourtRecordsRulingReferenceShape,
+        kind: z.literal("assertion"),
+        factId: CourtRecordsIdentifierSchema,
+        disposition: z.enum(["admitted", "excluded"]),
+        reason: z.string().trim().min(1).max(4_000),
+      })
+      .strict(),
+    z
+      .object({
+        ...CourtRecordsRulingReferenceShape,
+        kind: z.literal("strike"),
+        motionId: CourtRecordsIdentifierSchema,
+        testimonyIds: z.array(CourtRecordsIdentifierSchema).min(1),
+        disposition: z.enum(["granted", "denied"]),
+        motionReason: z.string().trim().min(1).max(2_000),
+        reason: z.string().trim().min(1).max(4_000).nullable(),
+      })
+      .strict(),
+  ])
+  .superRefine((ruling, context) => {
+    if (ruling.sourceEventId === ruling.rulingEventId) {
+      context.addIssue({
+        code: "custom",
+        path: ["rulingEventId"],
+        message: "A ruling event must follow a distinct source event",
+      });
+    }
+    if (ruling.kind === "objection") {
+      const expectedOverruledRemedy =
+        ruling.interruptedResponseId === null ? "none" : "resume_response";
+      const sustainedRemedies =
+        ruling.interruptedResponseId === null
+          ? new Set(["rephrase"])
+          : new Set(["rephrase", "cancel_response"]);
+      if (
+        (ruling.disposition === "overruled" &&
+          ruling.remedy !== expectedOverruledRemedy) ||
+        (ruling.disposition === "sustained" &&
+          !sustainedRemedies.has(ruling.remedy))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["remedy"],
+          message: "Objection remedy does not match its canonical disposition",
+        });
+      }
+    }
+    if (ruling.kind === "strike") {
+      const seen = new Set<string>();
+      ruling.testimonyIds.forEach((testimonyId, index) => {
+        if (seen.has(testimonyId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["testimonyIds", index],
+            message: "Strike ruling testimony IDs must be unique",
+          });
+        }
+        seen.add(testimonyId);
+      });
+      if (ruling.disposition === "denied" && ruling.reason === null) {
+        context.addIssue({
+          code: "custom",
+          path: ["reason"],
+          message: "A denied strike ruling requires its judicial reason",
+        });
+      }
+    }
+  });
+
+export const CourtRecordsRecoverySchema = z
+  .object({
+    failureEventId: CourtRecordsIdentifierSchema,
+    failureSequence: z.number().int().positive(),
+    failedAt: DateTimeSchema,
+    status: z.enum(["awaiting_recovery", "recovered"]),
+    retryable: z.boolean(),
+    safeFailureCode: z.null(),
+    failureCodeRedacted: z.literal(true),
+    recoveryEventId: CourtRecordsIdentifierSchema.nullable(),
+    recoverySequence: z.number().int().positive().nullable(),
+    recoveredAt: DateTimeSchema.nullable(),
+  })
+  .strict()
+  .superRefine((recovery, context) => {
+    const hasRecovery = recovery.recoveryEventId !== null;
+    if (
+      hasRecovery !== (recovery.recoverySequence !== null) ||
+      hasRecovery !== (recovery.recoveredAt !== null) ||
+      hasRecovery !== (recovery.status === "recovered")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "Recovery status and event metadata must be present together",
+      });
+    }
+    if (
+      recovery.recoverySequence !== null &&
+      recovery.recoverySequence <= recovery.failureSequence
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["recoverySequence"],
+        message: "Recovery must occur after its failure",
+      });
+    }
+  });
+
 const ModelCallAttemptSchema = z
   .object({
     attempt: z.number().int().positive(),
@@ -249,6 +393,14 @@ export const CourtRecordsModelCallSchema = z
     callClass: CourtroomModelCallClassSchema,
     task: CourtroomModelCallTaskSchema,
     status: CourtroomModelCallStatusSchema,
+    fallback: z
+      .object({
+        policy: z.literal("validated_model_or_fail"),
+        availability: z.literal("not_available"),
+        used: z.literal(false),
+        repairAttemptsAreFallbacks: z.literal(false),
+      })
+      .strict(),
     provider: CourtRecordsIdentifierSchema,
     providerProtocolVersion: CourtRecordsIdentifierSchema,
     model: CourtroomModelSchema,
@@ -343,6 +495,8 @@ export const CourtRecordsViewSchema = z
     procedure: z
       .object({
         objections: z.array(ObjectionStateEntrySchema),
+        rulings: z.array(CourtRecordsRulingSchema),
+        recoveries: z.array(CourtRecordsRecoverySchema),
         interruptions: z.array(
           z
             .object({
@@ -403,6 +557,8 @@ export type CourtRecordsProjectorInput = z.infer<
 export type CourtRecordsTrialSummaryRowInput = z.infer<
   typeof CourtRecordsTrialSummaryRowInputSchema
 >;
+export type CourtRecordsRuling = z.infer<typeof CourtRecordsRulingSchema>;
+export type CourtRecordsRecovery = z.infer<typeof CourtRecordsRecoverySchema>;
 
 export type DeepReadonly<T> = T extends readonly (infer Item)[]
   ? readonly DeepReadonly<Item>[]
