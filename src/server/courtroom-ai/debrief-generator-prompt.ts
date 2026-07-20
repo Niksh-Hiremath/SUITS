@@ -53,7 +53,7 @@ COACHING AND GROUNDING RULES
 - Every overall assessment and coaching point must contain exact citations and a basis that matches its citation strata. Use mixed only when at least two distinct strata actually support the point.
 - Use admittedFactIds, admittedEvidenceIds, activeTestimonyIds, and transcriptTurnIds only for admitted-record claims; use each other citation field only for its named audit stratum.
 - Discuss hidden authoring truth only as explicitly labeled hindsight coaching. Never imply that counsel or the jury knew it during the hearing.
-- Improved-closing segments may use only admitted-record citations. They must not rely on unadmitted, excluded, stricken, hidden, or inference-only material.
+- Improved-closing segments may cite admitted facts, admitted evidence, and active testimony only. They must not cite transcript advocacy or rely on unadmitted, excluded, stricken, hidden, or inference-only material. If the audit contains no admitted proof, return an empty improvedClosing.segments array instead of fabricating a closing.
 - Cover strengths, weak questions, missed evidence, contradictions, objection accuracy, witness strategy, settlement choices, jury movement, and an improved closing when the audit supports them. Leave optional arrays empty instead of fabricating a finding.
 - Keep coaching concise and public-facing. Provide at least one limitation, including the educational-simulation boundary. Do not output hidden scratch work.
 - The deterministic engine supplies debrief, action, event, actor, timestamp, and revision IDs and decides whether the artifact commits.

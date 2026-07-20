@@ -931,6 +931,12 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: Milestone 7 is complete. Begin Milestone 8 debrief, records, and repeated-evaluation work while retaining the Milestone 5 target-hardware checks and the later live-model/live-GPU acceptance gates.
   - Commits: `7643c77`, `8ddcc2f`, `546f46b`, `8f56ab4`, `c078190`, and `1ccb2ff`.
 
+- 2026-07-20 05:50-06:06 IST - Milestone 8 admissibility-hardening checkpoint
+  - Audited: three independent read-only passes confirmed that the strict Terra debrief, jury-considerable builder, private artifacts, and redacted model traces are reusable, while owner-bound Court Records, durable audio telemetry, safe downloads, and the ten-run multi-case V3 gate remain absent. The audit also found a correctness hole: generic transcript citations included stricken turns and were classified as admitted-record support.
+  - Changed: debrief citation scope now accepts only active transcript turns; coaching about stricken material must use the explicit stricken-testimony stratum. Improved-closing segments reject every transcript-turn citation and require direct admitted fact, evidence, or active-testimony support, preventing counsel advocacy plus an unrelated admitted ID from laundering an assertion into proof. Request-aware validation requires a revised closing whenever admitted proof exists, while a trial settled before any admissible proof may honestly return no segment.
+  - Verified: four focused debrief contract/generator/prompt files passed 43 tests; the final broader knowledge/jury/debrief slice passed five files and 51 tests; strict TypeScript, zero-warning scoped ESLint, and `git diff --check` passed. An independent review found and drove fixes for the transcript-plus-unrelated-proof bypass and early-settlement impossibility, then reported no remaining P0-P3 finding.
+  - Remaining: this closes the first Milestone 8 correctness prerequisite, not a deliverable checkbox. Next build the privacy-safe Court Records DTO and owner-bound durable read, then audio telemetry, UI/downloads, and the ten-run multi-case gate.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1016,6 +1022,8 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Fake STT partials may advance to the final revision before an explicit test stop reaches the service. A production-path full-flow test must let the final-bound interruption finish naturally and assert the canonical durable turn instead of attempting a second submission.
 - The no-action opposing-counsel path releases the active witness within the same `finish_witness` command in the current scenario; no redirect phase is created merely to satisfy a linear test script.
 - Next.js normalizes `/hearing/` to `/hearing` on reload. Durable recovery assertions must bind trial identity and canonical head/view equality, not the cosmetic trailing-slash spelling.
+- A debrief transcript is a historical audit, not an admissibility shortcut. The generic transcript citation scope previously included stricken turns, and its semantic stratum treated every transcript ID as admitted; status-aware scope plus direct proof citations are both required to keep excluded testimony out of coaching conclusions and revised closings.
+- An unconditional non-empty improved closing is incompatible with a valid early settlement that has no admitted fact, evidence, or testimony. The output shape must allow zero segments while request-aware validation still requires a grounded revision whenever admitted proof exists.
 
 ## 15. Decisions
 
@@ -1098,6 +1106,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep the visual atlas fail-closed behind the server-only `SUITS_ENABLE_VISUAL_ATLAS=1` flag in development/test. Construct every fixture through public reducer/schema boundaries, freeze it with a fixed page clock, and return `notFound()` in production or without the exact flag.
 - Commit the deterministic 24-image Chromium/Windows PNG baseline so visual regression is reviewable in git. Keep Playwright WebM recordings ignored as local build evidence and publish their byte counts, durations, and SHA-256 hashes instead of silently committing generated video binaries.
 - Keep the complete-trial model fixture server-only and fail-closed to development/test, exact loopback hosts, and the named scenario. Reconstruct the trusted request from the server binding manifest plus the untrusted envelope and require an exact digest match before returning any scripted decision.
+- Treat active transcript citations as coaching context only. Stricken turns are excluded from the generic transcript scope, and improved-closing segments may cite only admitted facts, admitted evidence, and active testimony directly; transcript advocacy is never proof. Permit an empty improved closing only when the immutable request contains no admitted proof.
 
 ## 16. Verification Evidence
 
@@ -1365,6 +1374,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - Ignored local video evidence under `docs/build-week/artifacts/m7/`: `mid-sentence-objection.webm` is 1,481,208 bytes / 26.920 seconds / SHA-256 `f217cb1aa40647a4c3d5fe4730fd69e6fb948b7fcd647a3376b877099ff5b50e`; `complete-two-witness-trial.webm` is 2,004,921 bytes / 72.440 seconds / SHA-256 `448639d15ca559fb8efa2099a291033ef6ba50897addd8a35a279b1303961de8`; `courtroom-visual-atlas.webm` is 1,641,624 bytes / 21.600 seconds / SHA-256 `7433776a51f3718c143b7bfb5ca5fc0fe1c670982df38506c66c497db0d3d62c`.
   - Automated Chromium used fake media, deterministic fake STT/TTS and server-only scripted model decisions, plus muted output. No human microphone, physical speaker audibility, CUDA speech performance, or live GPT-5.6 full-trial claim is made. `npm run verify` is a Milestone 9 deliverable and does not yet exist.
   - `git push origin main` - exit 0 through `1ccb2ff`; all Milestone 7 implementation and test commits are on `origin/main`.
+
+- 2026-07-20 05:50-06:06 IST - Milestone 8 admissibility-boundary verification
+  - `npm exec -- vitest run src/domain/courtroom-ai/debrief-generator.test.ts src/domain/courtroom-ai/call-contracts.test.ts src/server/courtroom-ai/debrief-generator.test.ts src/server/courtroom-ai/debrief-generator-prompt.test.ts --reporter=dot` - exit 0; four files and 43 tests passed after the final bypass and early-settlement fixes.
+  - `npm exec -- vitest run src/domain/knowledge/knowledge.test.ts src/domain/courtroom-ai/jury-response.test.ts src/domain/courtroom-ai/debrief-generator.test.ts src/server/courtroom-ai/jury-response.test.ts src/server/courtroom-ai/debrief-generator.test.ts --reporter=dot` - exit 0 after the final edge-case additions; five files and 51 tests passed for jury filtering, citation strata, provider validation, and repair.
+  - `npm run typecheck`, scoped ESLint with `--max-warnings 0`, and `git diff --check` - exit 0.
+  - Adversarial regressions prove a stricken transcript turn cannot support an admitted coaching point, a counsel turn alone cannot support a revised closing, adding an unrelated admitted exhibit does not bypass that rule, a proof-bearing record cannot omit its revised closing, and an early-settled record with no admitted proof may do so.
+  - Independent final re-review reported no remaining P0-P3 finding.
 
 ## 17. Blocked external prerequisites
 

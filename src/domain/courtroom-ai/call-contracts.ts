@@ -583,7 +583,10 @@ export const DebriefGeneratorModelOutputSchema = z
     juryMovement: z.array(DebriefCoachingPointSchema).max(12),
     improvedClosing: z
       .object({
-        segments: z.array(ImprovedClosingSegmentSchema).min(1).max(16),
+        // A trial settled before any admissible proof exists has no honest
+        // record-grounded closing to improve. Request-aware validation still
+        // requires at least one segment whenever admitted proof is present.
+        segments: z.array(ImprovedClosingSegmentSchema).max(16),
       })
       .strict(),
     limitations: z.array(shortText(1_000)).min(1).max(12),
@@ -1261,6 +1264,14 @@ function debriefCitationCount(citations: DebriefCitationSet): number {
   );
 }
 
+function hasAdmittedProofCitation(citations: DebriefCitationSet): boolean {
+  return (
+    citations.admittedFactIds.length > 0 ||
+    citations.admittedEvidenceIds.length > 0 ||
+    citations.activeTestimonyIds.length > 0
+  );
+}
+
 function debriefStrata(citations: DebriefCitationSet): ReadonlySet<DebriefBasis> {
   const strata = new Set<DebriefBasis>();
   if (
@@ -1376,6 +1387,24 @@ export function validateDebriefGeneratorSemantics(
           "citation_stratum_mismatch",
           path,
           "Improved closing segments may rely only on admitted-record citations",
+        ),
+      );
+    }
+    if (!hasAdmittedProofCitation(segment.citations)) {
+      issues.push(
+        issue(
+          "citation_required",
+          path,
+          "Improved closing segments require admitted fact, evidence, or active-testimony support",
+        ),
+      );
+    }
+    if (segment.citations.transcriptTurnIds.length > 0) {
+      issues.push(
+        issue(
+          "citation_stratum_mismatch",
+          [...path, "transcriptTurnIds"],
+          "Improved closing segments must cite admitted proof directly, not transcript advocacy",
         ),
       );
     }

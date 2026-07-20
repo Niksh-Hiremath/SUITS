@@ -314,7 +314,15 @@ function citationScope(
         (testimony) => testimony.testimonyId,
       ),
     ),
-    transcriptTurnIds: new Set(request.transcript.map((turn) => turn.turnId)),
+    // A stricken turn remains in the historical transcript, but it cannot be
+    // smuggled back into the admitted stratum through the generic transcript
+    // citation field. Coaching about that material must use the explicitly
+    // labelled stricken-testimony citation class instead.
+    transcriptTurnIds: new Set(
+      request.transcript
+        .filter((turn) => turn.status === "active")
+        .map((turn) => turn.turnId),
+    ),
     unadmittedFactIds: new Set(
       strata.unadmittedRecord.facts.map((fact) => fact.factId),
     ),
@@ -372,6 +380,26 @@ function scopedCitationIssues(
   );
 }
 
+function requestAwareSemanticIssues(
+  request: DebriefGeneratorRequest,
+  output: DebriefGeneratorModelOutput,
+): DebriefGeneratorValidationIssue[] {
+  const admitted = request.knowledgeView.strata.admittedRecord.record;
+  const hasAdmittedProof =
+    admitted.facts.length > 0 ||
+    admitted.evidence.length > 0 ||
+    admitted.testimony.length > 0;
+  return hasAdmittedProof && output.improvedClosing.segments.length === 0
+    ? [
+        issue(
+          "semantic_contract_invalid",
+          ["improvedClosing", "segments"],
+          "An admitted record requires a grounded improved closing",
+        ),
+      ]
+    : [];
+}
+
 function zodIssues(error: z.ZodError): DebriefGeneratorValidationIssue[] {
   return error.issues.slice(0, 150).map((entry) =>
     issue(
@@ -404,6 +432,7 @@ export function validateDebriefGeneratorOutput(
         "The debrief violates its citation-stratum semantic contract",
       ),
     ),
+    ...requestAwareSemanticIssues(request, parsed.data),
     ...scopedCitationIssues(request, parsed.data),
   ];
   return issues.length === 0

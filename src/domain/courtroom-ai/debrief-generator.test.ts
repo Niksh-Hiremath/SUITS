@@ -173,6 +173,22 @@ function request(): DebriefGeneratorRequest {
           sourceSegmentIds: [],
         },
       },
+      {
+        turnId: "turn_stricken",
+        actorId: "actor_rina",
+        actorRole: "witness",
+        text: "A stricken answer remains in the historical transcript.",
+        testimonyId: "testimony_stricken",
+        status: "stricken",
+        sourceEventId: "event:stricken",
+        citations: {
+          factIds: [],
+          evidenceIds: [],
+          testimonyIds: ["testimony_stricken"],
+          eventIds: [],
+          sourceSegmentIds: [],
+        },
+      },
     ],
     procedure: {
       objections: [],
@@ -289,6 +305,140 @@ describe("debrief generator request boundary", () => {
     expect(validation.report.issues.map(({ code }) => code)).toContain(
       "semantic_contract_invalid",
     );
+  });
+
+  it("rejects a stricken transcript turn as admitted coaching support", () => {
+    const output = {
+      ...validOutput(),
+      strengths: [
+        {
+          ...validOutput().strengths[0],
+          assessment: "Treat the stricken answer as admitted proof.",
+          citations: citations({ transcriptTurnIds: ["turn_stricken"] }),
+        },
+      ],
+    };
+    const validation = validateDebriefGeneratorOutput(request(), output);
+    expect(validation.accepted).toBe(false);
+    if (validation.accepted) throw new Error("Expected rejection");
+    expect(validation.report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "citation_outside_audit",
+          path: ["strengths", 0, "citations", "transcriptTurnIds", 0],
+        }),
+      ]),
+    );
+  });
+
+  it("requires admitted proof beyond counsel transcript for an improved closing", () => {
+    const output = {
+      ...validOutput(),
+      improvedClosing: {
+        segments: [
+          {
+            text: "Repeat counsel's earlier assertion as proof.",
+            citations: citations({ transcriptTurnIds: ["turn_question"] }),
+          },
+        ],
+      },
+    };
+    const validation = validateDebriefGeneratorOutput(request(), output);
+    expect(validation.accepted).toBe(false);
+    if (validation.accepted) throw new Error("Expected rejection");
+    expect(validation.report.issues.map(({ code }) => code)).toContain(
+      "semantic_contract_invalid",
+    );
+  });
+
+  it("rejects transcript advocacy even when an unrelated admitted item is added", () => {
+    const output = {
+      ...validOutput(),
+      improvedClosing: {
+        segments: [
+          {
+            text: "Repeat counsel's assertion and attach an unrelated exhibit citation.",
+            citations: citations({
+              admittedEvidenceIds: ["evidence_admitted"],
+              transcriptTurnIds: ["turn_question"],
+            }),
+          },
+        ],
+      },
+    };
+    const validation = validateDebriefGeneratorOutput(request(), output);
+    expect(validation.accepted).toBe(false);
+    if (validation.accepted) throw new Error("Expected rejection");
+    expect(validation.report.issues.map(({ code }) => code)).toContain(
+      "semantic_contract_invalid",
+    );
+  });
+
+  it("requires a revised closing only when admitted proof exists", () => {
+    const missing = validateDebriefGeneratorOutput(request(), {
+      ...validOutput(),
+      improvedClosing: { segments: [] },
+    });
+    expect(missing.accepted).toBe(false);
+    if (missing.accepted) throw new Error("Expected rejection");
+    expect(missing.report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "semantic_contract_invalid",
+          path: ["improvedClosing", "segments"],
+        }),
+      ]),
+    );
+
+    const baseRequest = request();
+    const settledRequest = DebriefGeneratorRequestSchema.parse({
+      ...baseRequest,
+      knowledgeView: {
+        ...baseRequest.knowledgeView,
+        strata: {
+          ...baseRequest.knowledgeView.strata,
+          admittedRecord: {
+            ...baseRequest.knowledgeView.strata.admittedRecord,
+            record: {
+              ...baseRequest.knowledgeView.strata.admittedRecord.record,
+              facts: [],
+              evidence: [],
+              testimony: [],
+            },
+          },
+        },
+      },
+      transcript: [],
+      procedure: {
+        ...baseRequest.procedure,
+        closingTurnIds: [],
+        deliberated: false,
+        verdict: null,
+      },
+    });
+    const hiddenOnly = citations({ hiddenFactIds: ["fact_hidden"] });
+    const settledOutput = {
+      ...validOutput(),
+      overallAssessment: {
+        text: "The early settlement leaves only hindsight coaching.",
+        basis: "hidden_authoring_truth" as const,
+        citations: hiddenOnly,
+      },
+      strengths: [
+        {
+          title: "Early resolution",
+          assessment: "The audit permits only explicitly labelled hindsight.",
+          recommendation: "Do not describe hidden truth as admitted proof.",
+          basis: "hidden_authoring_truth" as const,
+          citations: hiddenOnly,
+        },
+      ],
+      improvedClosing: { segments: [] },
+    };
+    expect(validateDebriefGeneratorOutput(settledRequest, settledOutput)).toMatchObject({
+      accepted: true,
+      report: { status: "accepted" },
+    });
   });
 
   it("binds the debrief role view and closing audit to one canonical head", () => {
