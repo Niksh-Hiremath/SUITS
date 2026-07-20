@@ -88,7 +88,7 @@ Codex may mark the Goal complete only when all applicable items below are proven
 - [ ] Streaming output begins TTS at safe phrase boundaries.
 - [ ] Stale/cancelled model output cannot update trial state or reach TTS.
 - [ ] Prompt caching/context compaction is implemented and measured.
-- [ ] Model latency, usage, cost, validation, retries, citations, and failures appear in Court Records.
+- [x] Model latency, usage, cost, validation, retries, citations, and failures appear in Court Records.
 
 ### E. Courtroom presentation
 
@@ -104,12 +104,12 @@ Codex may mark the Goal complete only when all applicable items below are proven
 
 ### F. Debrief, records, and evaluation
 
-- [ ] Every material claim in the debrief cites transcript turns and/or evidence IDs.
-- [ ] The debrief distinguishes admitted record, excluded/stricken material, hidden case truth, and coaching inference.
-- [ ] It reports strengths, weak questions, missed evidence, contradictions, objection accuracy, witness strategy, settlement choices, jury movement, and an improved closing.
-- [ ] Court Records displays the event tree, model calls, role knowledge scope, citations, rulings, interruptions, audio timing, retries, costs, and fallbacks.
-- [ ] At least two multi-case automated evaluation scenarios run repeatedly.
-- [ ] The core eval gate passes at least 9 of 10 full mocked/replay runs and all deterministic invariant tests.
+- [x] Every material claim in the debrief cites transcript turns and/or evidence IDs.
+- [x] The debrief distinguishes admitted record, excluded/stricken material, hidden case truth, and coaching inference.
+- [x] It reports strengths, weak questions, missed evidence, contradictions, objection accuracy, witness strategy, settlement choices, jury movement, and an improved closing.
+- [x] Court Records displays the event tree, model calls, role knowledge scope, citations, rulings, interruptions, audio timing, retries, costs, and fallbacks.
+- [x] At least two multi-case automated evaluation scenarios run repeatedly.
+- [x] The core eval gate passes at least 9 of 10 full mocked/replay runs and all deterministic invariant tests.
 - [ ] At least one live GPT-5.6 end-to-end run and one live local-GPU speech run are recorded when credentials/hardware are available.
 
 ### G. Quality and delivery
@@ -578,18 +578,18 @@ Gate:
 
 Deliverables:
 
-- [ ] cited advanced debrief;
-- [ ] jury-considerable record builder;
-- [ ] trace/event/knowledge/latency/audio inspection UI;
-- [ ] multi-case eval fixtures;
-- [ ] repeated full-run gate;
-- [ ] downloadable debrief and replay bundle.
+- [x] cited advanced debrief;
+- [x] jury-considerable record builder;
+- [x] trace/event/knowledge/latency/audio inspection UI;
+- [x] multi-case eval fixtures;
+- [x] repeated full-run gate;
+- [x] downloadable debrief and replay bundle.
 
 Gate:
 
-- [ ] 10-run mocked/replay gate achieves at least 9 successful runs.
-- [ ] Every debrief factual claim is citation-valid.
-- [ ] Jury/debrief tests prove excluded and stricken material is not used as admissible support.
+- [x] 10-run mocked/replay gate achieves at least 9 successful runs.
+- [x] Every debrief factual claim is citation-valid.
+- [x] Jury/debrief tests prove excluded and stricken material is not used as admissible support.
 
 ### Milestone 9 — Hardening, documentation, and demo
 
@@ -746,7 +746,7 @@ Update after each meaningful checkpoint using dated entries:
 - [ ] Milestone 5 complete.
 - [x] Milestone 6 complete.
 - [x] Milestone 7 complete.
-- [ ] Milestone 8 complete.
+- [x] Milestone 8 complete.
 - [ ] Milestone 9 complete.
 
 - 2026-07-18 17:09 IST — Milestone 0 baseline and preservation gate
@@ -985,6 +985,13 @@ Update after each meaningful checkpoint using dated entries:
   - Boundary: Chromium still uses fake media, deterministic fake STT/TTS and model decisions, and muted playback. This is mounted production-path orchestration, persistence, privacy, and export evidence; it is not a human-microphone, physical-speaker, CUDA, or live GPT-5.6 claim.
   - Remaining: run the complete Milestone 8 unit/eval/lint/type/build/Playwright gate, update the deliverable and gate checkboxes, then begin Milestone 9 hardening/documentation while retaining the external Milestone 5 hardware checks.
   - Commits: `09d96f9` and `c65062d`; the browser-proof commit follows this checkpoint.
+
+- 2026-07-20 12:06-12:13 IST - Milestone 8 complete gate
+  - Verified: the full root suite passed 173 files plus three intentional live-only skips, with 1,557 tests passed and three skipped; the three-file eval suite passed all 17 tests and the exact repeated gate remains 10/10. Root and Convex TypeScript, lint, the 20-page production build, and 182 speech-service CPU/fake tests passed. The complete five-scenario Chromium suite passed in 2.4 minutes, including the visual atlas, WebGL fallback, preflight, mid-sentence objection, and the 1.6-minute complete voice-to-Records/export trial.
+  - Gate result: all Milestone 8 deliverables and its three acceptance gates are now checked. Court Records exposes the allowlisted debrief/replay/trace/event/knowledge/latency/audio surface, and the downloadable bundle is the exact same strict owner-bound v2 projection used by the browser.
+  - Boundary: the three root skips remain explicit live-only checks, lint retains four warnings only in generated Convex files, and the speech/browser runs use CPU/fake media and muted playback. Nothing here claims live GPT-5.6 quality, real microphone/speaker behavior, or CUDA performance.
+  - Remaining: begin Milestone 9 verification orchestration, security/privacy review, documentation, demo/recovery proof, and honest external/live-check reporting. Milestone 5 target-hardware verification remains open.
+  - Commits: implementation and browser proof are on `origin/main` through `57d6d65`; the plan-only gate closure follows.
 
 ## 14. Discoveries
 
@@ -1511,6 +1518,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run test:e2e -- tests/e2e/hearing-objection.spec.ts -g "completes two witnesses by voice"` - exit 0 in 2.0 minutes; one selected Chromium test passed. It exercised the fake-media/muted production path through completion, exact durable hearing reload, exact-trial Records navigation, stable owner list/detail, all nine sections, bounded ledger, repeat exact downloads, strict v2/deep equality, private-key/canary/exact-owner-ID rejection, no composer, and empty product/browser/non-cancellation API error collections. The separate mid-sentence objection test passed in both preceding full-file attempts (26.3-27.0 seconds); a final combined Playwright run remains part of the complete Milestone 8 gate.
   - `git push origin main` - exit 0 through `c65062d`; the sequential-user-audit and cancellation-classification fixes are on `origin/main`.
   - This is deterministic fake-media/fake-model browser evidence and does not verify physical microphone/speaker behavior, CUDA inference, or live GPT-5.6 output.
+
+- 2026-07-20 12:06-12:13 IST - Milestone 8 complete verification gate
+  - `npm test -- --reporter=dot` - exit 0 in 17.99 seconds; 173 files passed, three live-only files skipped, 1,557 tests passed, and three skipped. Nine expected `hearing_interruption_failed` diagnostics came only from named negative-path BFF cases; there were no failed or unhandled tests.
+  - `npm run eval -- --reporter=dot` - exit 0; three files and 17 tests passed in 1.86 seconds, including the content-pinned three-case 10/10 repeated gate and its 9/10-pass/8/10-fail threshold tests.
+  - `npm run lint` - exit 0 in 14.573 seconds with zero errors and the four existing unused-disable warnings in generated Convex files. `npm run typecheck -- --pretty false` - exit 0 in 2.480 seconds. `npx tsc --noEmit -p convex/tsconfig.json --pretty false` - exit 0 in 5.328 seconds.
+  - `npm run build` - exit 0 in 28.3 seconds; Next.js 16.2.10 compiled in 7.8 seconds, typechecked in 12.5 seconds, generated 20/20 pages, and retained the owner-bound Records routes as dynamic server boundaries.
+  - From `services/speech`, `uv sync --extra dev` - exit 0 after resolving 146/checking 34 packages; `uv run pytest` - exit 0 with 182 passed, zero skipped, and one Starlette deprecation warning in 7.25 seconds. This is CPU/fake evidence only.
+  - `npm run test:e2e` - exit 0 in 147.1 seconds; all five Chromium scenarios passed using four workers. Timings were 1.0 seconds preflight, 5.0 seconds WebGL fallback, 20.5 seconds visual atlas, 29.2 seconds mid-sentence objection, and 1.6 minutes for the complete two-witness voice-to-Records trial.
+  - No live OpenAI, real microphone/speaker, or GPU-model check was executed by this gate. Those items are neither counted as passed nor silently folded into deterministic browser/speech evidence.
 
 ## 17. Blocked external prerequisites
 
