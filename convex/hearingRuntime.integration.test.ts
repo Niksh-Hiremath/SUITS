@@ -3244,6 +3244,12 @@ describe("V3 hearing runtime facade", () => {
         actorRole: "judge",
         source: "ai",
       });
+      if (judgeGeneration.output.proposedAction.kind !== "rule_on_strike_motion") {
+        throw new Error("Expected a strike-ruling proposal");
+      }
+      expect(JSON.parse(rulingEvent?.payloadJson ?? "null")).toMatchObject({
+        reason: judgeGeneration.output.proposedAction.reason,
+      });
       expect(
         afterRuling.state.strikeMotions[judgeDirective.motionId],
       ).toMatchObject({

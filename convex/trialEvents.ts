@@ -1641,6 +1641,7 @@ function requireGeneratedJudgeResponseAction(
     action.payload.motionId !== motion.payload.motionId ||
     (proposed.ruling === "granted" &&
       (action.type !== "STRIKE_TESTIMONY" ||
+        action.payload.reason !== proposed.reason ||
         !sameIdentifierSet(
           action.payload.testimonyIds,
           motion.payload.testimonyIds,

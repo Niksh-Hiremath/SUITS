@@ -5431,6 +5431,7 @@ export const commitJudgeGeneration = internalAction({
                     head.state.testimony[testimonyId]?.factIds ?? [],
                 ),
               ),
+              reason: rulingAction.reason,
               speech,
             },
           })

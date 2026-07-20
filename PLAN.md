@@ -960,6 +960,11 @@ Update after each meaningful checkpoint using dated entries:
   - Remaining: replace the static `/records` notice with the bounded owner list/detail/download workspace, restore exact-trial navigation, extend the full-trial browser fixture to prove persisted metadata-only audio rows and stable exports, then run the complete Milestone 8 gate. No human microphone, physical speaker, CUDA, or live GPT claim is made by this checkpoint.
   - Commits: `0e7b9da`, `9506886`, `89f4ddd`, `d0746d0`, `90874de`, `1a1807c`, `6a9c223`, `6afec99`, and `de5b787`.
 
+- 2026-07-20 10:00 IST - Milestone 8 strike-ruling provenance checkpoint
+  - Changed: the V3 granted-strike payload now retains the exact validated judge reason as an optional backward-compatible field. New AI strike grants commit that reason, and the atomic generated-action boundary rejects any action whose reason differs from the accepted structured proposal; existing V3 rows without the field remain readable.
+  - Verified: the two Convex hearing/event integration files passed 48 tests. Root and Convex TypeScript, scoped ESLint, and `git diff --check` passed.
+  - Remaining: expose privacy-safe normalized rulings and recovery events in the versioned Court Records projection, then build the bounded records workspace and browser proof.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1051,6 +1056,7 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Debrief transcript-event bindings are canonically sorted by transcript-turn ID before their event IDs are folded into the generic trace. Reconstructing them in chronological transcript order rejects otherwise valid real rows whenever lexical and chronological turn orders differ.
 - A repeated gate is meaningful only when its contract binds every distinct run index and deterministic seed, validates the requested scenario identity/content hash, catches execution failures without fabricating passed invariants, and tests the nine-of-ten threshold itself. Ten identical unchecked success objects are not gate evidence.
 - A schema-valid client audio-audit row can still name a forged canonical turn, actor, ruling, or interruption. Persisting first and rejecting only during Court Records projection makes one bad noncanonical row deny all later record reads; exact semantic projection must therefore run against a canonical owner-bound replay inside the insertion transaction.
+- The structured judge-response contract always carries a strike-ruling reason, but granted AI strike events previously discarded it while denied rulings persisted it. Making the V3 grant reason optional preserves legacy replay while retaining exact provenance for every new generated ruling.
 - A browser `keepalive` request may disconnect during `pagehide` even though its server work should finish. Forwarding `NextRequest.signal` into the Convex service client cancels that append; the BFF must decouple the browser signal while retaining its own bounded service timeout.
 - React Strict Mode preserves component refs across its setup-cleanup-setup probe while asynchronous controller close may emit a late playback terminal. One component-global audio sink can therefore be closed or fed by the wrong controller generation; effect-local sink ownership plus a binder identity fence is required.
 
@@ -1142,6 +1148,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Persist client-observed audio only as explicitly noncanonical, content-free lifecycle aggregates. Bind every row to an owner-verified canonical replay and the shared Court Records projector before insertion; never store raw audio, transcript fragments, timing-mark values, browser authority, or provider errors.
 - Deliver browser audio audits through a trial-pinned, bounded, single-flight keepalive queue. Cache the exact validated JSON bytes for idempotent retry, retry only network/408/425/429/5xx outcomes, and fail closed on permanent 4xx, malformed success, receipt mismatch, identity conflict, or capacity exhaustion without affecting courtroom audio.
 - Own each browser audit sink within one controller effect. Bind it only from the first validated owner-bound view, reload and reject a cross-trial publish, keep its performance subscription until `controller.close()` completes, then unsubscribe and close it with all teardown promises handled.
+- Preserve a generated strike grant's validated judicial reason in the append-only V3 event and verify it against the accepted proposal at the atomic commit boundary. Keep the field optional so historical V3 events remain replayable without fabricating a reason.
 
 ## 16. Verification Evidence
 
@@ -1441,6 +1448,12 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm test -- --reporter=dot` - exit 0 in 18.3 seconds; 167 files passed, three intentional live-only files skipped, 1,480 tests passed, and three skipped. Expected mocked interruption-error diagnostics were printed to stderr by failure-path tests and did not fail the run.
   - Independent final browser-sink review reran five files and 88 tests plus TypeScript, scoped ESLint, and `git diff --check`; it found no blocking metadata-privacy, exact-byte retry, retry-classification, queue, trial-pinning, disconnect, Strict Mode, or controller-close issue. Mounted pagehide persistence and the full browser export proof remain deliberately pending for the records UI gate.
   - `git push origin main` - exit 0 through `de5b787`; owner records delivery, semantic-safe audio persistence, keepalive disconnect hardening, and the browser audit sink are on `origin/main`.
+
+- 2026-07-20 10:00 IST - Milestone 8 strike-ruling provenance verification
+  - `npm test -- convex/hearingRuntime.integration.test.ts convex/trialEvents.integration.test.ts` - exit 0; two files and 48 tests passed, including exact reason persistence and rejection of a tampered granted-ruling reason before any event or trace append.
+  - `npm run typecheck`, `npx tsc --noEmit -p convex/tsconfig.json`, scoped ESLint, and `git diff --check` - exit 0.
+  - `npx convex dev --once --typecheck enable --tail-logs disable` - exit 0; linked development deployment `cheery-bandicoot-36` accepted the updated functions without another login prompt.
+  - The new field is optional in `trial-event.v3`; these checks do not claim that historical events acquired a reason or that the Court Records browser workspace is complete.
 
 ## 17. Blocked external prerequisites
 

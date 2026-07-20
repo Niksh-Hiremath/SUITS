@@ -755,6 +755,7 @@ function generatedJudgeStrikeAction(
         motionId: `motion:${generation.trialId}`,
         testimonyIds: [JUDGE_STRIKE_TESTIMONY_ID],
         factIds: [JUDGE_STRIKE_FACT_ID],
+        reason: proposed.reason,
         speech,
       },
     }) as Extract<TrialActionV3, { type: "STRIKE_TESTIMONY" }>;
@@ -1434,8 +1435,12 @@ describe("atomic generated judge-response append", () => {
         actorId: ACTORS.judge.actorId,
         source: "ai",
       });
+      if (generation.output.proposedAction.kind !== "rule_on_strike_motion") {
+        throw new Error("Expected a strike-ruling proposal");
+      }
       expect(JSON.parse(rulingEvents[0]?.payloadJson ?? "null")).toMatchObject({
         motionId: fixture.motionId,
+        reason: generation.output.proposedAction.reason,
         speech: {
           turnId: expect.stringContaining("turn:judge-strike-ruling:"),
           text: generation.output.speechSegments[0]?.text,
@@ -1476,6 +1481,39 @@ describe("atomic generated judge-response append", () => {
       });
     },
   );
+
+  it("rejects a granted strike action whose persisted reason differs from the validated proposal", async () => {
+    const fixture = await setupPendingJudgeStrikeMotion("granted");
+    const generation = judgeStrikeGeneration({
+      trialId: fixture.trialId,
+      motionEventId: fixture.motionEventId,
+      ruling: "granted",
+    });
+    const generated = generatedJudgeStrikeAction(generation);
+    if (generated.type !== "STRIKE_TESTIMONY") {
+      throw new Error("Expected a granted strike action");
+    }
+    const tampered = TrialActionV3Schema.parse({
+      ...generated,
+      payload: {
+        ...generated.payload,
+        reason: "A different reason that was never validated.",
+      },
+    });
+
+    await expect(
+      appendJudgeResponse(fixture.backend, tampered, generation),
+    ).rejects.toThrow("JUDGE_GENERATION_INVALID");
+
+    const persisted = await fixture.backend.run(async (ctx) => ({
+      events: await ctx.db.query("trialEvents").collect(),
+      calls: await ctx.db.query("courtroomModelCalls").collect(),
+      attempts: await ctx.db.query("courtroomModelCallAttempts").collect(),
+    }));
+    expect(persisted.events).toHaveLength(8);
+    expect(persisted.calls).toHaveLength(0);
+    expect(persisted.attempts).toHaveLength(0);
+  });
 
   it.each([
     ["fact", "factIds", JUDGE_STRIKE_FACT_ID],

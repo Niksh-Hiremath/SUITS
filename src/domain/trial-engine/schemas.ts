@@ -616,6 +616,7 @@ const StrikePayloadV1Schema = z
   .strict();
 const StrikePayloadV2Schema = StrikePayloadV1Schema;
 const StrikePayloadV3Schema = StrikePayloadV2Schema.extend({
+  reason: z.string().trim().min(1).max(4_000).optional(),
   speech: TranscriptSpeechBundleV3Schema.optional(),
 }).strict();
 const DenyStrikeMotionPayloadV3Schema = z
