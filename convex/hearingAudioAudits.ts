@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import {
   HEARING_AUDIO_AUDIT_MAX_EPOCH_MS,
   HearingAudioAuditRecordSchema,
+  type HearingAudioAuditPersistResult,
   type HearingAudioAuditRecord,
 } from "../src/lib/speech/hearing-audio-audit";
 import {
@@ -22,10 +23,7 @@ import { CaseServiceOwnerIdSchema } from "./caseServiceBoundary";
 const MAX_RECORD_JSON_CHARACTERS = 128_000;
 export const MAX_HEARING_AUDIO_AUDITS_PER_TRIAL = 4_096;
 
-export type PersistHearingAudioAuditResult = Readonly<{
-  recordId: string;
-  replayed: boolean;
-}>;
+export type PersistHearingAudioAuditResult = HearingAudioAuditPersistResult;
 
 function invalidRecord(): never {
   throw new Error("HEARING_AUDIO_AUDIT_RECORD_INVALID");

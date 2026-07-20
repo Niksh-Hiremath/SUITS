@@ -29,6 +29,7 @@ import {
   HearingOpponentPlanPrecommitSchema,
   HearingPlayerCommandSchema,
   HearingRuntimeViewV1Schema,
+  HearingTrialIdSchema,
   HearingWitnessGenerationPrecommitSchema,
   StartHearingRequestSchema,
   type HearingCommandPreparation,
@@ -56,6 +57,11 @@ import {
   DurableServiceHealthRequestSchema,
   DurableServiceHealthResponseSchema,
 } from "../src/domain/preflight";
+import {
+  HearingAudioAuditIngestRequestSchema,
+  HearingAudioAuditPersistResultSchema,
+  type HearingAudioAuditPersistResult,
+} from "../src/lib/speech/hearing-audio-audit";
 
 import { httpAction } from "./_generated/server";
 import {
@@ -345,6 +351,11 @@ const readCourtRecordsForOwnerReference = makeFunctionReference<
   { ownerId: string; trialId: string },
   CourtRecordsView
 >("courtRecords:readForOwner");
+const recordHearingAudioAuditReference = makeFunctionReference<
+  "mutation",
+  { ownerId: string; trialId: string; recordJson: string },
+  HearingAudioAuditPersistResult
+>("hearingAudioAudits:recordForOwner");
 
 const HearingServiceStartRequestSchema = z
   .object({
@@ -611,6 +622,11 @@ export const CourtRecordsServiceReadRequestSchema = z
 const CourtRecordsServiceListResponseSchema = z
   .array(CourtRecordsTrialSummarySchema)
   .max(64);
+export const HearingServiceAudioAuditRequestSchema =
+  HearingAudioAuditIngestRequestSchema.extend({
+    ownerId: CaseServiceOwnerIdSchema,
+    trialId: HearingTrialIdSchema,
+  }).strict();
 
 const acquireCaseCompileClaim = httpAction(async (ctx, request) => {
   try {
@@ -1206,6 +1222,27 @@ const readCourtRecords = httpAction(async (ctx, request) => {
   }
 });
 
+const recordHearingAudioAudit = httpAction(async (ctx, request) => {
+  try {
+    await authorizeCaseServiceRequest(
+      request,
+      process.env.SUITS_CONVEX_SERVICE_SECRET,
+    );
+    const body = await parseCaseServiceJson(
+      request,
+      HearingServiceAudioAuditRequestSchema,
+    );
+    const result = await ctx.runMutation(recordHearingAudioAuditReference, {
+      ownerId: body.ownerId,
+      trialId: body.trialId,
+      recordJson: JSON.stringify(body.record),
+    });
+    return caseServiceJson(HearingAudioAuditPersistResultSchema.parse(result));
+  } catch (error) {
+    return caseServiceErrorResponse(error);
+  }
+});
+
 const serviceHealth = httpAction(async (_ctx, request) => {
   try {
     await authorizeCaseServiceRequest(
@@ -1280,5 +1317,6 @@ http.route({ path: "/service/hearings/model-call/terminal", method: "POST", hand
 http.route({ path: "/service/hearings/read", method: "POST", handler: readHearing });
 http.route({ path: "/service/court-records/list", method: "POST", handler: listCourtRecords });
 http.route({ path: "/service/court-records/read", method: "POST", handler: readCourtRecords });
+http.route({ path: "/service/hearings/audio-audit/record", method: "POST", handler: recordHearingAudioAudit });
 
 export default http;

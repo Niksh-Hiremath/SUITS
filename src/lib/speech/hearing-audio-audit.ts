@@ -226,7 +226,21 @@ export const HearingAudioAuditRecordSchema = z
     }
   });
 
+export const HearingAudioAuditIngestRequestSchema = z
+  .object({ record: HearingAudioAuditRecordSchema })
+  .strict();
+
+export const HearingAudioAuditPersistResultSchema = z
+  .object({
+    recordId: Sha256Schema,
+    replayed: z.boolean(),
+  })
+  .strict();
+
 export type HearingAudioAuditRecord = z.infer<typeof HearingAudioAuditRecordSchema>;
+export type HearingAudioAuditPersistResult = z.infer<
+  typeof HearingAudioAuditPersistResultSchema
+>;
 
 export type HearingAudioAuditConsumeDisposition =
   | "accepted"
