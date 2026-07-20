@@ -2619,6 +2619,35 @@ describe("HearingController", () => {
     expect(test.controller.snapshot.lifecycle).toBe("ready");
   });
 
+  it("emits one terminal-only user event when a final arrives without a VAD start", async () => {
+    const test = harness();
+    await test.controller.prepare();
+    await test.controller.startRecording("question");
+    const utteranceId = test.client.utterances[0]?.utteranceId;
+    if (utteranceId === undefined) throw new Error("missing utterance");
+
+    emitSttFinal(test.client, utteranceId, 1, "What happened next?");
+    await flushAsync();
+
+    expect(
+      test.performanceEvents.filter(
+        (event) =>
+          (event.type === "user_speech_started" ||
+            event.type === "user_speech_ended") &&
+          event.utteranceId === utteranceId,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "user_speech_ended",
+        utteranceId,
+        reason: "final_received",
+        observedAtMs: 1_000,
+        timestampSource: "controller",
+      }),
+    ]);
+    expect(test.controller.snapshot.lifecycle).toBe("ready");
+  });
+
   it("ends started user speech on disconnect before cleanup completes", async () => {
     const test = harness();
     await test.controller.prepare();

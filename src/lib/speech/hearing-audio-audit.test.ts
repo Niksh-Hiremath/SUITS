@@ -372,17 +372,32 @@ describe("privacy-safe hearing audio audit preparation", () => {
     );
   });
 
-  it("fences stale and conflicting user utterance identities", () => {
+  it("allows distinct utterances within one generation while fencing alias conflicts and stale generations", () => {
     const time = controlledClock();
     const preparer = createHearingAudioAuditPreparer({ clock: time.clock });
-    preparer.consume(userStarted(4, "utterance:4"));
+    expect(preparer.consume(userStarted(4, "utterance:4"))).toBe("accepted");
     time.set(1_001);
-    expect(preparer.consume(userStarted(4, "utterance:other"))).toBe("identity_conflict");
+    expect(preparer.consume(userEnded(4, "utterance:4"))).toBe("record_ready");
     time.set(1_002);
-    expect(preparer.consume(userStarted(5, "utterance:5"))).toBe("accepted");
+    expect(preparer.consume(userStarted(4, "utterance:other"))).toBe("accepted");
     time.set(1_003);
-    expect(preparer.consume(userEnded(4, "utterance:4"))).toBe("stale");
+    expect(
+      preparer.consume(userStarted(4, "utterance:other", "closing")),
+    ).toBe("identity_conflict");
+    time.set(1_004);
+    expect(preparer.consume(userEnded(4, "utterance:other"))).toBe(
+      "record_ready",
+    );
+    time.set(1_005);
+    expect(
+      preparer.consume(userEnded(4, "utterance:4", "closing")),
+    ).toBe("identity_conflict");
+    time.set(1_006);
+    expect(preparer.consume(userStarted(5, "utterance:5"))).toBe("accepted");
+    time.set(1_007);
+    expect(preparer.consume(userEnded(4, "utterance:late"))).toBe("stale");
     expect(preparer.activeEntryCount).toBe(1);
+    expect(preparer.flush()).toHaveLength(2);
   });
 
   it("bounds active entries and allows a rejected identity to retry after capacity frees", () => {

@@ -81,13 +81,15 @@ function createEpochSource(start = 10_000): () => number {
 function userSpeechEvent(
   generation: number,
   type: "user_speech_started" | "user_speech_ended",
+  utteranceId = `utterance:audit:${generation}`,
+  mode: "question" | "closing" = "question",
 ): HearingPerformanceEvent {
   const common = {
     schemaVersion: HEARING_PERFORMANCE_EVENT_SCHEMA_VERSION,
     generation,
-    utteranceId: `utterance:audit:${generation}`,
+    utteranceId,
     sceneActor: "user_counsel" as const,
-    mode: "question" as const,
+    mode,
     observedAtMs: generation * 100,
     timestampSource: "speech_service" as const,
   };
@@ -106,10 +108,16 @@ function userSpeechEvent(
 function completeUserSpeech(
   sink: HearingAudioAuditSink,
   generation: number,
+  utteranceId = `utterance:audit:${generation}`,
+  mode: "question" | "closing" = "question",
 ): readonly [string, string] {
   return [
-    sink.observe(userSpeechEvent(generation, "user_speech_started")),
-    sink.observe(userSpeechEvent(generation, "user_speech_ended")),
+    sink.observe(
+      userSpeechEvent(generation, "user_speech_started", utteranceId, mode),
+    ),
+    sink.observe(
+      userSpeechEvent(generation, "user_speech_ended", utteranceId, mode),
+    ),
   ];
 }
 
@@ -255,7 +263,7 @@ describe("HearingAudioAuditSink", () => {
     }
   });
 
-  it("keeps a single request in flight while draining queued records in order", async () => {
+  it("drains multiple utterances from one controller generation in order", async () => {
     const first = deferred<Response>();
     const calls: Array<RequestInit> = [];
     const fetcher: HearingAudioAuditSinkFetch = (input, init) => {
@@ -270,21 +278,50 @@ describe("HearingAudioAuditSink", () => {
       epochSource: createEpochSource(),
     });
 
-    expect(completeUserSpeech(sink, 1)).toEqual(["accepted", "record_ready"]);
-    expect(completeUserSpeech(sink, 2)).toEqual(["accepted", "record_ready"]);
+    expect(completeUserSpeech(sink, 1, "utterance:question:1")).toEqual([
+      "accepted",
+      "record_ready",
+    ]);
+    expect(completeUserSpeech(sink, 1, "utterance:question:2")).toEqual([
+      "accepted",
+      "record_ready",
+    ]);
+    expect(
+      completeUserSpeech(sink, 1, "utterance:closing:1", "closing"),
+    ).toEqual(["accepted", "record_ready"]);
     expect(calls).toHaveLength(1);
-    expect(sink.snapshot).toMatchObject({ queueDepth: 2, inFlight: true });
+    expect(sink.snapshot).toMatchObject({ queueDepth: 3, inFlight: true });
 
     const firstCall = calls[0];
     if (firstCall === undefined) throw new Error("Missing first request");
     first.resolve(acceptedResponse(firstCall));
-    await drainMicrotasks();
-    expect(calls).toHaveLength(2);
-    expect(requestFrom(calls[0] ?? {}).record.identity.generation).toBe(1);
-    expect(requestFrom(calls[1] ?? {}).record.identity.generation).toBe(2);
-    await drainMicrotasks();
-    expect(sink.snapshot).toMatchObject({ queueDepth: 0, inFlight: false });
     await sink.close();
+    expect(calls).toHaveLength(3);
+    const records = calls.map((call) => requestFrom(call).record);
+    const userRecords = records.map((record) => {
+      if (record.kind !== "user_speech") {
+        throw new Error("Expected a user speech audit record");
+      }
+      return record;
+    });
+    expect(userRecords.map(({ identity }) => identity.utteranceId)).toEqual([
+      "utterance:question:1",
+      "utterance:question:2",
+      "utterance:closing:1",
+    ]);
+    expect(userRecords.map(({ identity }) => identity.generation)).toEqual([
+      1, 1, 1,
+    ]);
+    expect(userRecords).toEqual([
+      expect.objectContaining({ mode: "question" }),
+      expect.objectContaining({ mode: "question" }),
+      expect.objectContaining({ mode: "closing" }),
+    ]);
+    expect(sink.snapshot).toMatchObject({
+      status: "closed",
+      queueDepth: 0,
+      inFlight: false,
+    });
   });
 
   it("fails stop at the queue bound without disturbing the in-flight request", async () => {

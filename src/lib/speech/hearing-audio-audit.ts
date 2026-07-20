@@ -295,13 +295,20 @@ type PlaybackEntry = {
   eventFingerprints: Set<string>;
 };
 
-type CompletedIdentity = {
-  kind: "user_speech" | "playback";
-  key: string;
-  jobAlias: string | null;
-  responseAlias: string | null;
-  eventFingerprints: ReadonlySet<string>;
-};
+type CompletedIdentity =
+  | Readonly<{
+      kind: "user_speech";
+      key: string;
+      userAlias: string;
+      eventFingerprints: ReadonlySet<string>;
+    }>
+  | Readonly<{
+      kind: "playback";
+      key: string;
+      jobAlias: string;
+      responseAlias: string;
+      eventFingerprints: ReadonlySet<string>;
+    }>;
 
 type RecordIdInput =
   | Readonly<{
@@ -383,6 +390,13 @@ function userKey(event: UserEvent): string {
     event.sceneActor,
     event.mode,
   ]);
+}
+
+function userAlias(
+  identity: Readonly<{ generation: number; utteranceId: string }>,
+): string {
+  // One prepared controller generation owns many sequential utterances.
+  return JSON.stringify([identity.generation, identity.utteranceId]);
 }
 
 function playbackKey(event: PlaybackEvent): string {
@@ -561,20 +575,22 @@ export class HearingAudioAuditPreparer {
       this.#userHighWater = event.generation;
     }
     const key = userKey(event);
+    const alias = userAlias(event);
     const fingerprint = eventFingerprint(event);
     const completed = this.#findCompleted("user_speech", key);
     if (completed) {
       return completed.eventFingerprints.has(fingerprint) ? "duplicate" : "stale";
     }
-    const completedGenerationConflict = this.#completed.some(
+    const completedAliasConflict = this.#completed.some(
       (entry) =>
         entry.kind === "user_speech" &&
-        entry.jobAlias === String(event.generation) &&
+        entry.userAlias === alias &&
         entry.key !== key,
     );
-    if (completedGenerationConflict) return "identity_conflict";
+    if (completedAliasConflict) return "identity_conflict";
     const conflicting = [...this.#users.values()].some(
-      (entry) => entry.identity.generation === event.generation && entry.key !== key,
+      (entry) =>
+        userAlias(entry.identity) === alias && entry.key !== key,
     );
     if (conflicting) return "identity_conflict";
 
@@ -650,8 +666,7 @@ export class HearingAudioAuditPreparer {
     this.#rememberCompleted({
       kind: "user_speech",
       key,
-      jobAlias: String(event.generation),
-      responseAlias: null,
+      userAlias: alias,
       eventFingerprints: new Set(entry.eventFingerprints),
     });
     return "record_ready";

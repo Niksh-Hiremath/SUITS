@@ -1484,10 +1484,9 @@ export class HearingController {
     observedAtMs = this.localPerformanceNowMs(),
     timestampSource: "speech_service" | "controller" = "controller",
   ): void {
-    if (
-      !recording.performanceSpeechStarted ||
-      recording.performanceSpeechEnded
-    ) {
+    // STT may finalize without VAD ever reporting a start. Retain that exact
+    // terminal-only observation; the audit contract represents its start as null.
+    if (recording.performanceSpeechEnded) {
       return;
     }
     recording.performanceSpeechEnded = true;
