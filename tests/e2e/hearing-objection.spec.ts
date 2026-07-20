@@ -1,5 +1,18 @@
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Response,
+  type TestInfo,
+} from "@playwright/test";
 
+import {
+  HearingPlayerCommandSchema,
+  HearingRuntimeViewV1Schema,
+  HearingTrialIdSchema,
+  type HearingRuntimeViewV1,
+} from "../../src/domain/hearing-runtime";
 import {
   FinalBoundInterruptionRequestSchema,
   FinalBoundInterruptionResolutionSchema,
@@ -65,6 +78,24 @@ type PerformanceObservation = Readonly<{
   canvasMouthActor: string | null;
   canvasMouthShape: string | null;
 }>;
+
+test.use({ video: "on" });
+
+async function saveSuccessVideo(
+  page: Page,
+  testInfo: TestInfo,
+  name: string,
+): Promise<void> {
+  const video = page.video();
+  await page.close();
+  if (video === null) return;
+  const outputPath = testInfo.outputPath(`${name}.webm`);
+  await video.saveAs(outputPath);
+  await testInfo.attach(name, {
+    path: outputPath,
+    contentType: "video/webm",
+  });
+}
 
 function parseControl(payload: unknown): JsonControl | null {
   if (typeof payload !== "string") return null;
@@ -383,6 +414,116 @@ async function waitForPerformanceObservation(
   return matched;
 }
 
+function witnessCard(page: Page, name: string): Locator {
+  return page
+    .getByRole("complementary", { name: "Case and witness controls" })
+    .locator(".case-timeline")
+    .filter({ hasText: name });
+}
+
+function isCommandResponseFor(
+  response: Response,
+  intentType: "call_witness" | "finish_witness" | "finish_trial",
+): boolean {
+  const request = response.request();
+  if (request.method() !== "POST") return false;
+  if (!/\/api\/hearings\/[^/]+\/commands$/u.test(new URL(response.url()).pathname)) {
+    return false;
+  }
+  try {
+    const command = HearingPlayerCommandSchema.parse(request.postDataJSON());
+    return command.intent.type === intentType;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForLocalAudioReady(page: Page): Promise<void> {
+  await expect(
+    page.getByText("Local courtroom audio ready", { exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
+async function callWitnessByName(page: Page, name: string): Promise<void> {
+  const card = witnessCard(page, name);
+  await expect(card).toHaveCount(1);
+  const responsePromise = page.waitForResponse(
+    (response) => isCommandResponseFor(response, "call_witness"),
+    { timeout: 45_000 },
+  );
+  const call = card.getByRole("button", { name: "Call witness", exact: true });
+  await expect(call).toBeVisible({ timeout: 30_000 });
+  await expect(call).toBeEnabled();
+  await call.click();
+  expect((await responsePromise).ok()).toBe(true);
+  await expect(page.getByText(`direct · ${name}`, { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+async function submitFakeSpokenQuestion(
+  page: Page,
+  expectedAnswerCount: number,
+): Promise<void> {
+  await waitForLocalAudioReady(page);
+  const start = page.getByRole("button", {
+    name: "Start spoken question",
+    exact: true,
+  });
+  await expect(start).toBeVisible({ timeout: 30_000 });
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(
+    page.getByText("I do not recall that.", { exact: true }),
+  ).toHaveCount(expectedAnswerCount, { timeout: 45_000 });
+  await waitForLocalAudioReady(page);
+}
+
+async function finishWitnessByName(page: Page, name: string): Promise<void> {
+  const card = witnessCard(page, name);
+  const finishLeg = async (): Promise<void> => {
+    await waitForLocalAudioReady(page);
+    const responsePromise = page.waitForResponse(
+      (response) => isCommandResponseFor(response, "finish_witness"),
+      { timeout: 45_000 },
+    );
+    const finish = page.getByRole("button", {
+      name: "End examination",
+      exact: true,
+    });
+    await expect(finish).toBeVisible({ timeout: 30_000 });
+    await expect(finish).toBeEnabled({ timeout: 30_000 });
+    await finish.click();
+    expect((await responsePromise).ok()).toBe(true);
+  };
+
+  await finishLeg();
+  const redirect = page.getByText(`redirect · ${name}`, { exact: true });
+  await expect
+    .poll(
+      async () =>
+        (await card.innerText()).includes("released · called 1 time") ||
+        (await redirect.isVisible()),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  if (await redirect.isVisible()) await finishLeg();
+  await expect(card).toContainText("released · called 1 time", {
+    timeout: 30_000,
+  });
+}
+
+async function readDurableHearing(
+  page: Page,
+  trialId: string,
+): Promise<HearingRuntimeViewV1> {
+  const response = await page.request.get(
+    `/api/hearings/${encodeURIComponent(trialId)}`,
+  );
+  expect(response.ok()).toBe(true);
+  return HearingRuntimeViewV1Schema.parse(await response.json());
+}
+
 test.describe("production-path partial objection", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -529,6 +670,13 @@ test.describe("production-path partial objection", () => {
     );
     expect(playbackStop.order).toBeLessThan(utteranceStart.order);
     expect(bargeIn.order).toBeLessThan(utteranceStart.order);
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __suitsE2EAudioState: { slowNextStart: boolean };
+        }
+      ).__suitsE2EAudioState.slowNextStart = true;
+    });
 
     const triggerPartial = await waitForObservation(
       observations,
@@ -544,6 +692,22 @@ test.describe("production-path partial objection", () => {
         controlIs(entry, "ws_sent", "synthesize") &&
         entry.control.clipId === "courtroom.objection.v1",
     );
+    await expect(courtroomStage).toHaveAttribute(
+      "data-performance-purpose",
+      "objection",
+      { timeout: 15_000 },
+    );
+    await testInfo.attach("mid-sentence-objection", {
+      body: await courtroomStage.screenshot(),
+      contentType: "image/png",
+    });
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __suitsE2EAudioState: { slowNextStart: boolean };
+        }
+      ).__suitsE2EAudioState.slowNextStart = true;
+    });
     const finalTranscript = await waitForObservation(
       observations,
       (entry) =>
@@ -617,6 +781,22 @@ test.describe("production-path partial objection", () => {
         entry.control.clipId === "courtroom.overruled.v1",
       30_000,
     );
+    await expect(courtroomStage).toHaveAttribute(
+      "data-ruling-phase",
+      "gavel",
+      { timeout: 15_000 },
+    );
+    await testInfo.attach("judge-ruling-gavel", {
+      body: await courtroomStage.screenshot(),
+      contentType: "image/png",
+    });
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __suitsE2EAudioState: { slowNextStart: boolean };
+        }
+      ).__suitsE2EAudioState.slowNextStart = true;
+    });
     const resumedWitness = await waitForObservation(
       observations,
       (entry) =>
@@ -624,6 +804,15 @@ test.describe("production-path partial objection", () => {
         entry.control.text === "I do not recall that.",
       30_000,
     );
+    await expect(courtroomStage).toHaveAttribute(
+      "data-performance-purpose",
+      "testimony",
+      { timeout: 15_000 },
+    );
+    await testInfo.attach("resumed-witness-testimony", {
+      body: await courtroomStage.screenshot(),
+      contentType: "image/png",
+    });
     expect(objectionClip.order).toBeLessThan(overruledClip.order);
     expect(overruledClip.order).toBeLessThan(resumedWitness.order);
     const localAudioEvents = await page.evaluate(() =>
@@ -921,5 +1110,207 @@ test.describe("production-path partial objection", () => {
     ).length;
     expect(commandRequestsAfterRuling).toBe(commandRequestsBeforeRecording);
     expect(browserErrors).toEqual([]);
+    await saveSuccessVideo(page, testInfo, "mid-sentence-objection");
+  });
+
+  test("completes two witnesses by voice and resumes the exact durable record", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const browserErrors: string[] = [];
+    const apiFailures: string[] = [];
+    const commandIntents: string[] = [];
+    let startRequestCount = 0;
+    page.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (request.method() === "POST" && pathname === "/api/hearings") {
+        startRequestCount += 1;
+      }
+      if (
+        request.method() !== "POST" ||
+        !/\/api\/hearings\/[^/]+\/commands$/u.test(pathname)
+      ) {
+        return;
+      }
+      try {
+        const command = HearingPlayerCommandSchema.parse(
+          request.postDataJSON(),
+        );
+        commandIntents.push(command.intent.type);
+      } catch {
+        commandIntents.push("invalid");
+      }
+    });
+    page.on("response", (response) => {
+      const pathname = new URL(response.url()).pathname;
+      if (pathname.startsWith("/api/hearings") && !response.ok()) {
+        apiFailures.push(`${response.status()} ${pathname}`);
+      }
+    });
+
+    const navigation = await page.goto(
+      "/hearing/?case=redwood-signal-retaliation",
+    );
+    expect(navigation?.ok()).toBe(true);
+    expect(new URL(page.url()).searchParams.has("trial")).toBe(false);
+    const startResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/hearings",
+      { timeout: 45_000 },
+    );
+    await page.getByRole("button", { name: "Begin V3 hearing" }).click();
+    const startResponse = await startResponsePromise;
+    expect(startResponse.ok()).toBe(true);
+    const started = HearingRuntimeViewV1Schema.parse(
+      await startResponse.json(),
+    );
+    const trialId = HearingTrialIdSchema.parse(started.trial.trialId);
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("trial"))
+      .toBe(trialId);
+    expect(startRequestCount).toBe(1);
+
+    await callWitnessByName(page, "Rina Shah");
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
+    await page.getByRole("button", { name: "Prepare local audio" }).click();
+    await waitForLocalAudioReady(page);
+    await submitFakeSpokenQuestion(page, 1);
+    await finishWitnessByName(page, "Rina Shah");
+
+    await waitForLocalAudioReady(page);
+    await callWitnessByName(page, "Theo Morgan");
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
+    await submitFakeSpokenQuestion(page, 2);
+    await finishWitnessByName(page, "Theo Morgan");
+
+    await waitForLocalAudioReady(page);
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    const startClosing = page.getByRole("button", {
+      name: "Start spoken closing argument",
+      exact: true,
+    });
+    await expect(startClosing).toBeVisible({ timeout: 30_000 });
+    await expect(startClosing).toBeEnabled();
+    const completionResponsePromise = page.waitForResponse(
+      (response) => isCommandResponseFor(response, "finish_trial"),
+      { timeout: 120_000 },
+    );
+    await startClosing.click();
+    const stopClosing = page.getByRole("button", {
+      name: "Stop, rest, and close",
+      exact: true,
+    });
+    await expect(stopClosing).toBeVisible({ timeout: 15_000 });
+    await expect(stopClosing).toBeEnabled();
+    await stopClosing.click();
+    const completionResponse = await completionResponsePromise;
+    expect(completionResponse.ok()).toBe(true);
+    const finalView = HearingRuntimeViewV1Schema.parse(
+      await completionResponse.json(),
+    );
+
+    expect(finalView.trial).toMatchObject({
+      trialId,
+      phase: "complete",
+      status: "complete",
+    });
+    const calledWitnesses = finalView.witnesses.filter(
+      ({ callCount }) => callCount > 0,
+    );
+    expect(
+      calledWitnesses.map(({ name }) => name).sort(),
+    ).toEqual(["Rina Shah", "Theo Morgan"]);
+    expect(
+      calledWitnesses.every(
+        ({ callCount, status }) => callCount === 1 && status === "released",
+      ),
+    ).toBe(true);
+    const witnessTurns = finalView.transcript.filter(
+      ({ actor }) => actor.role === "witness",
+    );
+    expect(witnessTurns).toHaveLength(2);
+    expect(witnessTurns.map(({ text }) => text)).toEqual([
+      "I do not recall that.",
+      "I do not recall that.",
+    ]);
+    expect(
+      finalView.transcript.filter(
+        ({ text }) => text === "No further questions, Your Honor.",
+      ),
+    ).toHaveLength(2);
+    expect(
+      finalView.transcript.some(
+        ({ text }) =>
+          text ===
+          "The jury-considerable record does not carry the user's fictional burden.",
+      ),
+    ).toBe(true);
+    await expect(
+      page.getByText("Durable record complete", { exact: true }),
+    ).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText("2 witnesses called", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 answers", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(`state v${finalView.trial.version}`, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
+    await testInfo.attach("complete-two-witness-trial", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
+
+    const durableBeforeReload = await readDurableHearing(page, trialId);
+    expect(durableBeforeReload).toEqual(finalView);
+    const finalUrl = new URL(page.url());
+    const commandCountBeforeReload = commandIntents.length;
+    const resumedResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === `/api/hearings/${trialId}`,
+      { timeout: 45_000 },
+    );
+    const reload = await page.reload();
+    expect(reload?.ok()).toBe(true);
+    const resumedResponse = await resumedResponsePromise;
+    expect(resumedResponse.ok()).toBe(true);
+    const resumed = HearingRuntimeViewV1Schema.parse(
+      await resumedResponse.json(),
+    );
+    expect(resumed).toEqual(durableBeforeReload);
+    await expect(
+      page.getByText("Durable record complete", { exact: true }),
+    ).toBeVisible({ timeout: 45_000 });
+    const resumedUrl = new URL(page.url());
+    expect(resumedUrl.origin).toBe(finalUrl.origin);
+    expect(resumedUrl.pathname.replace(/\/$/u, "")).toBe(
+      finalUrl.pathname.replace(/\/$/u, ""),
+    );
+    expect(resumedUrl.searchParams.toString()).toBe(
+      finalUrl.searchParams.toString(),
+    );
+    expect(commandIntents).toHaveLength(commandCountBeforeReload);
+    expect(commandIntents).not.toContain("invalid");
+    expect(
+      commandIntents.filter((intent) => intent === "call_witness"),
+    ).toHaveLength(2);
+    expect(
+      commandIntents.filter((intent) => intent === "finish_witness"),
+    ).toHaveLength(2);
+    expect(
+      commandIntents.filter((intent) => intent === "finish_trial"),
+    ).toHaveLength(1);
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
+    expect(apiFailures).toEqual([]);
+    expect(browserErrors).toEqual([]);
+    await saveSuccessVideo(page, testInfo, "complete-two-witness-trial");
   });
 });

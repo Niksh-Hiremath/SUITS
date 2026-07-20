@@ -52,6 +52,7 @@ export default defineConfig({
           url: LOCAL_BASE_URL,
           env: {
             ...process.env,
+            NEXT_PUBLIC_SUITS_DEV_TYPED_INPUT: "0",
             NEXT_PUBLIC_SUITS_SPEECH_URL:
               "ws://127.0.0.1:18765/v1/speech",
             SUITS_ENABLE_VISUAL_ATLAS: "1",
