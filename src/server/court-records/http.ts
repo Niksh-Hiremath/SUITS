@@ -87,6 +87,16 @@ export function courtRecordsServiceError(
     allowNotFound: boolean;
   }>,
 ): NextResponse {
+  if (
+    error instanceof ConvexCaseServiceError &&
+    error.code === "CASE_SERVICE_CALLER_ABORTED"
+  ) {
+    return courtRecordsError(
+      499,
+      "COURT_RECORD_REQUEST_CANCELLED",
+      "The Court Records request was cancelled.",
+    );
+  }
   console.error("court_records_service_failed", {
     operation: options.operation,
     name: error instanceof Error ? error.name : "UnknownError",
@@ -107,6 +117,13 @@ export function courtRecordsServiceError(
         409,
         "COURT_RECORD_MIGRATION_REQUIRED",
         "These Court Records must be migrated before they can be opened.",
+      );
+    }
+    if (error.code === "CASE_SERVICE_TIMEOUT") {
+      return courtRecordsError(
+        504,
+        "COURT_RECORD_TIMEOUT",
+        "The Court Records request timed out.",
       );
     }
   }

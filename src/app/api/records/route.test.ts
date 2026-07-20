@@ -324,6 +324,37 @@ describe("Court Records browser BFF", () => {
     }
   });
 
+  it("returns caller cancellation without logging a service failure", async () => {
+    const callerController = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      callerController.abort(
+        new DOMException("browser request cancelled", "AbortError"),
+      );
+      throw init?.signal?.reason ?? new DOMException("aborted", "AbortError");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const request = new NextRequest(`${PUBLIC_ORIGIN}/api/records`, {
+      headers: {
+        Cookie: `${CASE_OWNER_COOKIE_NAME}=${sessionCookie()}`,
+        Origin: PUBLIC_ORIGIN,
+      },
+      signal: callerController.signal,
+    });
+
+    const response = await listCourtRecords(request);
+
+    expect(response.status).toBe(499);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "COURT_RECORD_REQUEST_CANCELLED",
+        message: "The Court Records request was cancelled.",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(console.error).not.toHaveBeenCalled();
+    expectPrivateHeaders(response);
+  });
+
   it("allowlists public errors and collapses every other failure", async () => {
     const responses: Array<Response | Error> = [
       Response.json({ error: "TRIAL_NOT_FOUND" }, { status: 404 }),

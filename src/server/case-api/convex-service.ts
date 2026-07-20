@@ -79,6 +79,16 @@ export async function callConvexCaseService<T>(options: Readonly<{
       signal,
     });
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw new ConvexCaseServiceError("CASE_SERVICE_CALLER_ABORTED", 499, {
+        cause: error,
+      });
+    }
+    if (timeoutSignal.aborted) {
+      throw new ConvexCaseServiceError("CASE_SERVICE_TIMEOUT", 504, {
+        cause: error,
+      });
+    }
     throw new ConvexCaseServiceError("CASE_SERVICE_UNAVAILABLE", 503, { cause: error });
   }
 
@@ -96,4 +106,3 @@ export async function callConvexCaseService<T>(options: Readonly<{
   if (!parsed.success) throw new ConvexCaseServiceError("CASE_SERVICE_RESPONSE_INVALID", 502);
   return parsed.data;
 }
-

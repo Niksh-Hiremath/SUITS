@@ -52,6 +52,74 @@ describe("server-only Convex case service client", () => {
     await expect(request).rejects.not.toThrow("private remote detail");
   });
 
+  it("distinguishes caller cancellation, timeout, and transport failure", async () => {
+    const callerController = new AbortController();
+    callerController.abort(new DOMException("caller cancelled", "AbortError"));
+    const callerAbortFetch = vi.fn<typeof fetch>(async (_input, init) => {
+      throw init?.signal?.reason ?? new DOMException("aborted", "AbortError");
+    });
+
+    await expect(
+      callConvexCaseService({
+        path: "/service/court-records/list",
+        responseSchema: z.array(z.unknown()),
+        config: CONFIG,
+        fetchImplementation: callerAbortFetch,
+        signal: callerController.signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "CASE_SERVICE_CALLER_ABORTED",
+      status: 499,
+    } satisfies Partial<ConvexCaseServiceError>);
+
+    const timeoutFetch = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal === null || signal === undefined) {
+            reject(new Error("Missing request signal"));
+            return;
+          }
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    await expect(
+      callConvexCaseService({
+        path: "/service/court-records/list",
+        responseSchema: z.array(z.unknown()),
+        config: CONFIG,
+        fetchImplementation: timeoutFetch,
+        timeoutMs: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: "CASE_SERVICE_TIMEOUT",
+      status: 504,
+    } satisfies Partial<ConvexCaseServiceError>);
+
+    const transportFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("network unavailable");
+    });
+
+    await expect(
+      callConvexCaseService({
+        path: "/service/court-records/list",
+        responseSchema: z.array(z.unknown()),
+        config: CONFIG,
+        fetchImplementation: transportFetch,
+      }),
+    ).rejects.toMatchObject({
+      code: "CASE_SERVICE_UNAVAILABLE",
+      status: 503,
+    } satisfies Partial<ConvexCaseServiceError>);
+  });
+
   it("fails closed for missing secrets, insecure remote URLs, and malformed success bodies", async () => {
     expect(() => readConvexCaseServiceConfig({ NEXT_PUBLIC_CONVEX_SITE_URL: "https://example.test" })).toThrow(
       "SUITS_CONVEX_SERVICE_SECRET",
