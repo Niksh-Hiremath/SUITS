@@ -253,11 +253,23 @@ An explicit successful model load prewarms these immutable, in-memory clips:
 | `courtroom.sustained.v1` | Sustained. | `judge` |
 | `courtroom.overruled.v1` | Overruled. | `judge` |
 
-The cache is all-or-nothing, is not persisted, and does not expose PCM or text through diagnostics. Sending `synthesize` with a ready `clipId` replays cached PCM without another Kokoro call. The service has this reaction path, but automatic partial-transcript objection detection and browser animation/orchestration belong to the later interruption milestone and are not claimed here.
+The cache is all-or-nothing, is not persisted, and does not expose PCM or text through diagnostics. Sending `synthesize` with a ready `clipId` replays cached PCM without another Kokoro call. The production hearing now uses this path through the Milestone 6 partial-objection coordinator: a conservative local detector can dispatch the cached objection before final STT, fence active microphone/playback work, obtain a validated owner-bound ruling, and resume or cancel coherently. The deterministic Chromium fixture verifies that ordering with fake media and muted output; it is not proof that a physical speaker was audible.
+
+### Browser audio-audit boundary
+
+The speech service itself still has no Convex or OpenAI integration. The hearing browser separately records bounded lifecycle aggregates so Court Records can explain what the client observed:
+
+- user-speech start/end status and playback request/audible-start/terminal status;
+- bounded timing counts and durations, actor/purpose, response/job identity, and canonical turn/interruption bindings; and
+- an explicit `client_observed`, `noncanonical` authority label.
+
+The browser audit request contains no raw PCM, transcript fragment, timing-mark value, provider error, owner ID, or browser-selected authority. Before Convex inserts a row, it verifies the signed owner session, replays the canonical trial, and applies the same strict Court Records audio projection used on read. A forged actor, turn, ruling, or interruption binding is rejected rather than persisted.
+
+These metadata rows do not prove acoustic content, transcription correctness, or physical audibility. They preserve privacy-safe lifecycle evidence only.
 
 ## Configuration reference
 
-All values are process environment variables. Settings are validated before the server binds.
+The browser selects its endpoint with `NEXT_PUBLIC_SUITS_SPEECH_URL`, which defaults to `ws://127.0.0.1:8765/v1/speech` and is rejected unless it is exact loopback. The service values below are process environment variables validated before the server binds.
 
 | Variable | Default | Purpose and constraints |
 | --- | --- | --- |
@@ -389,6 +401,6 @@ Verified now:
 Not yet verified:
 
 - browser microphone permission, real human speech, acoustic transcription quality, and audible speaker output in an E2E run;
-- automatic high-confidence partial-transcript objection detection and true audible mid-sentence interruption;
+- human-microphone and physically audible proof for the implemented partial-transcript objection path; deterministic fake-media/muted Chromium already verifies detection, cached-reaction ordering, cancellation, validated ruling, and exact resume;
 - STT/TTS percentile latency targets or sustained-load GPU performance;
 - a network/audit capture proving the complete browser hearing keeps raw audio out of Convex/OpenAI, although the local service itself has no such integration and never emits raw STT input through its JSON protocol.
