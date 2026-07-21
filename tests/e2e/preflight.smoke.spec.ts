@@ -18,12 +18,18 @@ test("renders the preflight workspace without starting audio checks", async ({
       name: "Make sure every system can take the stand.",
     }),
   ).toBeVisible();
-  await expect(page.getByText("Audio stays on this machine.")).toBeVisible();
+  await expect(
+    page.getByText("Raw audio bypasses OpenAI and Convex."),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Run server checks" }),
   ).toBeEnabled();
   await expect(
-    page.getByRole("button", { name: "Prepare local audio" }),
+    page.getByRole("button", { name: "Prepare speech runtime" }),
   ).toBeEnabled();
+  const visibleText = await page.locator("main").innerText();
+  expect(visibleText).not.toMatch(
+    /\b(?:local|locally|localhost|loopback)\b|\b(?:this|your) machine\b/iu,
+  );
   expect(browserErrors).toEqual([]);
 });

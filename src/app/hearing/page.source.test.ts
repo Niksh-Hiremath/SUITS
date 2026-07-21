@@ -241,7 +241,10 @@ describe("V3 hearing page boundary", () => {
     expect(sources.page).toContain("Object: {readable(ground)}");
     expect(sources.page).toContain("Let the witness answer");
     expect(sources.page).toContain("Objection telemetry");
-    expect(sources.page).toContain("Local audio telemetry");
+    expect(sources.page).toContain("Speech telemetry");
+    expect(sources.page).not.toContain("Prepare local audio");
+    expect(sources.page).not.toContain("Local courtroom audio ready");
+    expect(sources.page).not.toContain("Local audio telemetry");
     expect(sources.page).toContain("deriveCourtroomPresentation({");
     expect(sources.page).toContain("createCourtroomPresentationRuntime()");
     expect(sources.page).toContain(

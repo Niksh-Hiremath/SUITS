@@ -202,17 +202,17 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const SAFE_MESSAGES: Record<AudioPlaybackErrorCode, string> = {
   CLEANUP_FAILED: "Audio playback resources could not be fully released.",
   CLOSED: "Audio playback has already been closed.",
-  INVALID_FRAME: "The local speech service returned an invalid audio frame.",
+  INVALID_FRAME: "The configured speech service returned an invalid audio frame.",
   INVALID_IDENTITY: "The audio playback identity is invalid.",
-  INVALID_TIMING: "The local speech service returned invalid timing metadata.",
-  JOB_LIMIT_REACHED: "The response exceeded the local audio job limit.",
-  OUT_OF_ORDER_FRAME: "The local speech service returned an out-of-order audio frame.",
-  OUT_OF_ORDER_JOB: "The local speech service returned an out-of-order audio job.",
-  PLAYBACK_FAILED: "Local audio playback failed.",
-  QUEUE_FULL: "The local audio playback queue is full.",
+  INVALID_TIMING: "The configured speech service returned invalid timing metadata.",
+  JOB_LIMIT_REACHED: "The response exceeded the audio job limit.",
+  OUT_OF_ORDER_FRAME: "The configured speech service returned an out-of-order audio frame.",
+  OUT_OF_ORDER_JOB: "The configured speech service returned an out-of-order audio job.",
+  PLAYBACK_FAILED: "Audio playback failed.",
+  QUEUE_FULL: "The audio playback queue is full.",
   STALE_JOB: "A stale audio job was rejected.",
   STALE_RESPONSE: "A stale audio response was rejected.",
-  UNSUPPORTED_BROWSER: "This browser does not support local PCM playback.",
+  UNSUPPORTED_BROWSER: "This browser does not support streaming PCM playback.",
 };
 
 const DEFAULT_MAX_QUEUED_BYTES = 512 * 1_024;

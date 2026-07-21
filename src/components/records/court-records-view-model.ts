@@ -138,7 +138,7 @@ export const COURT_RECORDS_EVENT_SOURCE_LABELS = Object.freeze({
   user: "User",
   ai: "Validated AI proposal",
   deterministic: "Deterministic engine",
-  speech: "Local speech system",
+  speech: "SUITS speech runtime",
   system: "System",
 } satisfies Record<EventNode["source"], string>);
 

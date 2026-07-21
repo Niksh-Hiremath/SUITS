@@ -555,7 +555,7 @@ function AudioPanel({ model, pageNumber, setPage }: Readonly<{ model: CourtRecor
   const page = paginateCourtRecordsPanel(model, "audio", pageNumber);
   return (
     <section className={styles.panel} data-records-section="audio" id="record-panel-audio">
-      <PanelHeader kicker="Metadata, not media" title="Local audio audit" count={page.total} />
+      <PanelHeader kicker="Metadata, not media" title="Speech runtime audit" count={page.total} />
       <p className={styles.boundaryNote}>
         {COURT_RECORDS_HONEST_COPY.rawAudio} A verified identity binding connects metadata
         to a canonical turn or interruption; it does not verify audio content.

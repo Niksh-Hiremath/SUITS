@@ -59,7 +59,7 @@ const SAFE_MESSAGES = {
   HEARING_HEAD_CHANGED: "The courtroom record changed. Please repeat your statement.",
   HEARING_NOT_READY: "The hearing is not ready for voice input.",
   QUESTION_NOT_AVAILABLE: "The current witness is not available for your question.",
-  SPEECH_PHRASE_LIMIT: "The spoken response is too long for the local speech queue.",
+  SPEECH_PHRASE_LIMIT: "The spoken response is too long for the speech queue.",
   SPEECH_TEXT_INVALID: "The spoken text is empty or exceeds the courtroom limit.",
   SPEECH_TOKEN_TOO_LONG: "The spoken response contains a token that is too long to synthesize safely.",
   TRANSCRIPT_DIVERGED: "The courtroom transcript changed unexpectedly; earlier turns will not be replayed.",

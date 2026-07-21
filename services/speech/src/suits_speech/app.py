@@ -23,7 +23,7 @@ def create_app(
     resolved_settings = settings or SpeechSettings.from_env()
     resolved_runtime = runtime or SpeechRuntime(settings=resolved_settings)
     app = FastAPI(
-        title="SUITS local speech companion",
+        title="SUITS speech companion",
         version=SERVICE_VERSION,
         docs_url=None,
         redoc_url=None,

@@ -86,7 +86,7 @@ const DEFAULT_FINAL_TIMEOUT_MS = 20_000;
 const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 100;
 const SPEAKER_TEST_CLIP_ID = "courtroom.sustained.v1";
-const SPEAKER_TEST_PHRASE = "Sustained. Local courtroom audio is ready.";
+const SPEAKER_TEST_PHRASE = "Sustained. Courtroom audio is ready.";
 const SUSTAINED_CLIP_ID = "courtroom.sustained.v1";
 const OVERRULED_CLIP_ID = "courtroom.overruled.v1";
 const WITHDRAWAL_CORRECTION_PHRASE =
@@ -332,28 +332,28 @@ function activePartialInterruption(
 }
 
 const SAFE_MESSAGES = Object.freeze({
-  CLOSED: "The local hearing audio controller is closed.",
-  NOT_READY: "Local courtroom audio is not ready.",
-  INVALID_TIMEOUT: "A local courtroom audio timeout is invalid.",
+  CLOSED: "The hearing audio controller is closed.",
+  NOT_READY: "Courtroom audio is not ready.",
+  INVALID_TIMEOUT: "A courtroom audio timeout is invalid.",
   CAPABILITIES_UNAVAILABLE:
-    "The local speech companion is not ready for streaming recognition and speech.",
-  PREPARE_FAILED: "Local courtroom audio could not be prepared.",
+    "The configured speech runtime is not ready for streaming recognition and speech.",
+  PREPARE_FAILED: "Courtroom audio could not be prepared.",
   RECORDING_FAILED: "Microphone input could not be recorded safely.",
   STT_BACKPRESSURE:
-    "The local speech companion could not accept microphone input quickly enough.",
-  FINAL_TIMEOUT: "The local speech companion did not finish recognition in time.",
+    "The configured speech runtime could not accept microphone input quickly enough.",
+  FINAL_TIMEOUT: "The configured speech runtime did not finish recognition in time.",
   STALE_FINAL: "The courtroom changed before that spoken action could be committed.",
   COMMIT_FAILED: "The spoken courtroom action could not be committed.",
-  PLAYBACK_FAILED: "Local courtroom speech could not be played.",
-  PLAYBACK_TIMEOUT: "Local courtroom speech did not finish in time.",
-  SPEECH_CANCELLED: "Local courtroom speech was cancelled.",
-  SPEECH_DISCONNECTED: "The local speech companion disconnected.",
-  SPEECH_SERVICE_ERROR: "The local speech companion reported an error.",
-  INVALID_IDENTIFIER: "A local speech operation identifier was invalid.",
+  PLAYBACK_FAILED: "Courtroom speech could not be played.",
+  PLAYBACK_TIMEOUT: "Courtroom speech did not finish in time.",
+  SPEECH_CANCELLED: "Courtroom speech was cancelled.",
+  SPEECH_DISCONNECTED: "The configured speech runtime disconnected.",
+  SPEECH_SERVICE_ERROR: "The configured speech runtime reported an error.",
+  INVALID_IDENTIFIER: "A speech operation identifier was invalid.",
   INVALID_TEXT: "The spoken courtroom text was empty or too long.",
-  BUSY: "Another local courtroom audio operation is already active.",
+  BUSY: "Another courtroom audio operation is already active.",
   BARGED_IN: "Courtroom speech was interrupted by the player.",
-  CLOSE_FAILED: "Local courtroom audio could not be fully released.",
+  CLOSE_FAILED: "Courtroom audio could not be fully released.",
   INTERRUPTION_FAILED:
     "The mid-question objection could not be resolved safely. Please repeat the question.",
   INTERRUPTION_STALE:

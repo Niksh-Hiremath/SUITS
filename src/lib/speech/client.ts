@@ -203,7 +203,7 @@ export function assertLoopbackSpeechUrl(value: string): string {
   } catch {
     throw new SpeechClientError(
       "INVALID_SPEECH_URL",
-      "the local speech WebSocket URL is invalid",
+      "the configured speech WebSocket URL is invalid",
     );
   }
   const hostname = url.hostname.toLowerCase();
@@ -223,7 +223,7 @@ export function assertLoopbackSpeechUrl(value: string): string {
   ) {
     throw new SpeechClientError(
       "NON_LOOPBACK_SPEECH_URL",
-      "raw audio may connect only to the local speech companion",
+      "raw audio may connect only to an approved SUITS speech endpoint",
     );
   }
   return url.toString();
@@ -309,7 +309,7 @@ export class LocalSpeechClient {
     if (this.connectAttempt !== null) return this.connectAttempt.promise;
 
     this.resetSessionState(
-      new SpeechClientError("SESSION_REPLACED", "the local speech session was replaced"),
+      new SpeechClientError("SESSION_REPLACED", "the SUITS speech session was replaced"),
     );
     this.generation += 1;
     const generation = this.generation;
@@ -323,7 +323,7 @@ export class LocalSpeechClient {
       if (this.connectAttempt?.generation !== generation) return;
       this.abortConnection(
         "HANDSHAKE_TIMEOUT",
-        "the local speech companion did not complete its handshake",
+        "the configured speech runtime did not complete its handshake",
       );
     }, this.handshakeTimeoutMs);
     this.connectAttempt = {
@@ -344,7 +344,7 @@ export class LocalSpeechClient {
     } catch {
       this.abortConnection(
         "SOCKET_CREATE_FAILED",
-        "the local speech WebSocket could not be created",
+        "the speech WebSocket could not be created",
       );
       return promise;
     }
@@ -357,7 +357,7 @@ export class LocalSpeechClient {
       if (!this.isCurrentSocket(socket, generation)) return;
       this.abortConnection(
         "SOCKET_ERROR",
-        "the local speech WebSocket reported a transport error",
+        "the speech WebSocket reported a transport error",
       );
     };
     return promise;
@@ -382,7 +382,7 @@ export class LocalSpeechClient {
       }
     }
     this.resetSessionState(
-      new SpeechClientError("CLIENT_DISCONNECTED", "the local speech client disconnected"),
+      new SpeechClientError("CLIENT_DISCONNECTED", "the speech client disconnected"),
     );
     if (wasActive || this.stateValue !== "disconnected") this.setState("disconnected");
   }
@@ -404,7 +404,7 @@ export class LocalSpeechClient {
         reject(
           new SpeechClientError(
             "REQUEST_TIMEOUT",
-            "the local speech model request exceeded its deadline",
+            "the speech-model request exceeded its deadline",
           ),
         );
       }, this.requestTimeoutMs);
@@ -436,13 +436,13 @@ export class LocalSpeechClient {
     if (this.activeUtteranceId !== null) {
       throw new SpeechClientError(
         "UTTERANCE_ACTIVE",
-        "only one local microphone utterance may be active",
+        "only one microphone utterance may be active",
       );
     }
     if (this.utterances.has(utteranceId)) {
       throw new SpeechClientError(
         "UTTERANCE_REUSED",
-        "utteranceId cannot be reused in one local speech session",
+        "utteranceId cannot be reused in one speech session",
       );
     }
     const sampleRateHz = options.sampleRateHz ?? 16_000;
@@ -482,7 +482,7 @@ export class LocalSpeechClient {
     ) {
       throw new SpeechClientError(
         "UTTERANCE_NOT_LISTENING",
-        "PCM requires its matching local microphone utterance",
+        "PCM requires its matching microphone utterance",
       );
     }
     const byteLength = pcmS16le.byteLength;
@@ -497,13 +497,13 @@ export class LocalSpeechClient {
     ) {
       throw new SpeechClientError(
         "INVALID_PCM_FRAME",
-        "PCM frame length is incompatible with the negotiated local format",
+        "PCM frame length is incompatible with the negotiated speech format",
       );
     }
     if (this.sttAvailableFrames < 1 || this.sttAvailableBytes < byteLength) {
       throw new SpeechClientError(
         "STT_BACKPRESSURE",
-        "local microphone input has exhausted its advertised credits",
+        "microphone input has exhausted its advertised credits",
       );
     }
 
@@ -523,22 +523,22 @@ export class LocalSpeechClient {
     } catch {
       this.abortConnection(
         "BINARY_SEND_FAILED",
-        "the local microphone frame could not be sent",
+        "the microphone frame could not be sent",
       );
       throw new SpeechClientError(
         "BINARY_SEND_FAILED",
-        "the local microphone frame could not be sent",
+        "the microphone frame could not be sent",
       );
     }
     const pending = this.sttUnaccountedFrames.get(utteranceId);
     if (pending === undefined || pending.has(sequence)) {
       this.abortConnection(
         "INVALID_STT_ACCOUNTING",
-        "local microphone accounting entered an impossible state",
+        "microphone accounting entered an impossible state",
       );
       throw new SpeechClientError(
         "INVALID_STT_ACCOUNTING",
-        "local microphone accounting entered an impossible state",
+        "microphone accounting entered an impossible state",
       );
     }
     pending.set(sequence, byteLength);
@@ -558,7 +558,7 @@ export class LocalSpeechClient {
     ) {
       throw new SpeechClientError(
         "UTTERANCE_NOT_LISTENING",
-        "endUtterance requires its matching local microphone utterance",
+        "endUtterance requires its matching microphone utterance",
       );
     }
     this.sendControl({
@@ -578,7 +578,7 @@ export class LocalSpeechClient {
     ) {
       throw new SpeechClientError(
         "UTTERANCE_NOT_ACTIVE",
-        "cancelUtterance requires its matching local microphone utterance",
+        "cancelUtterance requires its matching microphone utterance",
       );
     }
     this.sendControl({
@@ -599,7 +599,7 @@ export class LocalSpeechClient {
     if (this.jobs.has(jobId)) {
       throw new SpeechClientError(
         "TTS_JOB_REUSED",
-        "jobId cannot be reused in one local speech session",
+        "jobId cannot be reused in one speech session",
       );
     }
     const activeJobCount = [...this.jobs.values()].filter(
@@ -608,7 +608,7 @@ export class LocalSpeechClient {
     if (activeJobCount >= (this.capabilitiesValue?.maxTtsQueueDepth ?? 0)) {
       throw new SpeechClientError(
         "TTS_BACKPRESSURE",
-        "the local TTS phrase queue has reached its advertised depth",
+        "the TTS phrase queue has reached its advertised depth",
       );
     }
     const existingResponse = this.responses.get(responseId);
@@ -656,7 +656,7 @@ export class LocalSpeechClient {
     if (request.scope === "job") {
       const jobId = assertSpeechIdentifier(request.jobId);
       if (!this.jobs.has(jobId)) {
-        throw new SpeechClientError("UNKNOWN_TTS_JOB", "the TTS job is unknown locally");
+        throw new SpeechClientError("UNKNOWN_TTS_JOB", "the TTS job is unknown to this session");
       }
       this.sendControl({
         protocol: SPEECH_PROTOCOL,
@@ -673,7 +673,7 @@ export class LocalSpeechClient {
       if (!this.responses.has(responseId)) {
         throw new SpeechClientError(
           "UNKNOWN_TTS_RESPONSE",
-          "the TTS response is unknown locally",
+          "the TTS response is unknown to this session",
         );
       }
       this.sendControl({
@@ -720,7 +720,7 @@ export class LocalSpeechClient {
     if (socket.protocol !== SPEECH_PROTOCOL) {
       this.abortConnection(
         "PROTOCOL_NEGOTIATION_FAILED",
-        "the local speech companion negotiated an unexpected protocol",
+        "the configured speech runtime negotiated an unexpected protocol",
       );
       return;
     }
@@ -753,7 +753,7 @@ export class LocalSpeechClient {
       } catch {
         this.abortConnection(
           "INVALID_SERVER_CONTROL",
-          "the local speech companion sent invalid control data",
+          "the configured speech runtime sent invalid control data",
         );
         return;
       }
@@ -767,7 +767,7 @@ export class LocalSpeechClient {
     if (!(data instanceof ArrayBuffer)) {
       this.abortConnection(
         "INVALID_BINARY_FRAME",
-        "the local speech companion sent an unsupported binary frame",
+        "the configured speech runtime sent an unsupported binary frame",
       );
       return;
     }
@@ -786,7 +786,7 @@ export class LocalSpeechClient {
     this.resetSessionState(
       new SpeechClientError(
         "SOCKET_CLOSED",
-        `the local speech WebSocket closed (${code})`,
+        `the speech WebSocket closed (${code})`,
       ),
     );
     this.setState("disconnected");
@@ -809,7 +809,7 @@ export class LocalSpeechClient {
       if (attempt.ready === null) {
         this.abortConnection(
           "READY_REQUIRED",
-          "ready must be the first local speech server event",
+          "ready must be the first speech server event",
         );
         return;
       }
@@ -850,7 +850,7 @@ export class LocalSpeechClient {
 
     switch (event.type) {
       case "ready":
-        this.abortConnection("DUPLICATE_READY", "the local speech session repeated ready");
+        this.abortConnection("DUPLICATE_READY", "the speech session repeated ready");
         return;
       case "capabilities":
         this.acceptCapabilities(event);
@@ -946,14 +946,14 @@ export class LocalSpeechClient {
     if (job === undefined || !this.ttsIdentityMatches(job, event)) {
       this.abortConnection(
         "INVALID_TTS_IDENTITY",
-        "TTS event identity did not match a local synthesis job",
+        "TTS event identity did not match a synthesis job",
       );
       return;
     }
     if (job.status === "cancelled" || job.status === "finished") return;
     if (event.type === "tts_started") {
       if (job.status !== "queued") {
-        this.abortConnection("INVALID_TTS_STATE", "TTS started in an invalid local state");
+        this.abortConnection("INVALID_TTS_STATE", "TTS started in an invalid session state");
         return;
       }
       job.status = "started";
@@ -968,7 +968,7 @@ export class LocalSpeechClient {
       if (job.unacknowledgedFrameTokens.size !== 0) {
         this.abortConnection(
           "TTS_FINISHED_BEFORE_ACK",
-          "TTS finished before local playback acknowledged every frame",
+          "TTS finished before browser playback acknowledged every frame",
         );
         return;
       }
@@ -987,7 +987,7 @@ export class LocalSpeechClient {
     if (job === undefined || !this.ttsIdentityMatches(job, event)) {
       this.abortConnection(
         "INVALID_TTS_IDENTITY",
-        "TTS audio identity did not match a local synthesis job",
+        "TTS audio identity did not match a synthesis job",
       );
       return;
     }
@@ -1039,7 +1039,7 @@ export class LocalSpeechClient {
     if (job === undefined || !this.ttsIdentityMatches(job, pending.metadata)) {
       this.abortConnection(
         "INVALID_TTS_IDENTITY",
-        "binary TTS audio no longer matched its local synthesis job",
+        "binary TTS audio no longer matched its synthesis job",
       );
       return;
     }
@@ -1115,7 +1115,7 @@ export class LocalSpeechClient {
         pending.reject(
           new SpeechClientError(
             event.code,
-            "the local speech model request was rejected",
+            "the speech-model request was rejected",
           ),
         );
       } else {
@@ -1132,7 +1132,7 @@ export class LocalSpeechClient {
     if (event.jobId != null) this.fenceJobAndResponse(event.jobId);
     this.emit(event);
     if (event.fatal) {
-      this.abortConnection(event.code, "the local speech companion reported a fatal error");
+      this.abortConnection(event.code, "the configured speech runtime reported a fatal error");
     }
   }
 
@@ -1145,7 +1145,7 @@ export class LocalSpeechClient {
       if (highestSent === undefined || priorWatermark === undefined) {
         this.abortConnection(
           "UNKNOWN_STT_CREDIT_IDENTITY",
-          "the local speech companion reported an unknown microphone identity",
+          "the configured speech runtime reported an unknown microphone identity",
         );
         return false;
       }
@@ -1155,7 +1155,7 @@ export class LocalSpeechClient {
       ) {
         this.abortConnection(
           "IMPOSSIBLE_STT_WATERMARK",
-          "the local speech companion reported an impossible microphone watermark",
+          "the configured speech runtime reported an impossible microphone watermark",
         );
         return false;
       }
@@ -1223,7 +1223,7 @@ export class LocalSpeechClient {
     ) {
       throw new SpeechClientError(
         "HANDSHAKE_INCOMPLETE",
-        "the local speech handshake is incomplete",
+        "the speech handshake is incomplete",
       );
     }
     return {
@@ -1240,18 +1240,18 @@ export class LocalSpeechClient {
 
   private sendSerialized(socket: SpeechSocket, payload: string): void {
     if (socket !== this.socket || socket.readyState !== SOCKET_OPEN) {
-      throw new SpeechClientError("SOCKET_NOT_OPEN", "the local speech WebSocket is not open");
+      throw new SpeechClientError("SOCKET_NOT_OPEN", "the speech WebSocket is not open");
     }
     try {
       socket.send(payload);
     } catch {
       this.abortConnection(
         "SOCKET_SEND_FAILED",
-        "the local speech control could not be sent",
+        "the speech control could not be sent",
       );
       throw new SpeechClientError(
         "SOCKET_SEND_FAILED",
-        "the local speech control could not be sent",
+        "the speech control could not be sent",
       );
     }
   }
@@ -1261,7 +1261,7 @@ export class LocalSpeechClient {
     if (this.stateValue !== "ready" || socket === null || socket.readyState !== SOCKET_OPEN) {
       throw new SpeechClientError(
         "SPEECH_NOT_READY",
-        "the local speech client has not completed its handshake",
+        "the speech client has not completed its handshake",
       );
     }
     return socket;
@@ -1272,7 +1272,7 @@ export class LocalSpeechClient {
     if (this.usedRequestIds.has(requestId)) {
       throw new SpeechClientError(
         "REQUEST_ID_REUSED",
-        "requestId cannot be reused in one local speech session",
+        "requestId cannot be reused in one speech session",
       );
     }
     this.usedRequestIds.add(requestId);
@@ -1454,7 +1454,7 @@ export class LocalSpeechClient {
       ? error
       : new SpeechClientError(
           "SPEECH_CLIENT_FAILED",
-          "the local speech client could not complete the request",
+          "the speech client could not complete the request",
         );
   }
 

@@ -363,7 +363,7 @@ export function CourtRecordsWorkspace({
           <h1>The record, with its boundaries intact.</h1>
           <p className={styles.introCopy}>
             Review the append-only hearing history, active and stricken testimony,
-            procedural rulings, model-call audit, local audio metadata, and grounded
+            procedural rulings, model-call audit, speech-runtime metadata, and grounded
             coaching for hearings owned by this browser session.
           </p>
         </div>

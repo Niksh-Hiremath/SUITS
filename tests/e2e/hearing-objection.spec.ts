@@ -518,9 +518,9 @@ function isCommandResponseFor(
   }
 }
 
-async function waitForLocalAudioReady(page: Page): Promise<void> {
+async function waitForCourtroomSpeechReady(page: Page): Promise<void> {
   await expect(
-    page.getByText("Local courtroom audio ready", { exact: true }),
+    page.getByText("Courtroom speech ready", { exact: true }),
   ).toBeVisible({ timeout: 30_000 });
 }
 
@@ -545,7 +545,7 @@ async function submitFakeSpokenQuestion(
   page: Page,
   expectedAnswerCount: number,
 ): Promise<void> {
-  await waitForLocalAudioReady(page);
+  await waitForCourtroomSpeechReady(page);
   const start = page.getByRole("button", {
     name: "Start spoken question",
     exact: true,
@@ -556,13 +556,13 @@ async function submitFakeSpokenQuestion(
   await expect(
     page.getByText("I do not recall that.", { exact: true }),
   ).toHaveCount(expectedAnswerCount, { timeout: 45_000 });
-  await waitForLocalAudioReady(page);
+  await waitForCourtroomSpeechReady(page);
 }
 
 async function finishWitnessByName(page: Page, name: string): Promise<void> {
   const card = witnessCard(page, name);
   const finishLeg = async (): Promise<void> => {
-    await waitForLocalAudioReady(page);
+    await waitForCourtroomSpeechReady(page);
     const responsePromise = page.waitForResponse(
       (response) => isCommandResponseFor(response, "finish_witness"),
       { timeout: 45_000 },
@@ -804,8 +804,8 @@ test.describe("production-path partial objection", () => {
       contentType: "image/png",
     });
 
-    await page.getByRole("button", { name: "Prepare local audio" }).click();
-    await expect(page.getByText("Local courtroom audio ready", { exact: true })).toBeVisible({
+    await page.getByRole("button", { name: "Prepare speech runtime" }).click();
+    await expect(page.getByText("Courtroom speech ready", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     await waitForObservation(
@@ -1083,7 +1083,7 @@ test.describe("production-path partial objection", () => {
     await expect(page.getByText("I do not recall that.", { exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText("Local courtroom audio ready", { exact: true })).toBeVisible({
+    await expect(page.getByText("Courtroom speech ready", { exact: true })).toBeVisible({
       timeout: 30_000,
     });
     await expect(page.getByText(/Objection telemetry/u)).toContainText(
@@ -1434,19 +1434,19 @@ test.describe("production-path partial objection", () => {
     await callWitnessByName(page, "Rina Shah");
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
-    await page.getByRole("button", { name: "Prepare local audio" }).click();
-    await waitForLocalAudioReady(page);
+    await page.getByRole("button", { name: "Prepare speech runtime" }).click();
+    await waitForCourtroomSpeechReady(page);
     await submitFakeSpokenQuestion(page, 1);
     await finishWitnessByName(page, "Rina Shah");
 
-    await waitForLocalAudioReady(page);
+    await waitForCourtroomSpeechReady(page);
     await callWitnessByName(page, "Theo Morgan");
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.getByLabel(/Developer-only typed/u)).toHaveCount(0);
     await submitFakeSpokenQuestion(page, 2);
     await finishWitnessByName(page, "Theo Morgan");
 
-    await waitForLocalAudioReady(page);
+    await waitForCourtroomSpeechReady(page);
     await expect(page.getByRole("textbox")).toHaveCount(0);
     const startClosing = page.getByRole("button", {
       name: "Start spoken closing argument",
@@ -1761,7 +1761,7 @@ test.describe("production-path partial objection", () => {
       ["Procedure", "procedure", "Objections, rulings & recovery"],
       ["Facts & evidence", "lifecycles", "Facts & evidence"],
       ["Model calls", "modelCalls", "Model-call audit"],
-      ["Audio audit", "audio", "Local audio audit"],
+      ["Audio audit", "audio", "Speech runtime audit"],
       ["Citations", "citations", "Citation resources"],
       ["Debrief", "debrief", "Final debrief"],
       ["Event ledger", "eventTree", "Chronological event ledger"],

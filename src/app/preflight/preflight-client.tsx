@@ -91,13 +91,13 @@ function safeLocalFailure(cause: unknown): SafeFailure {
   const message =
     cause instanceof HearingControllerError
       ? cause.message
-      : "Local courtroom audio could not be prepared.";
+      : "Courtroom speech could not be prepared.";
 
   if (code === "PERMISSION_DENIED") {
     return {
       code,
       message,
-      action: "Allow microphone access for this localhost page, then retry.",
+      action: "Allow microphone access for this SUITS session, then retry.",
     };
   }
   if (code === "UNSUPPORTED_BROWSER") {
@@ -112,7 +112,7 @@ function safeLocalFailure(cause: unknown): SafeFailure {
       code,
       message,
       action:
-        "Start the local speech companion with streaming STT and TTS providers, then retry.",
+        "Start the configured SUITS speech runtime with streaming STT and TTS providers, then retry.",
     };
   }
   if (
@@ -125,7 +125,7 @@ function safeLocalFailure(cause: unknown): SafeFailure {
       code,
       message,
       action:
-        "Start the local speech companion on its configured loopback address, then retry.",
+        "Start the configured SUITS speech runtime at its approved endpoint, then retry.",
     };
   }
   if (code.includes("PLAYBACK")) {
@@ -139,7 +139,7 @@ function safeLocalFailure(cause: unknown): SafeFailure {
     code,
     message,
     action:
-      "Check the local speech service and browser device permissions, then retry.",
+      "Check the SUITS speech runtime and browser device permissions, then retry.",
   };
 }
 
@@ -341,11 +341,11 @@ function LocalResults({
 }>) {
   const capabilities = snapshot?.capabilities;
   return (
-    <div className={styles.localResults} aria-label="Local audio check results">
+    <div className={styles.localResults} aria-label="Speech and device check results">
       <article className={styles.localSummary}>
         <div className={styles.resultHeading}>
           <div>
-            <span>Local runtime</span>
+            <span>Speech runtime</span>
             <h3>Speech companion</h3>
           </div>
           <StatusBadge
@@ -439,7 +439,7 @@ function LocalResults({
           ))
         ) : (
           <div className={styles.emptyProviders}>
-            Provider readiness will appear after local preparation.
+            Provider readiness will appear after preparation.
           </div>
         )}
       </div>
@@ -479,9 +479,9 @@ export function PreflightClient() {
         setLocalPhase("error");
         setLocalFailure({
           code: "LOCAL_CONTROLLER_UNAVAILABLE",
-          message: "The local audio controller could not be created.",
+          message: "The speech controller could not be created.",
           action:
-            "Check the public loopback speech URL, restart SUITS, and retry.",
+            "Check the configured speech endpoint, restart SUITS, and retry.",
         });
       });
       return () => {
@@ -502,7 +502,7 @@ export function PreflightClient() {
           safeLocalFailure(
             new HearingControllerError(
               snapshot.code ?? "LOCAL_PREFLIGHT_FAILED",
-              snapshot.message ?? "The local speech companion disconnected.",
+              snapshot.message ?? "The configured speech runtime disconnected.",
             ),
           ),
         );
@@ -585,7 +585,7 @@ export function PreflightClient() {
       setLocalPhase("error");
       setLocalFailure({
         code: "LOCAL_CONTROLLER_UNAVAILABLE",
-        message: "The local audio controller is unavailable.",
+        message: "The speech controller is unavailable.",
         action: "Reload this page and retry.",
       });
       return;
@@ -668,17 +668,17 @@ export function PreflightClient() {
           <h1>Make sure every system can take the stand.</h1>
         </div>
         <p>
-          Run private server checks, warm the local speech models, verify
+          Run private server checks, warm the configured speech models, verify
           microphone capture, and play a fixed courtroom clip before beginning
           a fictional educational hearing.
         </p>
       </header>
 
       <div className={styles.privacyNote}>
-        <strong>Audio stays on this machine.</strong>
+        <strong>Raw audio bypasses OpenAI and Convex.</strong>
         <span>
-          Microphone PCM travels only between this browser and the configured
-          local speech companion. The server check returns safe readiness codes,
+          Microphone PCM goes only from this browser to the configured SUITS
+          speech runtime. Server readiness checks return safe status codes,
           never credentials.
         </span>
       </div>
@@ -735,8 +735,8 @@ export function PreflightClient() {
         <div className={styles.sectionHeading}>
           <div className={styles.stepNumber}>02</div>
           <div>
-            <p>Loopback audio</p>
-            <h2 id="local-checks-title">Local speech & devices</h2>
+            <p>Speech processing</p>
+            <h2 id="local-checks-title">Speech runtime & devices</h2>
           </div>
           <StatusBadge
             label={localPresentation.label}
@@ -746,12 +746,12 @@ export function PreflightClient() {
         <div className={styles.sectionIntro}>
           <div>
             <p>
-              Preparation connects to the local companion, loads and warms its
-              configured providers, and briefly opens then releases microphone
+              Preparation connects to the configured SUITS speech runtime, loads
+              and warms its providers, and briefly opens then releases microphone
               capture. Your browser may ask for permission.
             </p>
             <p className={styles.permissionCopy}>
-              Choose “Allow” only if you want to test this machine’s microphone.
+              Choose “Allow” only if you want to test your selected microphone.
             </p>
           </div>
           <div className={styles.buttonGroup}>
@@ -761,7 +761,7 @@ export function PreflightClient() {
               onClick={() => void prepareLocalAudio()}
               disabled={localBusy}
             >
-              {localPhase === "running" ? "Warming local audio…" : "Prepare local audio"}
+              {localPhase === "running" ? "Preparing speech runtime…" : "Prepare speech runtime"}
             </button>
             <button
               className={styles.secondaryButton}

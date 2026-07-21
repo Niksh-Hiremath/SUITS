@@ -21,10 +21,12 @@ const STYLES_PATH = fileURLToPath(
 describe("preflight page", () => {
   it("renders explicit accessible checks and hearing navigation without a text composer", () => {
     const markup = renderToStaticMarkup(createElement(PreflightClient));
+    const visibleText = markup.replace(/<[^>]*>/gu, " ").replace(/\s+/gu, " ");
 
     expect(markup).toContain("Run server checks");
-    expect(markup).toContain("Prepare local audio");
+    expect(markup).toContain("Prepare speech runtime");
     expect(markup).toContain("Test speakers");
+    expect(markup).toContain("Raw audio bypasses OpenAI and Convex.");
     expect(markup).toContain("gpt-5.6-luna");
     expect(markup).toContain("gpt-5.6-terra");
     expect(markup).toContain("two tiny fixed Responses API probes");
@@ -32,6 +34,9 @@ describe("preflight page", () => {
     expect(markup).toContain('href="/hearing"');
     expect(markup).not.toContain("<textarea");
     expect(markup).not.toMatch(/<input\b/iu);
+    expect(visibleText).not.toMatch(
+      /\b(?:local|locally|localhost|loopback)\b|\b(?:this|your) machine\b/iu,
+    );
   });
 
   it("uses strict safe boundaries for the server and local controller", async () => {
@@ -78,7 +83,7 @@ describe("preflight page", () => {
         ...readySnapshot,
         lifecycle: "recoverable_error",
         code: "SPEECH_DISCONNECTED",
-        message: "The local speech companion disconnected.",
+        message: "The configured speech runtime disconnected.",
       }),
     ).toEqual({
       label: "Needs attention",

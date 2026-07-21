@@ -97,26 +97,26 @@ function waitForInterruptionRetry(
 }
 
 function speechStatusLabel(snapshot: HearingControllerSnapshot | null): string {
-  if (snapshot === null) return "Local audio controller unavailable";
+  if (snapshot === null) return "Speech controller unavailable";
   switch (snapshot.lifecycle) {
     case "idle":
-      return "Local audio needs preparation";
+      return "Speech runtime needs preparation";
     case "preparing":
-      return "Preparing microphone and local models";
+      return "Preparing microphone and speech models";
     case "ready":
-      return "Local courtroom audio ready";
+      return "Courtroom speech ready";
     case "recording":
-      return "Listening locally";
+      return "Listening for your voice";
     case "processing":
-      return "Finalizing the local transcript";
+      return "Finalizing the transcript";
     case "speaking":
       return "Playing courtroom speech";
     case "recoverable_error":
-      return "Local audio needs attention";
+      return "Speech runtime needs attention";
     case "fatal_error":
-      return "Local audio stopped safely";
+      return "Speech runtime stopped safely";
     case "closed":
-      return "Local audio closed";
+      return "Speech runtime closed";
   }
 }
 
@@ -446,7 +446,7 @@ function HearingPageContent() {
       const message =
         cause instanceof Error
           ? cause.message
-          : "The local audio controller could not be created.";
+          : "The speech controller could not be created.";
       queueMicrotask(() => {
         if (!disposed) setSpeechSetupError(message);
       });
@@ -759,7 +759,7 @@ function HearingPageContent() {
           setSpeechSetupError(
             cause instanceof Error
               ? cause.message
-              : "The committed courtroom speech could not be played locally.",
+              : "The committed courtroom speech could not be played.",
           );
           return;
         }
@@ -1020,7 +1020,7 @@ function HearingPageContent() {
       setSpeechSetupError(
         cause instanceof Error
           ? cause.message
-          : "The local courtroom audio action failed safely.",
+          : "The courtroom speech action failed safely.",
       );
     }
   }
@@ -1028,7 +1028,7 @@ function HearingPageContent() {
   function prepareSpeech(): void {
     const controller = speechController;
     if (controller === null) {
-      setSpeechSetupError("The local audio controller is unavailable.");
+      setSpeechSetupError("The speech controller is unavailable.");
       return;
     }
     void performSpeechAction(async () => {
@@ -1343,11 +1343,12 @@ function HearingPageContent() {
             </div>
 
             <div className="voice-primary" aria-live="polite">
-              <span>Browser-to-local speech companion</span>
+              <span>Browser-to-SUITS speech runtime</span>
               <strong>{speechStatusLabel(speechSnapshot)}</strong>
               <small>
-                Microphone frames stay on the direct local WebSocket path. Only a
-                validated final transcript can become a courtroom command.
+                Microphone frames travel only to the configured SUITS speech
+                runtime and never to OpenAI or Convex. Only a validated final
+                transcript can become a courtroom command.
               </small>
               {speechSnapshot?.capabilities && (
                 <small>
@@ -1377,7 +1378,7 @@ function HearingPageContent() {
                 )}
               {speechSnapshot?.speechMetrics && (
                 <small>
-                  Local audio telemetry · {speechSnapshot.speechMetrics.metrics.length}{" "}
+                  Speech telemetry · {speechSnapshot.speechMetrics.metrics.length}{" "}
                   bounded metric
                   {speechSnapshot.speechMetrics.metrics.length === 1 ? "" : "s"}
                 </small>
@@ -1392,13 +1393,13 @@ function HearingPageContent() {
                     type="button"
                   >
                     {speechLifecycle === "recoverable_error"
-                      ? "Prepare local audio again"
-                      : "Prepare local audio"}
+                      ? "Prepare speech runtime again"
+                      : "Prepare speech runtime"}
                   </button>
                 )}
                 {speechLifecycle === "preparing" && (
                   <button className="voice-primary-button" disabled type="button">
-                    Requesting local audio access…
+                    Preparing speech access…
                   </button>
                 )}
                 {speechLifecycle === "ready" && (
@@ -1418,8 +1419,8 @@ function HearingPageContent() {
                   {(speechSnapshot === null ||
                     speechLifecycle === "fatal_error") && (
                     <span>
-                      Check the loopback speech service and configured URL, then
-                      reload this hearing.
+                      Check the configured speech service and endpoint, then reload
+                      this hearing.
                     </span>
                   )}
                 </div>
@@ -1467,7 +1468,7 @@ function HearingPageContent() {
                   Opposing counsel response window
                 </div>
                 <p className="required-opening">
-                  Object now to interrupt local courtroom playback, or let the
+                  Object now to interrupt courtroom playback, or let the
                   exact pending witness response continue.
                 </p>
                 <div
