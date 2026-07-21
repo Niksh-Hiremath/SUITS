@@ -11,7 +11,7 @@ export class ServerPreflightCache {
     expiresAt: number;
     response: ServerPreflightResponse;
   }> | null = null;
-  #inFlight: Promise<ServerPreflightResponse> | null = null;
+  #refreshSequence = 0;
 
   constructor(
     options: Readonly<{
@@ -44,11 +44,13 @@ export class ServerPreflightCache {
     if (cached !== null && cached.expiresAt > this.#now()) {
       return Promise.resolve(cached.response);
     }
-    if (this.#inFlight !== null) return this.#inFlight;
 
-    const inFlight = probe()
-      .then((response) => {
-        if (this.#inFlight !== inFlight) return response;
+    // A pending promise can carry request-scoped I/O in Cloudflare Workers and
+    // must never be shared through module state. Each cache miss owns its probe;
+    // the sequence only prevents a slower result from replacing a newer one.
+    const refreshSequence = ++this.#refreshSequence;
+    return probe().then((response) => {
+      if (this.#refreshSequence === refreshSequence) {
         this.#cached = Object.freeze({
           expiresAt:
             this.#now() +
@@ -57,19 +59,14 @@ export class ServerPreflightCache {
               : this.#degradedTtlMs),
           response,
         });
-        this.#inFlight = null;
-        return response;
-      })
-      .catch((error: unknown) => {
-        if (this.#inFlight === inFlight) this.#inFlight = null;
-        throw error;
-      });
-    this.#inFlight = inFlight;
-    return inFlight;
+      }
+      return response;
+    });
   }
 
   clear(): void {
     this.#cached = null;
+    this.#refreshSequence += 1;
   }
 }
 

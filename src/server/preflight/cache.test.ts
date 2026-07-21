@@ -32,25 +32,51 @@ const RESPONSE = ServerPreflightResponseSchema.parse({
 });
 
 describe("server preflight cache", () => {
-  it("single-flights concurrent callers and shares one bounded snapshot", async () => {
-    let resolveProbe!: (response: typeof RESPONSE) => void;
+  it("keeps concurrent request I/O isolated and caches only the newest refresh", async () => {
+    const resolvers: Array<(response: typeof RESPONSE) => void> = [];
     const probe = vi.fn(
+      () =>
+        new Promise<typeof RESPONSE>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const cache = new ServerPreflightCache({ ttlMs: 100, now: () => 10 });
+    const newer = ServerPreflightResponseSchema.parse({
+      ...RESPONSE,
+      checkedAt: "2026-07-19T12:01:00.000Z",
+    });
+
+    const first = cache.get(probe);
+    const second = cache.get(probe);
+    expect(first).not.toBe(second);
+    expect(probe).toHaveBeenCalledTimes(2);
+    resolvers[1]?.(newer);
+    await expect(second).resolves.toBe(newer);
+    resolvers[0]?.(RESPONSE);
+
+    await expect(first).resolves.toBe(RESPONSE);
+    await expect(cache.get(probe)).resolves.toBe(newer);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not allow a refresh completed after clear to repopulate the cache", async () => {
+    let resolveProbe!: (response: typeof RESPONSE) => void;
+    const pendingProbe = vi.fn(
       () =>
         new Promise<typeof RESPONSE>((resolve) => {
           resolveProbe = resolve;
         }),
     );
     const cache = new ServerPreflightCache({ ttlMs: 100, now: () => 10 });
+    const pending = cache.get(pendingProbe);
 
-    const first = cache.get(probe);
-    const second = cache.get(probe);
-    expect(probe).toHaveBeenCalledTimes(1);
+    cache.clear();
     resolveProbe(RESPONSE);
+    await expect(pending).resolves.toBe(RESPONSE);
 
-    await expect(first).resolves.toBe(RESPONSE);
-    await expect(second).resolves.toBe(RESPONSE);
-    await expect(cache.get(probe)).resolves.toBe(RESPONSE);
-    expect(probe).toHaveBeenCalledTimes(1);
+    const freshProbe = vi.fn(async () => RESPONSE);
+    await expect(cache.get(freshProbe)).resolves.toBe(RESPONSE);
+    expect(freshProbe).toHaveBeenCalledOnce();
   });
 
   it("refreshes after expiry and never caches a rejected probe", async () => {
