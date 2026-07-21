@@ -1015,6 +1015,13 @@ Update after each meaningful checkpoint using dated entries:
   - Verified: three focused Vitest files passed seven tests; scoped ESLint and root TypeScript passed; the focused Chromium file passed two tests in 1.7 seconds. In-app browser snapshots showed no preflight destination on `/` or `/hearing` and confirmed direct `/preflight` access still renders.
   - Commit: `ecb2f12` (`fix: keep preflight direct-url only`) is on `origin/main`.
 
+- 2026-07-21 20:47-21:01 IST - Case-library display-title spacing checkpoint
+  - Changed: raised the shared case-library/detail display-title line height from `0.95` to `1` and added a responsive `1.25rem`-to-`1.75rem` block gap between each display title and its following summary.
+  - Root cause: the global CSS reset removes paragraph margins. At the reproduced 2048 x 552 viewport, the 99.2px Georgia title used a 94.24px line height and its following paragraph began at the exact title-box bottom (`0px` layout gap), allowing serif descenders to paint into the summary.
+  - Regression boundary: a mounted geometry test now asserts at least 20px between title and summary at 2048 x 552, 1280 x 800, the 900px layout breakpoint, and 390 x 844 mobile. The shared selector also protects seeded case-detail display titles.
+  - Verified: the new Chromium case-layout test passed in 1.3 seconds; scoped ESLint, root TypeScript, and `git diff --check` passed. In-app browser before/after screenshots reproduced the collision and visually confirmed the corrected wide layout.
+  - Commit: `e435f92` (`fix: separate case title from description`) is on `origin/main`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1123,6 +1130,7 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Next.js development Strict Effects can abort the first owner-list request while the second succeeds. Collapsing both caller abort and the service client's own timeout into `CASE_SERVICE_UNAVAILABLE` creates a false outage signal; cancellation, timeout, and transport failure require distinct bounded classification.
 - Canonical interruption audio has two valid shapes: a judge ruling verifies the interruption with no transcript turn, while resumed witness testimony verifies both the interruption and answer turn. A generic UUID privacy denylist is likewise invalid because public action and utterance identifiers contain UUIDs; the browser proof must derive and reject the exact signed owner-session UUID.
 - A loopback address is resolved by the browser host. Moving the speech process to a GCP VM does not make `127.0.0.1` reach that VM for an end user's browser, and replacing loopback with a public socket would remove the current security boundary without adding authentication. Deployment-neutral copy and remote transport capability are therefore separate concerns.
+- Tailwind's global reset removes the case-summary paragraph's default block margin. Combined with a sub-`1` Georgia display line-height, a wrapped case title had a zero-pixel layout gap to its summary even though the DOM order was correct; large serif descenders then visibly crossed into the next text. Explicit adjacent-sibling spacing is required rather than relying on browser paragraph defaults.
 
 ## 15. Decisions
 
@@ -1220,6 +1228,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Classify a caller-aborted Court Records service call as a bounded, content-free 499 without outage logging; classify the internal service timeout as 504 and reserve 503 for a real transport failure. Browser gates may ignore only the explicit cancellation status, not other failed API responses.
 - Use topology-neutral user-facing speech labels while keeping technical documentation and enforcement honest. Do not claim GCP/browser remote speech until WSS/TLS, short-lived session-bound authorization, exact origins, replay/rate/connection controls, a protected gateway hop, browser security headers, and a production-origin privacy smoke are implemented and verified.
 - Keep system preflight out of all product navigation and expose it only as an operator-entered direct route. Treat this as a discoverability boundary, not authentication: knowing `/preflight` still opens the page, while its billable server checks retain their existing signed-session, origin, cache, and durable quota controls.
+- Give every case-library and seeded-detail display title a full `1` line height and an explicit responsive gap before its summary. Keep a mounted minimum-gap assertion across desktop, the grid breakpoint, and mobile instead of encoding font-dependent title-wrap thresholds.
 
 ## 16. Verification Evidence
 
@@ -1587,6 +1596,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/preflight.smoke.spec.ts --workers=1` - exit 0; two Chromium tests passed in 1.7 seconds. They prove no `/preflight` anchor exists on the landing or hearing pages and the direct route still renders without browser errors.
   - In-app browser DOM verification independently confirmed `directRouteAvailable: true`, `homepageHasPreflightDestination: false`, and `hearingHasPreflightDestination: false` against the running development app.
   - `git push origin main` - exit 0 for `ecb2f12` (`fix: keep preflight direct-url only`).
+
+- 2026-07-21 20:47-21:01 IST - Case-library title/summary spacing verification
+  - In-app Chromium at 2048 x 552 reproduced the report. Before the fix, the heading box ended at `372.9514px` and the summary began at `372.9514px`; computed title typography was `99.2px` with `94.24px` line height, proving a zero-pixel block gap.
+  - `npm exec -- eslint tests/e2e/cases-layout.spec.ts --max-warnings 0`, `npm run typecheck -- --pretty false`, and `git diff --check` - exit 0.
+  - `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/cases-layout.spec.ts --workers=1` - exit 0; one Chromium geometry test passed in 1.3 seconds. It requires a gap of at least 20px at 2048 x 552, 1280 x 800, 900 x 800, and 390 x 844.
+  - The post-HMR in-app locator measurement hit the browser controller's three-second selector deadline twice and is not counted as numeric proof. A fresh DOM snapshot and screenshot rendered the corrected separation; the independent Playwright geometry assertion is the quantitative passing evidence.
+  - `git push origin main` - exit 0 for `e435f92` (`fix: separate case title from description`).
 
 ## 17. Blocked external prerequisites
 

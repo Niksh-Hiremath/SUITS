@@ -210,3 +210,15 @@ Executed from the repository root in PowerShell on 2026-07-21 (IST):
 | `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/preflight.smoke.spec.ts --workers=1` | Passed: two Chromium tests in 1.7 seconds. |
 
 The landing page no longer contains either former preflight link, and the hearing header no longer links to the route. A production-source scan rejects any exact `/preflight` navigation destination across TypeScript/TSX while separately proving the route module remains present. Mounted DOM checks on `/` and `/hearing` found no preflight destination; direct navigation to `/preflight` still rendered the readiness workspace. This is intentionally a discoverability boundary rather than authentication—the direct URL remains available to an operator who knows it.
+
+## Case-library title spacing checkpoint
+
+Executed from the repository root in PowerShell on 2026-07-21 (IST):
+
+| Command | Result |
+| --- | --- |
+| `npm exec -- eslint tests/e2e/cases-layout.spec.ts --max-warnings 0` | Passed. |
+| `npm run typecheck -- --pretty false` | Passed. |
+| `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/cases-layout.spec.ts --workers=1` | Passed: one Chromium geometry test in 1.3 seconds. |
+
+The reported 2048 x 552 layout was reproduced in the in-app browser. Before the CSS correction, the 99.2px Georgia title used a 94.24px line height and its box bottom exactly equaled the summary's top, leaving `0px` separation. The shared case-library/detail rule now uses line height `1` plus a responsive `1.25rem`-to-`1.75rem` adjacent-summary margin. The mounted regression requires at least 20px separation at 2048 x 552, 1280 x 800, 900 x 800, and 390 x 844; all four passed. A post-HMR in-app locator measurement timed out and is not treated as numeric evidence, while the refreshed screenshot and independent Playwright geometry check passed.
