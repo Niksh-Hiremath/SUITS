@@ -222,3 +222,19 @@ Executed from the repository root in PowerShell on 2026-07-21 (IST):
 | `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/cases-layout.spec.ts --workers=1` | Passed: one Chromium geometry test in 1.3 seconds. |
 
 The reported 2048 x 552 layout was reproduced in the in-app browser. Before the CSS correction, the 99.2px Georgia title used a 94.24px line height and its box bottom exactly equaled the summary's top, leaving `0px` separation. The shared case-library/detail rule now uses line height `1` plus a responsive `1.25rem`-to-`1.75rem` adjacent-summary margin. The mounted regression requires at least 20px separation at 2048 x 552, 1280 x 800, 900 x 800, and 390 x 844; all four passed. A post-HMR in-app locator measurement timed out and is not treated as numeric evidence, while the refreshed screenshot and independent Playwright geometry check passed.
+
+## DOCX ingestion retirement checkpoint
+
+Executed from the repository root in PowerShell on 2026-07-21 (IST):
+
+| Command | Result |
+| --- | --- |
+| `npm uninstall mammoth jszip` | Passed; removed 25 packages. The two existing moderate advisories and three lifecycle-script notices remain explicit. |
+| Focused six-file ingestion/UI/replay/reconciler Vitest slice | Passed: six files and 44 tests. |
+| Root and Convex TypeScript plus scoped zero-warning ESLint | Passed. |
+| `npm test -- --reporter=dot` | Passed: 178 files and 1,578 tests; three intentional live-only files/tests skipped. |
+| `npm run lint` | Passed with zero errors and four existing generated-file warnings. |
+| `npm run build` | Passed; all 20 routes/pages generated. |
+| `git diff --check` | Passed. |
+
+New DOCX uploads are rejected by the extension/MIME boundary and are absent from the browser picker and active extraction registry. PDF, TXT, Markdown, and JSON uploads remain. A separate durable-record MIME schema keeps already-indexed DOCX uploads replayable and recognizable to storage reconciliation, so the change does not assume an empty Convex deployment. No live OpenAI, browser audio, CUDA, or Cloudflare runtime check was part of this code-focused checkpoint; OpenNext preview remains required before deployment compatibility is claimed.

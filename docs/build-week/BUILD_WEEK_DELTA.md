@@ -44,6 +44,8 @@ Added bounded TXT/Markdown/JSON/PDF/DOCX ingestion, private Convex storage, sour
 
 This is new user-supplied case support; Hermes had one authored golden case and no general packet compiler/review workflow.
 
+The later Cloudflare deployment decision retired active DOCX ingestion because its bounded Mammoth adapter required `node:worker_threads`, which Cloudflare exposes only as a non-functional compatibility stub. TXT, Markdown, JSON, and text-based PDF remain supported; the legacy MIME value remains readable solely for existing durable upload records.
+
 ### Milestone 3: general multi-witness hearing engine
 
 Anchors: [`348ac0c`](https://github.com/Niksh-Hiremath/SUITS/commit/348ac0c), [`8641028`](https://github.com/Niksh-Hiremath/SUITS/commit/8641028), and [`b43bb0c`](https://github.com/Niksh-Hiremath/SUITS/commit/b43bb0c).

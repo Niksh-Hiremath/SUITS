@@ -16,7 +16,7 @@ import {
 } from "../src/server/case-compiler/schemas";
 import {
   CaseIngestionEntityIdSchema,
-  CaseUploadMimeTypeSchema,
+  SupportedCaseUploadMimeTypeSchema,
   MAX_EXTRACTED_CHARACTERS,
   MAX_PROMPT_INJECTION_FLAGS,
   OriginalFileNameSchema,
@@ -60,7 +60,7 @@ export const RegisterCaseDraftRequestSchema = z
     caseId: CaseGraphEntityIdSchema,
     storageId: z.string().trim().min(1).max(256),
     originalName: OriginalFileNameSchema,
-    mimeType: CaseUploadMimeTypeSchema,
+    mimeType: SupportedCaseUploadMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(20 * 1024 * 1024),
     contentDigest: Sha256DigestSchema,
     claimId: CaseCompileClaimIdSchema,

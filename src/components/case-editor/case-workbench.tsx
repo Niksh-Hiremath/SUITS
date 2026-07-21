@@ -273,10 +273,10 @@ export function CaseWorkbench({ initialDraftUploadId = null }: Props) {
             <small>
               {selectedFile
                 ? `${formatBytes(selectedFile.size)} · ${selectedFile.type || "unknown type"}`
-                : "PDF, DOCX, TXT, Markdown, or JSON · up to 20 MB"}
+                : "PDF, TXT, Markdown, or JSON · up to 20 MB"}
             </small>
             <input
-              accept=".pdf,.docx,.txt,.md,.markdown,.json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,application/json"
+              accept=".pdf,.txt,.md,.markdown,.json,application/pdf,text/plain,text/markdown,application/json"
               name="packet"
               onChange={(event) => {
                 setSelectedFile(event.target.files?.[0] ?? null);

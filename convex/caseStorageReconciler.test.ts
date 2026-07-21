@@ -53,10 +53,15 @@ describe("case storage reconciliation policy", () => {
     );
   });
 
-  it("recognizes only supported case-packet content types", () => {
+  it("recognizes active and legacy case-packet content types", () => {
     expect(isCaseUploadStorageContentType("text/plain")).toBe(true);
     expect(isCaseUploadStorageContentType(" Text/Markdown; charset=UTF-8 ")).toBe(true);
     expect(isCaseUploadStorageContentType("application/pdf")).toBe(true);
+    expect(
+      isCaseUploadStorageContentType(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+    ).toBe(true);
     expect(isCaseUploadStorageContentType(undefined)).toBe(false);
     expect(isCaseUploadStorageContentType("image/png")).toBe(false);
   });

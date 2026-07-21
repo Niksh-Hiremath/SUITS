@@ -8,7 +8,7 @@ SUITS is an educational simulation. It does not provide legal advice, predict ou
 
 The canonical application now includes:
 
-- three provenance-grounded seeded cases plus private TXT, Markdown, JSON, text-based PDF, and DOCX upload;
+- three provenance-grounded seeded cases plus private TXT, Markdown, JSON, and text-based PDF upload;
 - a review-and-publish workbench for the compiled `case-graph.v1`;
 - an append-only, event-sourced multi-witness hearing with evidence, objections, settlement, jury, and debrief flows;
 - server-side GPT-5.6 role reasoning with role-specific knowledge views;
@@ -225,6 +225,7 @@ That smoke keeps a fixed Kokoro-to-Nemotron PCM loop in memory. It does not prov
 ## Limitations and data handling
 
 - Uploaded packets currently accept one file per compilation and do not OCR image-only/scanned pages.
+- New DOCX uploads are intentionally rejected because the retired extractor depended on Node worker threads that are unavailable in the planned Cloudflare Workers runtime. Historical DOCX upload metadata remains readable, but no DOCX parser ships in the active application.
 - Raw microphone PCM is not sent to OpenAI or Convex by the canonical path. Convex stores only bounded, noncanonical audio lifecycle metadata after validating it against the owner-bound trial.
 - OpenAI receives extracted packet text for compilation and compact role-specific case/record context during a hearing; Responses calls use `store: false`.
 - Court Records exports exist. Self-service deletion for uploaded cases and trial records does not; operators must manage retention in their configured Convex deployment.

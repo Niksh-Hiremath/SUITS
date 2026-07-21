@@ -14,7 +14,20 @@ export const SUPPORTED_CASE_UPLOAD_MIME_TYPES = [
   "text/x-markdown",
   "application/json",
   "application/pdf",
+] as const;
+
+/**
+ * Kept only so durable uploads created before DOCX support was retired remain
+ * readable. New registrations and extraction results use the supported schema
+ * below and therefore reject this legacy type.
+ */
+export const LEGACY_CASE_UPLOAD_MIME_TYPES = [
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+] as const;
+
+export const CASE_UPLOAD_RECORD_MIME_TYPES = [
+  ...SUPPORTED_CASE_UPLOAD_MIME_TYPES,
+  ...LEGACY_CASE_UPLOAD_MIME_TYPES,
 ] as const;
 
 export const TEXT_CASE_UPLOAD_MIME_TYPES = [
@@ -26,7 +39,6 @@ export const TEXT_CASE_UPLOAD_MIME_TYPES = [
 
 export const BINARY_CASE_UPLOAD_MIME_TYPES = [
   "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ] as const;
 
 const entityIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -43,7 +55,8 @@ export const Sha256DigestSchema = z
   .string()
   .regex(sha256Pattern, "Expected a lowercase SHA-256 digest");
 
-export const CaseUploadMimeTypeSchema = z.enum(SUPPORTED_CASE_UPLOAD_MIME_TYPES);
+export const CaseUploadMimeTypeSchema = z.enum(CASE_UPLOAD_RECORD_MIME_TYPES);
+export const SupportedCaseUploadMimeTypeSchema = z.enum(SUPPORTED_CASE_UPLOAD_MIME_TYPES);
 export const TextCaseUploadMimeTypeSchema = z.enum(TEXT_CASE_UPLOAD_MIME_TYPES);
 export const BinaryCaseUploadMimeTypeSchema = z.enum(BINARY_CASE_UPLOAD_MIME_TYPES);
 
@@ -89,7 +102,7 @@ export const CaseUploadRegistrationSchema = z
     uploadId: CaseIngestionEntityIdSchema,
     caseId: CaseIngestionEntityIdSchema,
     originalName: OriginalFileNameSchema,
-    mimeType: CaseUploadMimeTypeSchema,
+    mimeType: SupportedCaseUploadMimeTypeSchema,
     sizeBytes: z.number().int().positive().max(MAX_CASE_UPLOAD_SIZE_BYTES),
     contentDigest: Sha256DigestSchema,
   })
@@ -138,7 +151,7 @@ export const ExtractedBlockSchema = z
 export const ExtractedDocumentSchema = z
   .object({
     adapterId: CaseIngestionEntityIdSchema,
-    mimeType: CaseUploadMimeTypeSchema,
+    mimeType: SupportedCaseUploadMimeTypeSchema,
     blocks: z.array(ExtractedBlockSchema).min(1).max(MAX_EXTRACTED_BLOCKS),
   })
   .strict()
@@ -154,6 +167,7 @@ export const ExtractedDocumentSchema = z
   });
 
 export type CaseUploadMimeType = z.infer<typeof CaseUploadMimeTypeSchema>;
+export type SupportedCaseUploadMimeType = z.infer<typeof SupportedCaseUploadMimeTypeSchema>;
 export type TextCaseUploadMimeType = z.infer<typeof TextCaseUploadMimeTypeSchema>;
 export type BinaryCaseUploadMimeType = z.infer<typeof BinaryCaseUploadMimeTypeSchema>;
 export type CaseUploadStatus = z.infer<typeof CaseUploadStatusSchema>;
@@ -164,19 +178,19 @@ export type CaseUploadVersion = z.infer<typeof CaseUploadVersionSchema>;
 export type ExtractedBlock = z.infer<typeof ExtractedBlockSchema>;
 export type ExtractedDocument = z.infer<typeof ExtractedDocumentSchema>;
 
-export function normalizeCaseUploadMimeType(value: string): CaseUploadMimeType {
+export function normalizeCaseUploadMimeType(value: string): SupportedCaseUploadMimeType {
   const normalized = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  return CaseUploadMimeTypeSchema.parse(normalized);
+  return SupportedCaseUploadMimeTypeSchema.parse(normalized);
 }
 
 export function isTextCaseUploadMimeType(
-  mimeType: CaseUploadMimeType,
+  mimeType: SupportedCaseUploadMimeType,
 ): mimeType is TextCaseUploadMimeType {
   return (TEXT_CASE_UPLOAD_MIME_TYPES as readonly string[]).includes(mimeType);
 }
 
 export function isBinaryCaseUploadMimeType(
-  mimeType: CaseUploadMimeType,
+  mimeType: SupportedCaseUploadMimeType,
 ): mimeType is BinaryCaseUploadMimeType {
   return (BINARY_CASE_UPLOAD_MIME_TYPES as readonly string[]).includes(mimeType);
 }

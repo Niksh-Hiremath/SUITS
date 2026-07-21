@@ -1,7 +1,7 @@
 import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 
-import { SUPPORTED_CASE_UPLOAD_MIME_TYPES } from "../src/server/case-ingestion/schema";
+import { CASE_UPLOAD_RECORD_MIME_TYPES } from "../src/server/case-ingestion/schema";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import { sha256HexToBase64 } from "./storageIntegrity";
@@ -104,7 +104,7 @@ function normalizeStoredContentType(contentType: string | undefined): string | n
 export function isCaseUploadStorageContentType(contentType: string | undefined): boolean {
   const normalized = normalizeStoredContentType(contentType);
   return normalized !== null &&
-    (SUPPORTED_CASE_UPLOAD_MIME_TYPES as readonly string[]).includes(normalized);
+    (CASE_UPLOAD_RECORD_MIME_TYPES as readonly string[]).includes(normalized);
 }
 
 export function caseStorageReconcileCutoff(now: number): number {

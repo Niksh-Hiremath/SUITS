@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { SourceSegmentSchema } from "../../domain/case-graph";
 import {
   CaseUploadRegistrationSchema,
+  CaseUploadMimeTypeSchema,
+  CaseUploadVersionSchema,
   CaseUploadVersionMetadataSchema,
   MAX_CASE_UPLOAD_SIZE_BYTES,
   detectPromptInjectionFlags,
@@ -31,6 +33,53 @@ describe("case upload boundary schemas", () => {
   it("normalizes MIME parameters while rejecting unsupported types", () => {
     expect(normalizeCaseUploadMimeType(" Text/Markdown; charset=UTF-8 ")).toBe("text/markdown");
     expect(() => normalizeCaseUploadMimeType("image/png")).toThrow();
+    expect(() =>
+      normalizeCaseUploadMimeType(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      )
+    ).toThrow();
+  });
+
+  it("rejects new DOCX registrations while preserving legacy upload records", () => {
+    const legacyDocxMimeType =
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" as const;
+    expect(CaseUploadMimeTypeSchema.parse(legacyDocxMimeType)).toBe(legacyDocxMimeType);
+    expect(() =>
+      CaseUploadRegistrationSchema.parse({
+        uploadId: "upload:legacy-docx-001",
+        caseId: "case:legacy-docx-001",
+        originalName: "legacy-packet.docx",
+        mimeType: legacyDocxMimeType,
+        sizeBytes: 42,
+        contentDigest: "a".repeat(64),
+      })
+    ).toThrow();
+
+    expect(
+      CaseUploadVersionSchema.parse({
+        uploadRecordId: "upload-record:legacy-docx-001",
+        uploadId: "upload:legacy-docx-001",
+        version: 2,
+        caseId: "case:legacy-docx-001",
+        caseVersion: 1,
+        ownerId: "owner:legacy-docx-001",
+        originalName: "legacy-packet.docx",
+        mimeType: legacyDocxMimeType,
+        sizeBytes: 42,
+        contentDigest: "a".repeat(64),
+        status: "indexed",
+        metadata: {
+          schemaVersion: "case-upload.v1",
+          digestVerified: true,
+          extractionAdapterId: "mammoth-v1.12.0",
+          extractionCharacterCount: 120,
+          sourceSegmentCount: 1,
+          injectionFlags: [],
+          rejectionCode: null,
+        },
+        createdAt: 1,
+      }).mimeType,
+    ).toBe(legacyDocxMimeType);
   });
 
   it("rejects traversal names, invalid digests, oversized files, and unknown keys", () => {
@@ -125,10 +174,10 @@ describe("deterministic text ingestion and provenance", () => {
 });
 
 describe("safe binary extraction adapter boundary", () => {
-  it.each([
-    ["application/pdf", "packet.pdf", 3],
-    ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "packet.docx", null],
-  ] as const)("extracts %s only through a matching bounded adapter", async (mimeType, originalName, pageNumber) => {
+  it("extracts PDF only through a matching bounded adapter", async () => {
+    const mimeType = "application/pdf" as const;
+    const originalName = "packet.pdf";
+    const pageNumber = 3;
     const controller = new AbortController();
     const extract = vi.fn(async (): Promise<ExtractedDocument> => ({
       adapterId: "fake-document-v1",
@@ -137,7 +186,7 @@ describe("safe binary extraction adapter boundary", () => {
     }));
     const adapter: DocumentExtractionAdapter = {
       adapterId: "fake-document-v1",
-      supportedMimeTypes: [mimeType as BinaryCaseUploadMimeType],
+      supportedMimeTypes: [mimeType satisfies BinaryCaseUploadMimeType],
       extract,
     };
     const result = await ingestCaseUpload(

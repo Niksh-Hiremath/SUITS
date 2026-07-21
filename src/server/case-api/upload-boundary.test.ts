@@ -12,12 +12,21 @@ describe("case upload MIME boundary", () => {
 
   it("requires MIME, extension, and binary signatures to agree", () => {
     const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
-    const docx = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00]);
     expect(resolveCaseUploadMimeType("packet.pdf", "application/pdf", pdf)).toBe("application/pdf");
-    expect(resolveCaseUploadMimeType("packet.docx", "application/octet-stream", docx)).toContain(
-      "wordprocessingml",
-    );
-    expect(() => resolveCaseUploadMimeType("packet.pdf", "application/pdf", docx)).toThrow(
+    expect(() =>
+      resolveCaseUploadMimeType(
+        "packet.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00]),
+      )
+    ).toThrow("UPLOAD_FILE_EXTENSION_UNSUPPORTED");
+    expect(() =>
+      resolveCaseUploadMimeType(
+        "packet.pdf",
+        "application/pdf",
+        new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00]),
+      )
+    ).toThrow(
       "UPLOAD_PDF_SIGNATURE_INVALID",
     );
     expect(() => resolveCaseUploadMimeType("packet.txt", "application/pdf", pdf)).toThrow(
@@ -34,4 +43,3 @@ describe("case upload MIME boundary", () => {
     ).toThrow("UPLOAD_FILE_EXTENSION_UNSUPPORTED");
   });
 });
-

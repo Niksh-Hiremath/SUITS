@@ -42,18 +42,19 @@ All active hearing, model, record, and anonymous-upload mutations are internal o
 
 Uploads are private and owner-scoped. The canonical upload path checks:
 
-- accepted types: TXT, Markdown, JSON, text-based PDF, and DOCX;
+- accepted types: TXT, Markdown, JSON, and text-based PDF;
 - maximum uploaded file size: 20 MiB;
 - maximum extracted content: 2,000,000 characters and 2,000 blocks;
 - maximum source-segment size: 6,000 characters;
 - maximum PDF page count: 300;
 - maximum extraction time: 30 seconds;
-- PDF and DOCX type/signature consistency;
-- DOCX ZIP limits of 8 MiB per uncompressed entry and 32 MiB total;
+- PDF type/signature consistency;
 - stored-object size, MIME type, and SHA-256 digest before association;
 - bounded publication JSON of 4 MiB with strict schema validation.
 
 Scanned-image OCR is not implemented. A PDF must contain extractable text.
+
+DOCX extraction is not part of the deployed parser surface. New DOCX files are rejected before storage/extraction. The record schema retains the retired MIME value only so pre-existing upload metadata can still be read without assuming an empty Convex deployment.
 
 Packet text is never concatenated into the system instruction channel. The compiler wraps it in a delimited untrusted-data section, detects instruction-like patterns, validates strict structured output, validates source IDs and grounding, and requires human review before publication. Detection does not delete suspicious text: it remains evidence data and is recorded as an injection signal. Tests cover instruction override, role impersonation, tool invocation, secret exfiltration, and safety-bypass patterns.
 

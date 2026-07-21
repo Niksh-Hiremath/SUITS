@@ -200,6 +200,26 @@ describe("case compile replay boundary", () => {
     expect(replay.upload).not.toHaveProperty("contentDigest");
   });
 
+  it("keeps a previously compiled DOCX draft replayable after active extraction is retired", async () => {
+    const records = await replayRecords();
+    const legacyUpload: CaseCompileReplayUploadRecord = {
+      ...records.upload,
+      originalName: "legacy-packet.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+
+    const replay = await reconstructCaseCompileReplay(
+      { ownerId: OWNER_ID, uploadId: UPLOAD_ID },
+      legacyUpload,
+      [records.draft],
+    );
+
+    expect(replay.found).toBe(true);
+    if (!replay.found) throw new Error("Expected a legacy DOCX replay hit");
+    expect(replay.upload.fileName).toBe("legacy-packet.docx");
+    expect(replay.upload.mimeType).toContain("wordprocessingml");
+  });
+
   it("keeps a persisted compiler v2 draft resumable at the Convex boundary", async () => {
     const records = await replayRecords();
     const sourceDigest = records.draft.sourceDigest;

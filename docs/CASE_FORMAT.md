@@ -14,7 +14,6 @@ The `/cases/new` workbench accepts one file per compilation request:
 | `.md`, `.markdown` | `text/markdown` or `text/x-markdown` | UTF-8 text |
 | `.json` | `application/json` | Parsed only to normalize its textual JSON representation for compilation |
 | `.pdf` | `application/pdf` | Text extracted page by page with `pdf-parse` |
-| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | Text extracted in a bounded worker after ZIP preflight |
 
 JSON upload is **not** a direct CaseGraph import. It is still untrusted source text and must pass the same Terra compilation, grounding, deterministic validation, review, and publication path.
 
@@ -36,7 +35,7 @@ Image files are not accepted. PDF extraction does not run OCR, so an image-only 
 
 Extraction capacity is intentionally larger than one compiler request boundary. A packet that extracts successfully can still be rejected as too large for safe compilation rather than being silently truncated.
 
-DOCX preflight additionally rejects malformed paths, encrypted archives, multidisk ZIPs, ZIP64, unsupported compression, duplicate entries, missing required package parts, more than 1,000 entries, an entry over 8 MiB uncompressed, more than 32 MiB total uncompressed content, or a compression ratio over 100:1. These are parser-safety limits, not guarantees that arbitrary Office features will be preserved.
+DOCX is not an accepted packet format. The former Mammoth extractor used `node:worker_threads`, which is not functional in the planned Cloudflare Workers runtime, so the parser and its ZIP-processing dependency were removed rather than retaining a deployment-only failure path. Durable metadata for a DOCX uploaded by an earlier build remains schema-readable, but new registrations, MIME normalization, the upload UI, and extraction all reject DOCX.
 
 The route derives the accepted type from the filename, declared MIME, and leading file bytes where applicable. Filenames are bounded and cannot contain paths or control characters. The server hashes the bytes and binds retry-safe upload/case IDs to the owner, request ID, and digest.
 

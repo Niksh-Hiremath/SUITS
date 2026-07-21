@@ -37,7 +37,7 @@ import {
   MAX_CASE_UPLOAD_SIZE_BYTES,
   ingestCaseUpload,
   sha256Hex,
-  type CaseUploadMimeType,
+  type SupportedCaseUploadMimeType,
 } from "@/server/case-ingestion";
 
 export const runtime = "nodejs";
@@ -128,7 +128,7 @@ type PreparedPacket = Readonly<{
   uploadId: string;
   caseId: string;
   originalName: string;
-  mimeType: CaseUploadMimeType;
+  mimeType: SupportedCaseUploadMimeType;
   bytes: Uint8Array;
   contentDigest: string;
 }>;
@@ -165,7 +165,7 @@ function ingestionErrorResponse(error: Error): NextResponse | null {
     error.message.includes("SIGNATURE") ||
     error.message.includes("ADAPTER_UNAVAILABLE")
   ) {
-    return jsonError(415, error.message, "Use a valid PDF, DOCX, TXT, Markdown, or JSON case packet.");
+    return jsonError(415, error.message, "Use a valid PDF, TXT, Markdown, or JSON case packet.");
   }
   return jsonError(422, error.message, "The case packet could not be safely extracted.");
 }

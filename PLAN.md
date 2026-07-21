@@ -1022,6 +1022,13 @@ Update after each meaningful checkpoint using dated entries:
   - Verified: the new Chromium case-layout test passed in 1.3 seconds; scoped ESLint, root TypeScript, and `git diff --check` passed. In-app browser before/after screenshots reproduced the collision and visually confirmed the corrected wide layout.
   - Commit: `e435f92` (`fix: separate case title from description`) is on `origin/main`.
 
+- 2026-07-21 21:40-21:53 IST - Cloudflare-compatible case-upload boundary checkpoint
+  - Changed: retired active DOCX ingestion across the upload picker, MIME/extension boundary, extraction-adapter registry, route copy, production dependencies, tests, and current documentation. TXT, Markdown, JSON, and text-based PDF remain supported, so the user-upload product outcome and Definition of Done remain satisfied.
+  - Compatibility: split active-upload MIME validation from durable-record MIME validation. New DOCX registrations and normalization fail closed, while existing DOCX upload records still parse, replay, and remain recognizable to the orphan-storage reconciler. Convex already stores the MIME as a string, so no database rewrite or fabricated backfill is required.
+  - Verified: the six-file focused gate passed 44 tests; root and Convex TypeScript passed; scoped ESLint passed with zero warnings; the full root suite passed 178 files with three intentional live-only files skipped and 1,578 tests passed with three skipped; full lint had zero errors and only four existing generated-file warnings; the production build compiled and generated all 20 routes/pages; `git diff --check` passed.
+  - Boundary: this removes the known non-functional `node:worker_threads` DOCX path and 25 transitive packages. PDF extraction and the complete Next.js application still require a real OpenNext/Cloudflare preview before deployment compatibility is claimed.
+  - Commit: `feat: retire DOCX ingestion` is the scoped implementation/documentation checkpoint and is pushed to `origin/main` after the recorded gates pass.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1131,6 +1138,7 @@ Record unexpected repository behavior, provider constraints, performance finding
 - Canonical interruption audio has two valid shapes: a judge ruling verifies the interruption with no transcript turn, while resumed witness testimony verifies both the interruption and answer turn. A generic UUID privacy denylist is likewise invalid because public action and utterance identifiers contain UUIDs; the browser proof must derive and reject the exact signed owner-session UUID.
 - A loopback address is resolved by the browser host. Moving the speech process to a GCP VM does not make `127.0.0.1` reach that VM for an end user's browser, and replacing loopback with a public socket would remove the current security boundary without adding authentication. Deployment-neutral copy and remote transport capability are therefore separate concerns.
 - Tailwind's global reset removes the case-summary paragraph's default block margin. Combined with a sub-`1` Georgia display line-height, a wrapped case title had a zero-pixel layout gap to its summary even though the DOM order was correct; large serif descenders then visibly crossed into the next text. Explicit adjacent-sibling spacing is required rather than relying on browser paragraph defaults.
+- Cloudflare's Node compatibility layer can make `node:worker_threads` importable while exposing it only as a non-functional stub. The former DOCX adapter constructed a real worker for every Mammoth parse, so an apparently successful bundle would still fail at runtime; active support had to be removed or redesigned rather than hidden behind `nodejs_compat`.
 
 ## 15. Decisions
 
@@ -1229,6 +1237,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Use topology-neutral user-facing speech labels while keeping technical documentation and enforcement honest. Do not claim GCP/browser remote speech until WSS/TLS, short-lived session-bound authorization, exact origins, replay/rate/connection controls, a protected gateway hop, browser security headers, and a production-origin privacy smoke are implemented and verified.
 - Keep system preflight out of all product navigation and expose it only as an operator-entered direct route. Treat this as a discoverability boundary, not authentication: knowing `/preflight` still opens the page, while its billable server checks retain their existing signed-session, origin, cache, and durable quota controls.
 - Give every case-library and seeded-detail display title a full `1` line height and an explicit responsive gap before its summary. Keep a mounted minimum-gap assertion across desktop, the grid breakpoint, and mobile instead of encoding font-dependent title-wrap thresholds.
+- Retire DOCX as an active packet format for the Cloudflare deployment target. Keep PDF/TXT/Markdown/JSON support and preserve the original Milestone 2 history, but ship no Mammoth/ZIP/worker-thread parser. Maintain a separate legacy MIME record schema so old indexed DOCX drafts and storage objects remain readable without allowing any new DOCX registration.
 
 ## 16. Verification Evidence
 
@@ -1603,6 +1612,15 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/cases-layout.spec.ts --workers=1` - exit 0; one Chromium geometry test passed in 1.3 seconds. It requires a gap of at least 20px at 2048 x 552, 1280 x 800, 900 x 800, and 390 x 844.
   - The post-HMR in-app locator measurement hit the browser controller's three-second selector deadline twice and is not counted as numeric proof. A fresh DOM snapshot and screenshot rendered the corrected separation; the independent Playwright geometry assertion is the quantitative passing evidence.
   - `git push origin main` - exit 0 for `e435f92` (`fix: separate case title from description`).
+
+- 2026-07-21 21:40-21:53 IST - DOCX ingestion retirement verification
+  - `npm uninstall mammoth jszip` - exit 0; removed 25 packages. npm retained two moderate dependency advisories and the existing three unapproved lifecycle-script notices; no breaking audit fix or script approval was applied.
+  - `npm exec -- vitest run src/server/case-api/upload-boundary.test.ts src/server/case-ingestion/ingestion.test.ts src/server/case-ingestion/adapters/adapters.test.ts src/components/case-editor/case-workbench.test.ts convex/caseCompileReplay.test.ts convex/caseStorageReconciler.test.ts --reporter=dot` - exit 0; six files and 44 tests passed.
+  - `npm run typecheck -- --pretty false`, `npm exec -- tsc -p convex/tsconfig.json --noEmit --pretty false`, and scoped ESLint with `--max-warnings 0` - exit 0.
+  - `npm test -- --reporter=dot` - exit 0 in 21.4 seconds; 178 files passed, three intentional live-only files skipped, 1,578 tests passed, and three skipped. The nine named interruption failure-path diagnostics were expected assertions, not unhandled failures.
+  - `npm run lint` - exit 0 with zero errors and the four existing unused-disable warnings in generated Convex files.
+  - `npm run build` - exit 0 in 31.6 seconds; Next.js 16.2.10 compiled/typechecked and generated all 20 routes/pages.
+  - `git diff --check` - exit 0. Source/package scans found no active Mammoth, JSZip, DOCX adapter, or `node:worker_threads` dependency; the remaining DOCX strings are bounded legacy compatibility tests/schema and historical/current documentation.
 
 ## 17. Blocked external prerequisites
 

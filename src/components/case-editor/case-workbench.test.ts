@@ -46,4 +46,12 @@ describe("publication lifecycle guard", () => {
     expect(source).toContain("fictional educational simulation, not legal advice");
     expect(source).toContain("does not predict real-case outcomes");
   });
+
+  it("offers only the deployment-supported case packet formats", () => {
+    const source = readFileSync(new URL("./case-workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("PDF, TXT, Markdown, or JSON");
+    expect(source).not.toContain(".docx");
+    expect(source).not.toContain("wordprocessingml");
+  });
 });
