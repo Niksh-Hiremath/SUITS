@@ -1002,6 +1002,13 @@ Update after each meaningful checkpoint using dated entries:
   - Blocked: `BLOCKED-EXTERNAL` only for human microphone permission/input and physical-speaker attestation; exact commands and steps are in section 17.
   - Commits: `f74552d`, `77cbc3c`, `96abafb`, `ec261c7`, `7a0099c`, `6c4589a`, and `bb310eb`; this plan/evidence reconciliation follows.
 
+- 2026-07-21 20:21-20:39 IST - Deployment-neutral speech presentation checkpoint
+  - Changed: removed machine-specific and “local audio” markers from the preflight, hearing, records, controller-safe-message, and speech-service presentation surfaces. The new copy names the configured SUITS speech runtime, states that raw microphone audio bypasses OpenAI and Convex, and retains explicit microphone consent.
+  - Regression boundary: server-rendered and mounted preflight checks reject `local`, `locally`, `localhost`, `loopback`, and `this/your machine` in visible text. Hearing and Records fixtures now bind the renamed readiness, preparation, telemetry, and audit labels.
+  - Deployment boundary: this is a presentation change, not a remote-transport claim. The browser client, Python bind validation, and real provider session remain loopback-only. Browser-to-GCP speech requires a secured WSS/authenticated gateway implementation and production-origin verification; the setup and security docs now say so explicitly.
+  - Verified: six focused Vitest files passed 102 tests; scoped ESLint, root TypeScript, speech Ruff format/lint, and five focused speech API tests passed. The in-app browser rendered the replacement banner with no machine/topology marker. The preflight Playwright smoke passed against the already-running `http://localhost:3000` development server.
+  - Commits: `5cc233c` (`fix: make speech copy deployment-neutral`) is on `origin/main`; this checkpoint's documentation and evidence follow in a separate small commit.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1109,6 +1116,7 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A prepared hearing controller generation is a session fence, not an utterance identity. Sequential questions and closings share that generation, and a valid STT final may arrive without a VAD-start boundary; durable audio metadata must key user speech by generation plus utterance ID and preserve an honest terminal-only lifecycle with a null start.
 - Next.js development Strict Effects can abort the first owner-list request while the second succeeds. Collapsing both caller abort and the service client's own timeout into `CASE_SERVICE_UNAVAILABLE` creates a false outage signal; cancellation, timeout, and transport failure require distinct bounded classification.
 - Canonical interruption audio has two valid shapes: a judge ruling verifies the interruption with no transcript turn, while resumed witness testimony verifies both the interruption and answer turn. A generic UUID privacy denylist is likewise invalid because public action and utterance identifiers contain UUIDs; the browser proof must derive and reject the exact signed owner-session UUID.
+- A loopback address is resolved by the browser host. Moving the speech process to a GCP VM does not make `127.0.0.1` reach that VM for an end user's browser, and replacing loopback with a public socket would remove the current security boundary without adding authentication. Deployment-neutral copy and remote transport capability are therefore separate concerns.
 
 ## 15. Decisions
 
@@ -1204,6 +1212,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep Court Records navigation URL-addressable and fail closed: only a strict V3 trial ID may enter `?trial=`, list links remain ordinary history-compatible anchors, and duplicate/malformed values are reduced to a content-free invalid state. Fetch only the selected owner-bound projection, mount one bounded inspector at a time, abort stale reads/downloads, and serialize the already validated server JSON rather than reconstructing an export in the browser.
 - Treat user-speech audit identity as `(controller generation, utterance ID)` and retain terminal-only observations when STT completes without VAD start; never synthesize a start timestamp. Preserve duplicate and conflicting-alias fences per exact utterance.
 - Classify a caller-aborted Court Records service call as a bounded, content-free 499 without outage logging; classify the internal service timeout as 504 and reserve 503 for a real transport failure. Browser gates may ignore only the explicit cancellation status, not other failed API responses.
+- Use topology-neutral user-facing speech labels while keeping technical documentation and enforcement honest. Do not claim GCP/browser remote speech until WSS/TLS, short-lived session-bound authorization, exact origins, replay/rate/connection controls, a protected gateway hop, browser security headers, and a production-origin privacy smoke are implemented and verified.
 
 ## 16. Verification Evidence
 
@@ -1557,11 +1566,19 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - Generated repeat artifacts under `playwright-report/data/` (ignored, local, and replaceable): shared durable-hearing PNG `ec5fa28f3168d28cab89be0d8b79a1266cc5e9a5.png`, 148,167 bytes, SHA-256 `81219ddce0dbc9948e917546ec1367e529265917ca9024bef056947e6cea6b13`; Records PNGs `8165686de54fa219b8eb1d02f39db708c1b43503.png` / `7cd2e33239cadbedc4e05c37817b39ebea1599ec.png` / `bfa0af414c56197a831e4d35725d485d4ca4a859.png`, SHA-256 `5cfb080bf54e5410d3631a4356c0f9e6992c86c964dd90d5e05b618d50584f1d` / `95315a33f509242dd5a8e6a686ffe1e4ac8c8e35895d9cf5cf0310eb9aae2e1b` / `3886366488fb9c55f2be7ba5367df98f171431e8909ee15668d9f9707250faeb`; WebMs `ec072c5fd6e568c1343a39ceba67dbb3410dda83.webm` / `12b732551572ccd24f5168bff492f9550046c889.webm` / `bdfc591fdc840f042797e8647e71a1d051f32bc8.webm`, 96.76 / 92.00 / 91.28 seconds, SHA-256 `b7906f15aa96e388cceda974556c9c94dbc8aa7e58297a39ee9419f3e2d54c7d` / `cd57f24e547958bb54a52ef23bc4b7d256b22fef36fdc7b2a0e07697fa367a45` / `fe75c733ba4a875838cb5d30f69f469584a74eea7aae5395728acaf3ddc5ef6f`.
   - Visual review of the final repeated Records screenshot confirmed the selected Rina Shah record, educational disclaimer, stable counts, all nine controls, bounded event ledger, download affordance, and no visible error/composer. The videos and screenshots remain generated local evidence and are not claimed as committed or externally retained artifacts.
 
+- 2026-07-21 20:21-20:39 IST - Deployment-neutral speech copy verification
+  - `npm exec -- vitest run src/app/preflight/page.source.test.ts src/app/hearing/page.source.test.ts src/components/records/court-records-workspace.source.test.ts src/lib/speech/client.test.ts src/lib/speech/hearing-controller.test.ts src/lib/speech/audio-playback.test.ts --reporter=dot` - exit 0; six files and 102 tests passed.
+  - Scoped `npm exec -- eslint ... --max-warnings 0`, `npm run typecheck -- --pretty false`, and `git diff --check` - exit 0.
+  - From `services/speech`, `uv run --no-sync ruff format --check src tests`, `uv run --no-sync ruff check src tests`, and `uv run --no-sync pytest tests/test_app.py -q` - exit 0; 38 files were already formatted, Ruff passed, and five API tests passed with the existing upstream Starlette/httpx deprecation warning.
+  - In-app browser DOM/screenshot verification at `http://localhost:3000/preflight` showed the replacement “Raw audio bypasses OpenAI and Convex.” banner, **Prepare speech runtime**, and no rendered machine/local/loopback marker.
+  - The first default Playwright attempt is retained as a non-pass: its isolated server could not acquire the Next development lock because PID 26808 was already serving the workspace. A second diagnostic run against `http://127.0.0.1:3000` reached the page but failed only the error-ledger assertion because the development HMR socket rejected that host spelling. The exact rerun with `PLAYWRIGHT_BASE_URL=http://localhost:3000` exited 0; one Chromium preflight smoke passed in 866 ms with an empty browser-error ledger.
+  - `git push origin main` - exit 0 for `5cc233c` (`fix: make speech copy deployment-neutral`).
+
 ## 17. Blocked external prerequisites
 
 Only list genuine external blockers such as absent API credentials, unavailable CUDA hardware, unavailable microphone permission, or missing deployment access. Include the command that will verify the item once unblocked.
 
-- **BLOCKED-EXTERNAL — human microphone and physical-speaker acceptance.** The implementation, automated fake-media browser flow, RTX 5070 provider readiness, and synthetic real-model loop have passed, but this agent cannot supply/attest a human utterance or physical audibility. A person must run the following in PowerShell, then use `/preflight` to select **Run server checks**, **Prepare local audio**, grant microphone permission, speak a fixed fictional phrase until partial/final revisions appear, select **Test speakers**, and personally confirm audible output before completing one hearing turn:
+- **BLOCKED-EXTERNAL — human microphone and physical-speaker acceptance.** The implementation, automated fake-media browser flow, RTX 5070 provider readiness, and synthetic real-model loop have passed, but this agent cannot supply/attest a human utterance or physical audibility. A person must run the following in PowerShell, then use `/preflight` to select **Run server checks**, **Prepare speech runtime**, grant microphone permission, speak a fixed fictional phrase until partial/final revisions appear, select **Test speakers**, and personally confirm audible output before completing one hearing turn:
 
   ```powershell
   .\scripts\setup-local-speech.ps1 -Runtime local-cuda -DownloadModels

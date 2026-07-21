@@ -132,9 +132,15 @@ Install the locked CUDA profile and explicitly download only the pinned model al
 
 Use `-Runtime local-cpu` for the real CPU fallback. See [Local speech](./docs/LOCAL_SPEECH.md) for pinned revisions, licenses, protocol, security, setup, live smoke, and troubleshooting.
 
+### GCP speech deployment boundary
+
+The product UI calls this component the **SUITS speech runtime** so the presentation does not assume where it is hosted. That wording is topology-neutral; it is not a claim that the current WebSocket can be exposed remotely.
+
+The canonical transport in this revision is still loopback-only. In an end user's browser, `127.0.0.1` resolves to that browser's host, not to a GCP VM. Do not point `NEXT_PUBLIC_SUITS_SPEECH_URL` at a public VM address or expose port `8765` directly. A browser-to-GCP speech deployment requires a separately implemented and verified HTTPS/WSS gateway, short-lived session-bound WebSocket authorization, exact origin enforcement, replay/rate/connection limits, proxy and TLS hardening, an explicit `connect-src` policy, and a production-origin audio privacy smoke. See [Local speech](./docs/LOCAL_SPEECH.md#gcp-vps-boundary) and [Security and privacy](./docs/SECURITY_AND_PRIVACY.md#remote-speech-deployment) before deploying.
+
 ## User flow
 
-1. Open `/preflight` and run the server checks. Prepare local audio explicitly; the app never requests microphone permission on page load.
+1. Open `/preflight` and run the server checks. Select **Prepare speech runtime** explicitly; the app never requests microphone permission on page load.
 2. Open `/cases`. Choose Redwood, Harborlight, or Greenline, or open `/cases/new` to upload one fictional packet.
 3. For an upload, inspect warnings, uncertainties, provenance, parties, issues, facts, evidence, witnesses, knowledge boundaries, settlement settings, and jury instructions before publishing.
 4. Start the hearing. Use the microphone controls to call and examine witnesses, respond to procedure, negotiate when available, and give a closing. The deterministic engine—not the model or browser—authorizes every committed event.

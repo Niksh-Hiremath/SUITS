@@ -64,7 +64,7 @@ Only server-side code reads `OPENAI_API_KEY`. The normal model paths use the Res
 - `gpt-5.6-terra` for case compilation and final coaching;
 - `gpt-5.6-luna` for interactive roles, strategy, rulings, negotiation, and jury work.
 
-Case excerpts, final transcript text, and bounded state may be sent to OpenAI when a live model action requires them. Raw microphone audio is not. Anyone operating SUITS must understand that live case text leaves the local machine for the configured OpenAI API; use only fictional or otherwise appropriate content.
+Case excerpts, final transcript text, and bounded state may be sent to OpenAI when a live model action requires them. Raw microphone audio is not. Anyone operating SUITS must understand that live case text leaves the SUITS application boundary for the configured OpenAI API; use only fictional or otherwise appropriate content.
 
 Every role call receives a server-built `KnowledgeView`:
 
@@ -81,6 +81,12 @@ Strict schemas, citation allowlists, exact head/version fences, cancellation IDs
 The production audio path is browser microphone -> loopback `suits.speech.v1` WebSocket -> local STT/TTS. The companion defaults to `127.0.0.1:8765`; non-loopback speech endpoints are rejected. Local VAD, revisioned partial/final STT, Kokoro TTS, cached reactions, cancellation, and timing metadata stay in that boundary.
 
 Final transcript text becomes part of the durable courtroom record. A high-confidence partial objection candidate may be sent as text for a bounded ruling decision. Normal partial text and every raw PCM frame remain local.
+
+### Remote speech deployment
+
+The deployment-neutral UI label **SUITS speech runtime** does not expand the implemented trust boundary. This revision has no authenticated remote WebSocket transport: the browser, service configuration, and real provider session all enforce loopback. Exposing the companion directly on a GCP VM would remove the protection supplied by that boundary while leaving the protocol without a remote-client credential.
+
+Before allowing an end-user browser to reach a GCP-hosted speech runtime, implement and review WSS/TLS termination, short-lived session-bound and one-use authorization, exact origin checks, replay/rate/connection limits, a private or mutually authenticated gateway-to-service hop, CSP/HSTS/Permissions Policy, bounded operational logging, and a production-origin privacy test. Until that work passes, port `8765` must not be public and `NEXT_PUBLIC_SUITS_SPEECH_URL` must remain loopback. A browser running inside the same VPS desktop session is a separate single-host topology and does not prove public remote access.
 
 Court Records audio audits are explicitly noncanonical lifecycle aggregates. Their strict schemas exclude:
 

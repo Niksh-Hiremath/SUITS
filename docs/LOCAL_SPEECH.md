@@ -185,7 +185,7 @@ Invoke-RestMethod http://127.0.0.1:8765/v1/capabilities |
 With the Next.js app and speech companion running, open `http://localhost:3000/preflight`.
 
 - **Run server checks** sends strict `{}` to the same-origin Next.js preflight route. The server refreshes the signed owner session, checks the secret-protected Convex health route, and sends one tiny fixed Responses API probe to each pinned GPT-5.6 model. It sends no case, transcript, user text, or audio. Ready results are reused for five minutes, degraded results for fifteen seconds, and a durable Convex permit limits cold-instance live probes to five in a rolling ten-minute window.
-- **Prepare local audio** connects only to the configured loopback WebSocket, loads and warms the providers, reports CUDA/device/provider/timing readiness, and briefly opens then releases capture. This action can trigger the browser microphone prompt and is never automatic.
+- **Prepare speech runtime** connects only to the configured loopback WebSocket, loads and warms the providers, reports CUDA/device/provider/timing readiness, and briefly opens then releases capture. This action can trigger the browser microphone prompt and is never automatic.
 - **Test speakers** plays a fixed local courtroom clip only after preparation. It does not call OpenAI or Convex.
 - A disconnect or service error revokes the local ready badge and presents a safe recovery action; previously reported provider capabilities are not treated as current readiness.
 
@@ -204,6 +204,21 @@ The defaults allow `http://localhost:3000` and `http://127.0.0.1:3000`. If the N
 ```powershell
 $env:SUITS_SPEECH_ALLOWED_ORIGINS = 'http://localhost:3100,http://127.0.0.1:3100'
 ```
+
+## GCP VPS boundary
+
+Renaming the product-facing component to **SUITS speech runtime** does not change this transport contract. The current browser client rejects non-loopback speech URLs, the Python service rejects non-loopback binds, and real provider sessions reject non-loopback peers. In a browser running on a user's computer, `127.0.0.1` names that computer rather than a GCP VM.
+
+Do not work around those guards by binding the service publicly or forwarding port `8765` without a security design. A supported remote speech deployment needs, at minimum:
+
+- HTTPS for the application and WSS termination for speech;
+- a short-lived, one-use ticket bound to the signed SUITS session, origin, protocol, and expiry;
+- exact origin validation plus replay, rate, frame-size, queue, and connection limits at the gateway;
+- a private service hop or mutually authenticated proxy-to-companion connection;
+- production CSP `connect-src`, HSTS, Permissions Policy, proxy-trust, logging, and health/capability exposure rules; and
+- an end-to-end production-origin test proving PCM reaches only the intended speech runtime and never OpenAI or Convex.
+
+Running the browser inside the same VPS desktop session still satisfies the loopback design, but that is a single-host remote-desktop topology, not a public browser-to-VPS speech deployment.
 
 ## Versioned WebSocket flow
 

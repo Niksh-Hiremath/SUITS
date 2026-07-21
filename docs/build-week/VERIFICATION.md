@@ -181,3 +181,19 @@ All three runs share the durable-hearing screenshot `ec5fa28f3168d28cab89be0d8b7
 ## Remaining external and deployment boundary
 
 The implementation and deterministic/browser/live-provider gates are complete. A human microphone utterance and physically audible speaker result remain `BLOCKED-EXTERNAL`: a person must grant browser permission, speak, and attest output through the documented CUDA preflight path. Mounted recordings for microphone denial, speech disconnect, timeout, malformed-output recovery, and refresh while an action is pending would strengthen the evidence but are not substituted for by unit tests. Production deployment is unverified and is not claimed as a completed capability.
+
+## Deployment-neutral speech copy checkpoint
+
+Executed from the repository root in PowerShell on 2026-07-21 (IST):
+
+| Command | Result |
+| --- | --- |
+| Focused six-file Vitest speech/preflight/hearing slice | Passed: six files and 102 tests. |
+| Scoped ESLint with `--max-warnings 0` | Passed. |
+| `npm run typecheck -- --pretty false` | Passed. |
+| Speech Ruff format/lint and `pytest tests/test_app.py -q` | Passed: 38 files already formatted, no Ruff issue, and five API tests; the existing upstream Starlette/httpx warning remains. |
+| `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/preflight.smoke.spec.ts --workers=1` | Passed: one Chromium smoke in 866 ms with no page/console errors. |
+
+The mounted preflight DOM and screenshot showed **Raw audio bypasses OpenAI and Convex.**, **Prepare speech runtime**, and no visible `local`, `locally`, `localhost`, `loopback`, or `this/your machine` marker. The regression is enforced in both the server-rendered source test and mounted Playwright smoke.
+
+Two diagnostic Playwright attempts are not counted as passes: the default isolated harness could not acquire the existing Next development lock, and an explicit `127.0.0.1` base URL produced only a development HMR host-spelling WebSocket error. The `localhost` rerun used the already-running app and passed cleanly. This checkpoint changes presentation copy only; it does not verify a remote GCP speech transport. The current speech path remains loopback-only until the WSS/authenticated-gateway work in the security and speech documentation is implemented and tested.
