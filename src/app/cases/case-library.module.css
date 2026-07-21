@@ -27,8 +27,13 @@
 .detailHero h1 {
   max-width: 800px;
   margin: 0;
-  font: 500 clamp(3rem, 7vw, 6.2rem)/0.95 Georgia, serif;
+  font: 500 clamp(3rem, 7vw, 6.2rem)/1 Georgia, serif;
   letter-spacing: -0.05em;
+}
+
+.hero h1 + p,
+.detailHero h1 + p {
+  margin: clamp(1.25rem, 2vw, 1.75rem) 0 0;
 }
 
 .hero p,
