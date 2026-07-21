@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
 
+test("keeps preflight out of application navigation", async ({ page }) => {
+  const homeResponse = await page.goto("/");
+  expect(homeResponse?.ok()).toBe(true);
+  await expect(page.locator('a[href^="/preflight"]')).toHaveCount(0);
+
+  const hearingResponse = await page.goto("/hearing/");
+  expect(hearingResponse?.ok()).toBe(true);
+  await expect(page.locator('a[href^="/preflight"]')).toHaveCount(0);
+});
+
 test("renders the preflight workspace without starting audio checks", async ({
   page,
 }) => {

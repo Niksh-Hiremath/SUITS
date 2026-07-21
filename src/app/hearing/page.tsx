@@ -1255,7 +1255,6 @@ function HearingPageContent() {
               Open Court Records
             </Link>
           )}
-          <Link className="text-link" href="/preflight/">System preflight</Link>
           <Link className="text-link" href="/cases/">Case library</Link>
         </div>
       </header>
