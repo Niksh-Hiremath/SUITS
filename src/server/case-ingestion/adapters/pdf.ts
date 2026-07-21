@@ -1,4 +1,4 @@
-import { PDFParse } from "pdf-parse";
+import { getResolvedPDFJS } from "unpdf";
 
 import type { BinaryExtractionInput, DocumentExtractionAdapter } from "../ingestion";
 import { ExtractedDocumentSchema, type ExtractedBlock } from "../schema";
@@ -10,8 +10,34 @@ import {
   rethrowExtractionFailure,
 } from "./shared";
 
-export const PDF_EXTRACTION_ADAPTER_ID = "pdf-parse-v2.4.5" as const;
+export const PDF_EXTRACTION_ADAPTER_ID = "unpdf-v1.6.2" as const;
 export const MAX_PDF_PAGE_COUNT = 300;
+export const MAX_PDF_CLEANUP_DURATION_MS = 2_000;
+
+async function runBoundedPdfCleanup(cleanup: () => Promise<void>): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+    const timer = setTimeout(
+      () =>
+        finish(() => reject(new DocumentExtractionError("UPLOAD_PDF_CLEANUP_TIMEOUT"))),
+      MAX_PDF_CLEANUP_DURATION_MS,
+    );
+    try {
+      void cleanup().then(
+        () => finish(resolve),
+        (error: unknown) => finish(() => reject(error)),
+      );
+    } catch (error) {
+      finish(() => reject(error));
+    }
+  });
+}
 
 async function runPdfOperation<T>(
   operation: () => Promise<T>,
@@ -87,55 +113,101 @@ export const PDF_EXTRACTION_ADAPTER: DocumentExtractionAdapter = Object.freeze({
 
     const deadline = new ExtractionDeadline(input.signal, input.timeoutMilliseconds);
     deadline.throwIfUnavailable("UPLOAD_PDF_EXTRACTION_TIMEOUT");
-    let parser: PDFParse;
+    let pdfjs: Awaited<ReturnType<typeof getResolvedPDFJS>>;
     try {
-      parser = new PDFParse({
+      pdfjs = await runPdfOperation(
+        () => getResolvedPDFJS(),
+        deadline,
+        () => Promise.resolve(),
+        "UPLOAD_PDF_EXTRACTION_TIMEOUT",
+      );
+    } catch (error) {
+      rethrowExtractionFailure("UPLOAD_PDF_EXTRACTION_FAILED", error);
+    }
+
+    let loadingTask: ReturnType<typeof pdfjs.getDocument>;
+    try {
+      loadingTask = pdfjs.getDocument({
         data: Uint8Array.from(input.bytes),
         disableFontFace: true,
         isEvalSupported: false,
         stopAtErrors: true,
-        useSystemFonts: false,
+        useSystemFonts: true,
       });
     } catch (error) {
       rethrowExtractionFailure("UPLOAD_PDF_EXTRACTION_FAILED", error);
     }
 
+    let parser: Awaited<(typeof loadingTask)["promise"]> | undefined;
     let destroyPromise: Promise<void> | undefined;
+    let boundedDestroyPromise: Promise<void> | undefined;
     const destroy = () => {
-      destroyPromise ??= parser.destroy();
+      destroyPromise ??=
+        parser === undefined ? loadingTask.destroy() : parser.destroy();
       return destroyPromise;
+    };
+    const destroyWithinLimit = () => {
+      boundedDestroyPromise ??= runBoundedPdfCleanup(destroy);
+      return boundedDestroyPromise;
     };
     let document: ReturnType<typeof ExtractedDocumentSchema.parse> | undefined;
     let failure: unknown;
     try {
-      const info = await runPdfOperation(
-        () => parser.getInfo(),
+      const loadedParser = await runPdfOperation(
+        () => loadingTask.promise,
         deadline,
-        destroy,
+        destroyWithinLimit,
         "UPLOAD_PDF_EXTRACTION_TIMEOUT",
       );
-      if (info.total > MAX_PDF_PAGE_COUNT) {
+      parser = loadedParser;
+      if (loadedParser.numPages > MAX_PDF_PAGE_COUNT) {
         throw new DocumentExtractionError("UPLOAD_PDF_PAGE_LIMIT_EXCEEDED");
       }
-      if (info.total <= 0) throw new DocumentExtractionError("UPLOAD_CONTENT_EMPTY");
+      if (loadedParser.numPages <= 0) {
+        throw new DocumentExtractionError("UPLOAD_CONTENT_EMPTY");
+      }
 
       const blocks: ExtractedBlock[] = [];
       let extractedCharacters = 0;
-      for (let pageNumber = 1; pageNumber <= info.total; pageNumber += 1) {
-        const result = await runPdfOperation(
-          () => parser.getText({ partial: [pageNumber] }),
+      for (let pageNumber = 1; pageNumber <= loadedParser.numPages; pageNumber += 1) {
+        const page = await runPdfOperation(
+          () => loadedParser.getPage(pageNumber),
           deadline,
-          destroy,
+          destroyWithinLimit,
           "UPLOAD_PDF_EXTRACTION_TIMEOUT",
         );
-        for (const page of result.pages) {
-          const text = normalizeExtractedText(page.text);
+        try {
+          const content = await runPdfOperation(
+            () => page.getTextContent(),
+            deadline,
+            destroyWithinLimit,
+            "UPLOAD_PDF_EXTRACTION_TIMEOUT",
+          );
+          const remainingCharacters =
+            input.maximumCharacters - extractedCharacters - (blocks.length === 0 ? 0 : 2);
+          if (remainingCharacters <= 0) {
+            throw new DocumentExtractionError("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
+          }
+          const textParts: string[] = [];
+          let rawPageCharacters = 0;
+          for (const item of content.items) {
+            if (!("str" in item)) continue;
+            const part = `${item.str}${item.hasEOL ? "\n" : ""}`;
+            rawPageCharacters += part.length;
+            if (rawPageCharacters > remainingCharacters) {
+              throw new DocumentExtractionError("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
+            }
+            textParts.push(part);
+          }
+          const text = normalizeExtractedText(textParts.join(""));
           if (text.length === 0) continue;
           extractedCharacters += text.length + (blocks.length === 0 ? 0 : 2);
           if (extractedCharacters > input.maximumCharacters) {
             throw new DocumentExtractionError("UPLOAD_EXTRACTION_CHARACTER_LIMIT_EXCEEDED");
           }
-          blocks.push({ text, pageNumber: page.num, label: `Page ${page.num}` });
+          blocks.push({ text, pageNumber, label: `Page ${pageNumber}` });
+        } finally {
+          page.cleanup();
         }
       }
       document = ExtractedDocumentSchema.parse({
@@ -147,7 +219,7 @@ export const PDF_EXTRACTION_ADAPTER: DocumentExtractionAdapter = Object.freeze({
       failure = error;
     }
     try {
-      await destroy();
+      await destroyWithinLimit();
     } catch (cleanupError) {
       failure =
         failure instanceof DocumentExtractionError

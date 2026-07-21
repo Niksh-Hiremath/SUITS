@@ -23,7 +23,7 @@
 /.next/
 /out/
 /.open-next/
-/.wrangler/
+.wrangler/
 
 # production
 /build

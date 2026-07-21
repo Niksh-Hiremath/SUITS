@@ -11,6 +11,7 @@
     "cf:upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "cf:test:pdf": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-workerd-pdf.ps1",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -31,10 +32,10 @@
     "convex": "^1.42.1",
     "next": "16.2.10",
     "openai": "^6.46.0",
-    "pdf-parse": "2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "three": "0.185.1",
+    "unpdf": "1.6.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

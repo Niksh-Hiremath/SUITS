@@ -1,0 +1,7 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "suits-pdf-extraction-smoke",
+  "main": "tests/workerd/pdf-extraction.worker.ts",
+  "compatibility_date": "2026-07-14",
+  "compatibility_flags": ["nodejs_compat"]
+}

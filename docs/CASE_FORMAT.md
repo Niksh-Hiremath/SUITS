@@ -13,7 +13,7 @@ The `/cases/new` workbench accepts one file per compilation request:
 | `.txt` | `text/plain` | UTF-8 text |
 | `.md`, `.markdown` | `text/markdown` or `text/x-markdown` | UTF-8 text |
 | `.json` | `application/json` | Parsed only to normalize its textual JSON representation for compilation |
-| `.pdf` | `application/pdf` | Text extracted page by page with `pdf-parse` |
+| `.pdf` | `application/pdf` | Text extracted page by page with the serverless `unpdf` PDF.js build |
 
 JSON upload is **not** a direct CaseGraph import. It is still untrusted source text and must pass the same Terra compilation, grounding, deterministic validation, review, and publication path.
 
