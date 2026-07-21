@@ -1009,6 +1009,12 @@ Update after each meaningful checkpoint using dated entries:
   - Verified: six focused Vitest files passed 102 tests; scoped ESLint, root TypeScript, speech Ruff format/lint, and five focused speech API tests passed. The in-app browser rendered the replacement banner with no machine/topology marker. The preflight Playwright smoke passed against the already-running `http://localhost:3000` development server.
   - Commits: `5cc233c` (`fix: make speech copy deployment-neutral`) is on `origin/main`; this checkpoint's documentation and evidence follow in a separate small commit.
 
+- 2026-07-21 20:41-20:45 IST - Direct-URL-only preflight navigation checkpoint
+  - Changed: removed both `/preflight` links from the landing page and the remaining link from the hearing header. The preflight page and protected same-origin API remain available when an operator enters the route directly.
+  - Regression boundary: a source test scans every production TypeScript/TSX file and rejects an exact `/preflight` navigation destination while proving `src/app/preflight/page.tsx` still mounts `PreflightClient`. The mounted browser check covers both landing-page and hearing navigation.
+  - Verified: three focused Vitest files passed seven tests; scoped ESLint and root TypeScript passed; the focused Chromium file passed two tests in 1.7 seconds. In-app browser snapshots showed no preflight destination on `/` or `/hearing` and confirmed direct `/preflight` access still renders.
+  - Commit: `ecb2f12` (`fix: keep preflight direct-url only`) is on `origin/main`.
+
 ## 14. Discoveries
 
 Record unexpected repository behavior, provider constraints, performance findings, and corrected assumptions with evidence.
@@ -1213,6 +1219,7 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat user-speech audit identity as `(controller generation, utterance ID)` and retain terminal-only observations when STT completes without VAD start; never synthesize a start timestamp. Preserve duplicate and conflicting-alias fences per exact utterance.
 - Classify a caller-aborted Court Records service call as a bounded, content-free 499 without outage logging; classify the internal service timeout as 504 and reserve 503 for a real transport failure. Browser gates may ignore only the explicit cancellation status, not other failed API responses.
 - Use topology-neutral user-facing speech labels while keeping technical documentation and enforcement honest. Do not claim GCP/browser remote speech until WSS/TLS, short-lived session-bound authorization, exact origins, replay/rate/connection controls, a protected gateway hop, browser security headers, and a production-origin privacy smoke are implemented and verified.
+- Keep system preflight out of all product navigation and expose it only as an operator-entered direct route. Treat this as a discoverability boundary, not authentication: knowing `/preflight` still opens the page, while its billable server checks retain their existing signed-session, origin, cache, and durable quota controls.
 
 ## 16. Verification Evidence
 
@@ -1573,6 +1580,13 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - In-app browser DOM/screenshot verification at `http://localhost:3000/preflight` showed the replacement “Raw audio bypasses OpenAI and Convex.” banner, **Prepare speech runtime**, and no rendered machine/local/loopback marker.
   - The first default Playwright attempt is retained as a non-pass: its isolated server could not acquire the Next development lock because PID 26808 was already serving the workspace. A second diagnostic run against `http://127.0.0.1:3000` reached the page but failed only the error-ledger assertion because the development HMR socket rejected that host spelling. The exact rerun with `PLAYWRIGHT_BASE_URL=http://localhost:3000` exited 0; one Chromium preflight smoke passed in 866 ms with an empty browser-error ledger.
   - `git push origin main` - exit 0 for `5cc233c` (`fix: make speech copy deployment-neutral`).
+
+- 2026-07-21 20:41-20:45 IST - Direct-URL-only preflight navigation verification
+  - `npm exec -- vitest run src/app/navigation-boundary.source.test.ts src/app/hearing/page.source.test.ts src/app/preflight/page.source.test.ts --reporter=dot` - exit 0; three files and seven tests passed.
+  - `npm exec -- eslint src/app/page.tsx src/app/hearing/page.tsx src/app/navigation-boundary.source.test.ts tests/e2e/preflight.smoke.spec.ts --max-warnings 0` and `npm run typecheck -- --pretty false` - exit 0.
+  - `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/preflight.smoke.spec.ts --workers=1` - exit 0; two Chromium tests passed in 1.7 seconds. They prove no `/preflight` anchor exists on the landing or hearing pages and the direct route still renders without browser errors.
+  - In-app browser DOM verification independently confirmed `directRouteAvailable: true`, `homepageHasPreflightDestination: false`, and `hearingHasPreflightDestination: false` against the running development app.
+  - `git push origin main` - exit 0 for `ecb2f12` (`fix: keep preflight direct-url only`).
 
 ## 17. Blocked external prerequisites
 

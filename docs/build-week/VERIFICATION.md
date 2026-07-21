@@ -197,3 +197,16 @@ Executed from the repository root in PowerShell on 2026-07-21 (IST):
 The mounted preflight DOM and screenshot showed **Raw audio bypasses OpenAI and Convex.**, **Prepare speech runtime**, and no visible `local`, `locally`, `localhost`, `loopback`, or `this/your machine` marker. The regression is enforced in both the server-rendered source test and mounted Playwright smoke.
 
 Two diagnostic Playwright attempts are not counted as passes: the default isolated harness could not acquire the existing Next development lock, and an explicit `127.0.0.1` base URL produced only a development HMR host-spelling WebSocket error. The `localhost` rerun used the already-running app and passed cleanly. This checkpoint changes presentation copy only; it does not verify a remote GCP speech transport. The current speech path remains loopback-only until the WSS/authenticated-gateway work in the security and speech documentation is implemented and tested.
+
+## Direct-URL-only preflight navigation checkpoint
+
+Executed from the repository root in PowerShell on 2026-07-21 (IST):
+
+| Command | Result |
+| --- | --- |
+| Three-file navigation/hearing/preflight Vitest slice | Passed: three files and seven tests. |
+| Scoped ESLint with `--max-warnings 0` | Passed. |
+| `npm run typecheck -- --pretty false` | Passed. |
+| `$env:PLAYWRIGHT_BASE_URL = 'http://localhost:3000'; npm run test:e2e -- tests/e2e/preflight.smoke.spec.ts --workers=1` | Passed: two Chromium tests in 1.7 seconds. |
+
+The landing page no longer contains either former preflight link, and the hearing header no longer links to the route. A production-source scan rejects any exact `/preflight` navigation destination across TypeScript/TSX while separately proving the route module remains present. Mounted DOM checks on `/` and `/hearing` found no preflight destination; direct navigation to `/preflight` still rendered the readiness workspace. This is intentionally a discoverability boundary rather than authentication—the direct URL remains available to an operator who knows it.
