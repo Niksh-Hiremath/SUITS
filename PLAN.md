@@ -2,11 +2,11 @@
 
 ## Status
 
-Living execution plan for the OpenAI Build Week version of SUITS. Update this file continuously while implementing. Do not replace evidence with optimistic summaries.
+Living execution plan for the OpenAI Build Week version of SUITS. Update this file continuously while implementing. Do not replace evidence with optimistic summaries. The active delivery target is Cloudflare Workers at `https://suits.niksh.in` with managed OpenAI speech; the completed local-speech milestones below are retained as historical evidence and do not certify that new production path.
 
 ## Product statement
 
-**SUITS is a voice-first, evidence-grounded AI courtroom simulator.** A user uploads a fictional case packet, reviews a structured case compiled by GPT-5.6, and conducts a live hearing against AI courtroom participants. Both sides can call and examine multiple witnesses, introduce and challenge evidence, reveal or dispute facts, interrupt with objections, negotiate settlements, and receive a transcript-grounded advocacy debrief. Local NVIDIA-accelerated STT and local TTS provide low-latency audio; GPT-5.6 provides the courtroom intelligence.
+**SUITS is a voice-first, evidence-grounded AI courtroom simulator.** A user uploads a fictional case packet, reviews a structured case compiled by GPT-5.6, and conducts a live hearing against AI courtroom participants. Both sides can call and examine multiple witnesses, introduce and challenge evidence, reveal or dispute facts, interrupt with objections, negotiate settlements, and receive a transcript-grounded advocacy debrief. Managed OpenAI STT/TTS provide deployable speech while GPT-5.6 provides the courtroom intelligence. The Next.js application is delivered through Cloudflare Workers/OpenNext; Convex remains the durable source of truth.
 
 Product boundary: fictional or deliberately anonymized educational simulations only. SUITS does not provide legal advice or predict outcomes of real disputes.
 
@@ -69,14 +69,15 @@ Codex may mark the Goal complete only when all applicable items below are proven
 
 - [x] The canonical courtroom UI is microphone/voice controlled with no visible typed composer.
 - [x] A developer-only typed control exists only behind an explicit non-production flag.
-- [x] A local Python speech companion performs streaming STT and TTS without sending raw audio to OpenAI or Convex.
-- [x] The default STT adapter supports NVIDIA GPU streaming and emits revisioned partial/final transcripts.
-- [x] The default TTS adapter is local, supports multiple character voices, phrase streaming, cancellation, and timing metadata.
-- [x] User barge-in cancels queued/current speech safely.
-- [x] A high-confidence partial transcript can trigger an immediate cached “Objection!” clip and animation before the utterance ends.
+- [ ] After authenticated owner-session and exact-origin checks, the production browser obtains only a short-lived, transcription-scoped bearer credential for managed streaming STT; issuance uses the minimum necessary TTL and a bounded rate, and the long-lived OpenAI key remains server-side.
+- [ ] The production OpenAI STT adapter emits revisioned partial/final transcripts and rejects stale or cross-utterance events.
+- [ ] The production OpenAI TTS adapter supports multiple bounded character voices, phrase streaming, audio-clock timing, cancellation, and backpressure.
+- [ ] User barge-in cancels queued/current managed speech safely.
+- [ ] A high-confidence managed partial transcript can trigger an immediate preloaded “Objection!” clip and animation before the utterance ends.
 - [x] GPT-5.6 receives the objection candidate and record context, and the deterministic engine commits the resulting objection/ruling only after schema and rule validation.
-- [x] False/overruled objections, sustained objections, rephrasing, motion to strike, and resume/cancel behavior are handled coherently.
-- [x] The system exposes speech-service readiness, GPU/provider status, warmup, and actionable errors.
+- [ ] False/overruled objections, sustained objections, rephrasing, motion to strike, and resume/cancel behavior are reverified through the managed speech path.
+- [ ] Direct-URL preflight reports managed-provider authorization/readiness, microphone/speaker readiness, measured warmup, and actionable errors without exposing secrets.
+- [ ] Consent and privacy copy clearly states that microphone audio is sent transiently to OpenAI and generated voices are AI-generated; raw audio and uncommitted partials never enter Convex, traces, analytics, or application logs.
 
 ### D. GPT-5.6 runtime integration
 
@@ -110,16 +111,19 @@ Codex may mark the Goal complete only when all applicable items below are proven
 - [x] Court Records displays the event tree, model calls, role knowledge scope, citations, rulings, interruptions, audio timing, retries, costs, and fallbacks.
 - [x] At least two multi-case automated evaluation scenarios run repeatedly.
 - [x] The core eval gate passes at least 9 of 10 full mocked/replay runs and all deterministic invariant tests.
-- [x] At least one live GPT-5.6 end-to-end run and one live local-GPU speech run are recorded when credentials/hardware are available.
+- [x] At least one live GPT-5.6 end-to-end run is recorded.
+- [ ] At least one live managed-speech production-path run is recorded with real provider responses and honest human microphone/speaker attestation.
 
 ### G. Quality and delivery
 
 - [x] `npm run lint`, `npm run typecheck`, `npm test`, `npm run eval`, `npm run build`, `npm run test:e2e`, and `npm run verify` pass, with external skips reported honestly.
-- [x] Speech-service tests pass in CI/mock mode and on the target local environment when available.
+- [ ] Managed-speech adapter/auth/stream/cancellation tests pass in deterministic mode and against the real provider when credentials are available.
+- [ ] The OpenNext Cloudflare build and local `workerd` preview pass the protected API, PDF ingestion, hearing, and Court Records smoke paths.
 - [x] No secret is present in tracked files or client bundles.
-- [x] README and required architecture/setup/security/case-format/build-week/demo documents are complete.
+- [ ] README and required architecture/setup/security/case-format/build-week/demo/deployment documents describe the managed-speech and Cloudflare production path.
 - [x] The primary demo path can be completed reliably in under three minutes without manual database edits.
-- [x] A recovery path exists for microphone permission denial, speech-service disconnect, OpenAI timeout, malformed model output, and browser refresh—without exposing the production text composer.
+- [ ] A recovery path is verified for microphone permission denial, managed-speech disconnect/timeout, OpenAI reasoning timeout, malformed model output, and browser refresh—without exposing the production text composer.
+- [ ] `https://suits.niksh.in` serves valid TLS, production bindings/secrets, and a successful owner-bound hearing-to-Court-Records flow.
 
 ---
 
@@ -142,6 +146,8 @@ src/
   app/
     api/
       cases/compile/route.ts
+      speech/realtime/session/route.ts
+      speech/tts/route.ts
       trials/[trialId]/respond/route.ts
       trials/[trialId]/interrupt/route.ts
     cases/
@@ -164,28 +170,22 @@ src/
     openai/
     convex/
     documents/
+    speech/
   lib/
+    speech/
   evals/
-
-services/speech/
-  pyproject.toml
-  src/suits_speech/
-    app.py
-    protocol.py
-    vad.py
-    stt/
-    tts/
-    audio_queue.py
-    timing.py
-  tests/
 
 public/
   courtroom/
   audio/cached/
 
+open-next.config.ts
+wrangler.jsonc
+
 docs/
   ARCHITECTURE.md
-  LOCAL_SPEECH.md
+  MANAGED_SPEECH.md
+  CLOUDFLARE_DEPLOYMENT.md
   CASE_FORMAT.md
   ASSETS.md
   SECURITY_AND_PRIVACY.md
@@ -284,9 +284,9 @@ Every user utterance, model response, objection interrupt, TTS job, and committe
 
 ```text
 Browser microphone
-  -> AudioWorklet / PCM frames
-  -> localhost speech WebSocket
-  -> local VAD + streaming STT
+  -> user-approved MediaStream
+  -> OpenAI Realtime transcription over WebRTC
+  -> short-lived session credential minted by an authenticated same-origin route
   -> revisioned partial/final transcript events
 
 Final transcript or material interrupt candidate
@@ -297,12 +297,12 @@ Final transcript or material interrupt candidate
   -> deterministic validation
   -> Convex append-only events/traces
   -> streamed dialogue chunks
-  -> local TTS WebSocket queue
-  -> audio + viseme/timing events
+  -> authenticated same-origin OpenAI TTS streaming route
+  -> browser audio queue + audio-clock timing events
   -> Three.js courtroom animation
 ```
 
-Convex persists canonical state. The browser coordinates live media but cannot authorize actions by itself.
+Convex persists canonical state. The browser coordinates live media but cannot authorize actions by itself. Raw microphone audio is transient provider input: it never passes through Convex or application persistence, traces, analytics, or logs. The production OpenAI key remains server-side; browser STT receives only a short-lived, transcription-scoped bearer secret after the SUITS server verifies the authenticated owner session and exact allowed origin. The bearer secret itself is not treated as cryptographically owner- or origin-bound.
 
 ### 5.1 OpenAI call classes
 
@@ -329,26 +329,23 @@ Do not call all six on every turn. Routine dialogue should use the smallest vali
 
 ---
 
-## 6. Local speech protocol
+## 6. Managed speech contracts
 
-Create a versioned JSON control protocol plus binary PCM/audio frames.
+Keep the existing provider-neutral browser contract so deterministic hearing logic does not import an OpenAI transport. The managed adapters translate provider events into the same bounded semantic events used by the controller.
 
-### Client -> speech service
+### Browser orchestration commands
 
 ```text
-hello
-load_models
+connect
 start_utterance
-audio_chunk
 end_utterance
 cancel_utterance
 synthesize
 cancel_synthesis
-set_voice
-ping
+disconnect
 ```
 
-### Speech service -> client
+### Provider-neutral browser events
 
 ```text
 ready
@@ -364,24 +361,33 @@ tts_finished
 cancelled
 metrics
 error
-pong
 ```
 
-Every transcript event includes `utteranceId` and monotonic `revision`. Every TTS event includes `jobId`, actor, sequence, and cancel state.
+Every transcript event includes `utteranceId` and a monotonic `revision`. Every TTS event includes `jobId`, actor, sequence, response identity, and cancel state. Late transcript, model, and audio events carrying stale identities are ignored.
 
-### Default providers
+### Production providers and transport
 
-- STT: configurable NVIDIA Nemotron streaming English adapter on CUDA.
-- VAD: lightweight local VAD.
-- TTS: configurable Kokoro adapter with per-character voices.
+- STT: configurable documented OpenAI Realtime transcription model over browser WebRTC, authorized by a short-lived, transcription-scoped bearer secret issued only after an authenticated owner-session and exact-origin check.
+- Utterance boundaries: explicit controller start/end with provider/session correlation; provider VAD may assist only when its semantics are verified and cannot authorize a courtroom turn.
+- TTS: configurable documented OpenAI Speech API model behind a same-origin authenticated streaming route with a server-owned actor-to-voice allowlist.
+- Timing: derive audible start, duration, mouth cues, and cancellation from the browser audio clock and validated PCM format; do not invent provider timing marks.
+- Fixed reactions: preload bounded repository-owned or pre-generated disclosed AI clips so an objection reaction does not wait for a new TTS request.
 - CI: deterministic fake STT/TTS providers.
 
-Do not download model weights during normal application startup without explicit setup. Provide a setup command, cache detection, progress reporting, and disk/VRAM requirements.
+Provider models and voices are environment-configurable only through server-owned allowlists. A failed or unsupported model check is a visible preflight failure, never a silent provider or deterministic-dialogue fallback.
+
+### Security and privacy invariants
+
+- Never serialize `OPENAI_API_KEY` or a reusable provider credential into client code, Convex, logs, traces, URLs, or Court Records.
+- Require authenticated owner session, exact allowed origin, bounded rate/size/duration, and a narrow purpose before minting an STT client secret or starting TTS.
+- Send raw microphone audio only to the selected speech provider after explicit disclosure and consent. Do not persist it or route it through Convex.
+- Keep uncommitted partial transcripts ephemeral. Persist only the final transcript and the minimum interruption candidate required by the canonical trial record.
+- Abort provider work and browser playback on barge-in, navigation, stale session, stale trial head, or controller teardown.
 
 ### Interruption flow
 
 1. STT emits a partial revision.
-2. A fast deterministic candidate detector checks likely objection patterns and current rules.
+2. A fast deterministic browser candidate detector checks likely objection patterns and current rules.
 3. On high confidence, create `interruptId`, stop/pause the current speech turn, play a cached “Objection!” clip, and animate opposing counsel standing.
 4. Send only the candidate partial, recent exchange, and relevant rule profile to `ObjectionResolver`.
 5. Validate the structured result.
@@ -389,7 +395,7 @@ Do not download model weights during normal application startup without explicit
 7. Cancel, strike, resume, or request rephrasing according to the ruling.
 8. Ignore any late transcript/model/TTS result carrying stale IDs.
 
-The local candidate detector proposes an interruption; it does not make the legal ruling.
+The browser candidate detector proposes an interruption; it does not make the legal ruling.
 
 ---
 
@@ -428,8 +434,8 @@ The model may emit semantic fields only. Map them through a renderer-owned allow
 - Clear microphone state and who currently owns the floor.
 - Voice commands for pause, resume, repeat, request recess, accept/reject offer, and end examination.
 - Transcript available as a record/inspection drawer, not as a text-input fallback.
-- Recovery UI for local speech disconnected, model timeout, and invalid action.
-- A preflight page tests microphone, speakers, local speech service, CUDA/model readiness, Convex, and OpenAI configuration before the hearing.
+- Recovery UI for managed speech disconnect/timeout, microphone denial, model timeout, and invalid action.
+- A direct-URL-only preflight page tests microphone, speakers, managed speech authorization/readiness, Convex, OpenAI reasoning configuration, and the active production origin before the hearing.
 
 ---
 
@@ -519,7 +525,9 @@ Gate:
 - [x] With a key available, at least one live GPT-5.6 multi-witness trial completes without knowledge leakage or unsupported admitted facts.
 - [x] Runtime witness/counsel answers are accepted GPT-5.6 outputs, not authored golden-answer replacements.
 
-### Milestone 5 — Local real-time STT/TTS companion
+### Milestone 5 — Historical local real-time STT/TTS companion (superseded)
+
+This milestone records completed local CUDA/Kokoro/Nemotron work from the original delivery contract. The user later selected managed API speech so Cloudflare can host the product without a GPU VM. Its evidence remains valid history, but it does not certify or block the canonical production path in Milestone 10.
 
 Deliverables:
 
@@ -535,8 +543,8 @@ Deliverables:
 Gate:
 
 - [x] Protocol and cancellation tests pass without GPU.
-- [ ] **BLOCKED-EXTERNAL:** on target hardware, a human microphone utterance and physically audible local response still require a person to grant browser permission, speak, and attest speaker output; the real RTX 5070 in-memory provider loop is verified separately.
-- [x] Raw audio is absent from OpenAI requests and Convex records by strict transport/source/schema, production-client, and owner-bound persistence tests.
+- [x] The real RTX 5070 in-memory provider loop was recorded; human microphone and physical-audibility attestation was not performed and is not relabelled as proof.
+- [x] Historical local-path tests prove raw audio was absent from OpenAI requests and Convex records under that retired topology.
 
 ### Milestone 6 — Mid-sentence objections and live orchestration
 
@@ -554,6 +562,7 @@ Gate:
 
 - [x] E2E fixture proves objection can interrupt before final STT, cancel active audio, obtain a validated ruling, and resume coherently.
 - [x] Late model/audio events cannot alter the committed post-ruling state.
+- [ ] The same interruption and stale-result invariants pass through the managed OpenAI speech adapters in Cloudflare preview and production.
 
 ### Milestone 7 — Animated courtroom
 
@@ -591,7 +600,9 @@ Gate:
 - [x] Every debrief factual claim is citation-valid.
 - [x] Jury/debrief tests prove excluded and stricken material is not used as admissible support.
 
-### Milestone 9 — Hardening, documentation, and demo
+### Milestone 9 — Historical pre-cutover hardening, documentation, and demo
+
+This milestone was complete for the local-speech/Node delivery contract on 2026-07-20. Its checks remain historical evidence; they do not claim the reopened Milestone 10 DoD, Cloudflare deployment, managed speech, or production-domain gates are complete.
 
 Deliverables:
 
@@ -606,10 +617,32 @@ Deliverables:
 
 Gate:
 
-- [x] All Definition of Done items have evidence or explicit external blockers.
-- [x] Full verification passes.
+- [x] All then-current Definition of Done items had evidence or explicit external blockers before the managed-speech/Cloudflare cutover.
+- [x] The pre-cutover full verification passed.
 - [x] Fresh setup instructions have been exercised as far as the current environment permits.
 - [x] No production route exposes secrets or visible typed courtroom input.
+
+### Milestone 10 — Cloudflare deployment and managed speech cutover
+
+Deliverables:
+
+- [ ] OpenNext and Wrangler configuration with a production-like local `workerd` preview;
+- [ ] Cloudflare-compatible protected API routes, text-based PDF extraction, hearing orchestration, and Court Records;
+- [ ] authenticated owner-session and exact-origin checks before rate-limited issuance of minimum-TTL, transcription-scoped OpenAI Realtime bearer authorization;
+- [ ] provider-neutral managed STT browser adapter with revision, utterance, cancellation, and reconnect fencing;
+- [ ] authenticated streaming OpenAI TTS route with bounded actor voices, phrase queueing, audio-clock timing, cancellation, and backpressure;
+- [ ] explicit microphone-to-OpenAI and AI-voice disclosures plus retention/privacy documentation;
+- [ ] production Convex bindings/secrets and removal of the Python/loopback service from the canonical startup/deployment path;
+- [ ] Cloudflare Worker deployment and `suits.niksh.in` DNS/custom-domain/TLS configuration;
+- [ ] updated README, architecture, managed-speech, Cloudflare, security, demo, Build Week delta, and verification documentation.
+
+Gate:
+
+- [ ] `npm run cf:build` and the local `workerd` preview pass protected upload/PDF, hearing, interruption, reload, and Records/export smokes.
+- [ ] Deterministic managed-speech tests cover authorization, strict schemas, revisions, cancellation, rate/size limits, provider errors, and stale-result rejection.
+- [ ] A live managed STT/TTS run proves real provider traffic without raw audio or reusable credentials entering Convex, application logs, traces, analytics, or client bundles.
+- [ ] `https://suits.niksh.in` has valid TLS and completes the production owner-bound case-to-hearing-to-Records flow with no page/console/API errors.
+- [ ] Human microphone input and physically audible AI speech are attested on the production origin; automation remains clearly labelled when fake media or muted output is used.
 
 ---
 
@@ -632,9 +665,11 @@ Gate:
 - Convex event append + replay;
 - OpenAI mock structured output + repair;
 - uploaded case extraction + compilation fixture;
-- speech WebSocket protocol;
-- browser orchestrator -> model mock -> TTS mock;
+- managed-speech route authorization, origin/session binding, rate/size bounds, provider schema validation, and error mapping;
+- OpenAI Realtime event normalization, item correlation, PCM conversion, partial/final revisions, cancellation, and reconnect fencing;
+- browser orchestrator -> managed-speech mock -> model mock -> streaming TTS mock;
 - interrupted speech and late-result rejection.
+- OpenNext build and protected-route smoke under local Cloudflare `workerd`.
 
 ### E2E
 
@@ -650,6 +685,7 @@ Gate:
 10. Settlement is offered and resolved.
 11. Trial completes with jury/verdict/debrief.
 12. Court Records and replay show identical committed history.
+13. The same path passes on the deployed `https://suits.niksh.in` origin with valid TLS and production bindings.
 
 ### Reliability eval assertions
 
@@ -670,13 +706,13 @@ Gate:
 
 Measure rather than claim. Record machine, provider, warm/cold state, and sample size.
 
-Initial targets on the target RTX 5070 environment:
+Initial targets on the deployed production path, recorded with client region/network, provider model/version, browser, warm/cold state, and sample size:
 
-- local STT partial update p95: <= 300 ms after audio chunk arrival;
+- managed STT partial update p95: <= 500 ms after the provider has sufficient audio;
 - cached objection audio/animation start: <= 250 ms after candidate threshold;
 - final transcript commit: <= 800 ms after speech end;
 - GPT-5.6 visible/structured first useful output: target <= 3.5 s, reported honestly;
-- local TTS first audio after first safe phrase: target <= 600 ms warm;
+- managed TTS first audible audio after the first safe phrase: target <= 900 ms warm;
 - cancellation of active TTS: <= 150 ms;
 - courtroom render: 60 FPS target, >= 30 FPS reduced-quality minimum during normal operation.
 
@@ -694,7 +730,11 @@ Performance misses do not justify unsafe state shortcuts. Optimize after correct
 - [x] Trial/action authorization is checked server-side.
 - [x] Role-specific knowledge is filtered server-side.
 - [x] Logs avoid raw secrets and unnecessary full document contents.
-- [x] Raw audio remains local by default.
+- [ ] Explicit consent states that microphone audio is sent transiently to OpenAI and generated voices are AI-generated.
+- [ ] Raw audio bypasses Convex, application persistence, traces, analytics, and logs; uncommitted partial transcripts remain ephemeral.
+- [ ] Reusable provider credentials remain server-side; browser credentials are short-lived and transcription-scoped, and the issuance route enforces authenticated owner session, exact allowed origin, minimum necessary TTL, and bounded rate without claiming bearer-token origin binding.
+- [ ] Speech routes enforce strict origin/session checks, rate/size/duration bounds, allowlisted models/voices, safe errors, cancellation, and CSP/connect-src policy.
+- [ ] Provider retention/data-use terms and the exact production transport are documented and verified without claiming guarantees the provider does not make.
 - [x] Delete/export controls for user case/trial data are documented or implemented; stable Records export exists and the lack of self-service deletion is explicit.
 - [x] Educational disclaimer appears during upload and hearing.
 - [x] Real-person voice cloning is not implemented.
@@ -708,7 +748,8 @@ Required files:
 ```text
 README.md
 docs/ARCHITECTURE.md
-docs/LOCAL_SPEECH.md
+docs/MANAGED_SPEECH.md
+docs/CLOUDFLARE_DEPLOYMENT.md
 docs/CASE_FORMAT.md
 docs/ASSETS.md
 docs/SECURITY_AND_PRIVACY.md
@@ -718,7 +759,7 @@ docs/build-week/VERIFICATION.md
 docs/build-week/CODEX_SESSIONS.md
 ```
 
-`BUILD_WEEK_DELTA.md` must explicitly state that the previous repository already had the golden case, deterministic phase machine, traces, basic voice integration, and debrief/eval foundations. It must then identify the post-baseline event engine, uploads, GPT-5.6 runtime, local speech, multi-witness behavior, interruptions, negotiation, and animation work with commit references.
+`BUILD_WEEK_DELTA.md` must explicitly state that the previous repository already had the golden case, deterministic phase machine, traces, basic voice integration, and debrief/eval foundations. It must then identify the post-baseline event engine, uploads, GPT-5.6 runtime, historical local-speech work, managed-speech cutover, Cloudflare deployment, multi-witness behavior, interruptions, negotiation, and animation work with commit references.
 
 Never fabricate a Codex session ID or `/feedback` ID. Leave an obvious placeholder and tell the user the exact command to run at the end of the primary Codex thread.
 
@@ -743,11 +784,13 @@ Update after each meaningful checkpoint using dated entries:
 - [x] Milestone 2 complete.
 - [x] Milestone 3 complete.
 - [x] Milestone 4 complete.
-- [ ] Milestone 5 complete — implementation, deterministic browser orchestration, and the real CUDA provider smoke are complete; only the human microphone/physical-speaker gate is `BLOCKED-EXTERNAL` in section 17.
-- [x] Milestone 6 complete.
+- [x] Milestone 5 historical local implementation complete and explicitly superseded by the user-approved managed-speech cutover; its missing human audibility proof is not a current production gate.
+- [x] Milestone 6 transport-independent interruption behavior complete in the historical loopback/fake-media path.
+- [ ] Milestone 6 managed-speech production-path reverification remains in Milestone 10.
 - [x] Milestone 7 complete.
 - [x] Milestone 8 complete.
-- [x] Milestone 9 complete.
+- [x] Milestone 9 historical pre-cutover gate complete; current documentation/verification work is reopened under Milestone 10.
+- [ ] Milestone 10 Cloudflare deployment and managed speech cutover complete.
 
 - 2026-07-18 17:09 IST — Milestone 0 baseline and preservation gate
   - Changed: recorded the environment, repository map, git boundary, legacy behavior, preserve/migrate/retire classification, baseline blockers, and exact verification evidence; created `docs/build-week/BASELINE.md`.
@@ -1027,7 +1070,14 @@ Update after each meaningful checkpoint using dated entries:
   - Compatibility: split active-upload MIME validation from durable-record MIME validation. New DOCX registrations and normalization fail closed, while existing DOCX upload records still parse, replay, and remain recognizable to the orphan-storage reconciler. Convex already stores the MIME as a string, so no database rewrite or fabricated backfill is required.
   - Verified: the six-file focused gate passed 44 tests; root and Convex TypeScript passed; scoped ESLint passed with zero warnings; the full root suite passed 178 files with three intentional live-only files skipped and 1,578 tests passed with three skipped; full lint had zero errors and only four existing generated-file warnings; the production build compiled and generated all 20 routes/pages; `git diff --check` passed.
   - Boundary: this removes the known non-functional `node:worker_threads` DOCX path and 25 transitive packages. PDF extraction and the complete Next.js application still require a real OpenNext/Cloudflare preview before deployment compatibility is claimed.
-  - Commit: `feat: retire DOCX ingestion` is the scoped implementation/documentation checkpoint and is pushed to `origin/main` after the recorded gates pass.
+  - Commit: `518edd0` (`feat: retire DOCX ingestion`) is the scoped implementation/documentation checkpoint on `origin/main`.
+
+- 2026-07-21 22:05 IST - Milestone 10 architecture-contract reconciliation
+  - Changed: recorded the user-authorized move from an expiring GCP GPU plan to Cloudflare Workers/OpenNext and managed OpenAI STT/TTS; replaced current local/CUDA requirements with explicit ephemeral authorization, transient audio, streaming/cancellation, disclosure, privacy, deployment, domain, and production-verification gates. Historical local-speech work and evidence remain intact but no longer certify the canonical path.
+  - Verified: official OpenAI documentation and the installed SDK expose Realtime transcription client secrets/WebRTC events and streaming Speech API responses; official Cloudflare/OpenNext documentation identifies a supported Next.js 16 Workers build/preview path. Repository audits confirmed the existing provider-neutral hearing controller is reusable and that active DOCX support is already removed.
+  - Remaining: prove the current app under local Cloudflare `workerd`; implement and live-spike the managed speech adapters; update production UI/privacy/docs; deploy and verify `suits.niksh.in`.
+  - Blocked: none at contract reconciliation. Cloudflare account/domain access and real microphone/speaker attestation are external gates only if they prove unavailable when reached.
+  - Commit: `docs: adopt Cloudflare speech architecture` (this scoped contract checkpoint).
 
 ## 14. Discoveries
 
@@ -1139,13 +1189,18 @@ Record unexpected repository behavior, provider constraints, performance finding
 - A loopback address is resolved by the browser host. Moving the speech process to a GCP VM does not make `127.0.0.1` reach that VM for an end user's browser, and replacing loopback with a public socket would remove the current security boundary without adding authentication. Deployment-neutral copy and remote transport capability are therefore separate concerns.
 - Tailwind's global reset removes the case-summary paragraph's default block margin. Combined with a sub-`1` Georgia display line-height, a wrapped case title had a zero-pixel layout gap to its summary even though the DOM order was correct; large serif descenders then visibly crossed into the next text. Explicit adjacent-sibling spacing is required rather than relying on browser paragraph defaults.
 - Cloudflare's Node compatibility layer can make `node:worker_threads` importable while exposing it only as a non-functional stub. The former DOCX adapter constructed a real worker for every Mammoth parse, so an apparently successful bundle would still fail at runtime; active support had to be removed or redesigned rather than hidden behind `nodejs_compat`.
+- [OpenNext supports the repository's Next.js 16 release on Cloudflare Workers](https://opennext.js.org/cloudflare), but a normal `next build` does not prove Workers compatibility. The required gate is an OpenNext build plus a real local `workerd` preview, followed by a Workers dry-run/deploy artifact check.
+- The current preflight cache shares an in-flight fetch promise at module scope. Cloudflare Workers can reject cross-request I/O reuse, so deployment compatibility requires caching only completed data or scoping deduplication to a request.
+- Text-based PDF ingestion still needs an actual Workers-runtime fixture. Its parser/worker behavior and the 20 MB multipart route's peak memory must be measured against [Cloudflare's 128 MB Worker memory limit](https://developers.cloudflare.com/workers/platform/limits/) rather than inferred from the successful Node build.
+- [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription) completion events can arrive out of turn, so the managed adapter must correlate by provider item ID and then map into the existing SUITS utterance/revision fence. A live spike must also prove partial deltas arrive before the manual end-of-utterance commit; otherwise the current mid-sentence objection behavior is not certified.
+- The existing `HearingSpeechClientPort`, controller, capture, playback, interruption detector, and audio audit boundaries are provider-neutral. Managed speech can be introduced as an adapter without weakening deterministic trial ownership or rewriting the verified cancellation/barge-in state machines. The capture path is 16 kHz while the selected Realtime PCM contract is 24 kHz, so explicit bounded resampling is required.
 
 ## 15. Decisions
 
 Record consequential choices, alternatives, and rationale. Do not use this section to silently weaken acceptance criteria.
 
-- Keep Convex as canonical durable state while moving live streaming orchestration to server routes and the local speech companion.
-- Use local STT/TTS and GPT-5.6 text reasoning; raw audio does not go to OpenAI.
+- **Historical decision, superseded 2026-07-21:** keep Convex as canonical durable state while moving live streaming orchestration to server routes and the local speech companion. Convex remains canonical; the local-companion transport does not.
+- **Historical decision, superseded 2026-07-21:** use local STT/TTS and GPT-5.6 text reasoning so raw audio does not go to OpenAI. Managed OpenAI speech now replaces only this transport/privacy premise.
 - Keep an internal transcript and developer-only typed control, while removing visible production text input.
 - Preserve the existing `hermes-hackathon-v1` tag at `2fec9bc`; do not recreate, force, or move it.
 - Preserve legacy proof in git history rather than restoring deleted phase-one documents as if they were current product documentation. Cite the tagged files from the Build Week delta where useful.
@@ -1186,7 +1241,9 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Treat M4 revision handling as immutable response/call identity plus stale-head rejection and cancellation. Do not conflate that gate with revisioned partial STT, which remains an explicit Milestone 5/6 deliverable.
 - Pause an AI question response at the protected application boundary until the player chooses object or continue. This provides deterministic user agency now without claiming audible mid-sentence interruption before the local speech companion exists.
 
-- Keep the local speech transport loopback-only with a strict `suits.speech.v1` subprotocol, bounded JSON/binary frames, hello timeout, connection/session/utterance/queue limits, revision and response identities, and explicit client acknowledgements. Raw microphone PCM stays inside this browser-to-local-service boundary and is neither persisted nor forwarded to Convex or OpenAI.
+The transport-specific decisions from the following local-loopback bullet through the automated loopback E2E bullet are historical Milestone 5/6 implementation records and are superseded for production by the 2026-07-21 managed-speech decisions below. Their provider-neutral bounds, identity fences, cancellation semantics, and honest-evidence rules remain active where restated in Milestone 10.
+
+- **Historical local-path decision:** keep the local speech transport loopback-only with a strict `suits.speech.v1` subprotocol, bounded JSON/binary frames, hello timeout, connection/session/utterance/queue limits, revision and response identities, and explicit client acknowledgements. Raw microphone PCM stays inside this browser-to-local-service boundary and is neither persisted nor forwarded to Convex or OpenAI.
 - Prewarm the three canonical courtroom reactions atomically from configured local voices during explicit model loading. Publish no partial cache, persist no generated audio, expose only stable clip IDs in capabilities, and allow cached playback without a new synthesis call; failure leaves the full cache unready and retryable.
 
 - Pin the speech extras as two mutually exclusive uv profiles: `local-cpu` uses the official PyTorch CPU index and `local-cuda` uses the official CUDA 13.0 index. Both include the exact Kokoro package, Transformers 5.13.x, `librosa`, and the offline English wheel; the default `dev` sync remains lightweight and must not install real providers.
@@ -1234,14 +1291,22 @@ Record consequential choices, alternatives, and rationale. Do not use this secti
 - Keep Court Records navigation URL-addressable and fail closed: only a strict V3 trial ID may enter `?trial=`, list links remain ordinary history-compatible anchors, and duplicate/malformed values are reduced to a content-free invalid state. Fetch only the selected owner-bound projection, mount one bounded inspector at a time, abort stale reads/downloads, and serialize the already validated server JSON rather than reconstructing an export in the browser.
 - Treat user-speech audit identity as `(controller generation, utterance ID)` and retain terminal-only observations when STT completes without VAD start; never synthesize a start timestamp. Preserve duplicate and conflicting-alias fences per exact utterance.
 - Classify a caller-aborted Court Records service call as a bounded, content-free 499 without outage logging; classify the internal service timeout as 504 and reserve 503 for a real transport failure. Browser gates may ignore only the explicit cancellation status, not other failed API responses.
-- Use topology-neutral user-facing speech labels while keeping technical documentation and enforcement honest. Do not claim GCP/browser remote speech until WSS/TLS, short-lived session-bound authorization, exact origins, replay/rate/connection controls, a protected gateway hop, browser security headers, and a production-origin privacy smoke are implemented and verified.
+- **Historical GCP-gateway decision, superseded 2026-07-21:** use topology-neutral user-facing speech labels while withholding remote-speech claims until a protected GCP gateway is implemented. The honesty requirement remains; the GCP/WSS gateway topology is replaced by Cloudflare plus direct OpenAI Realtime transcription and same-origin TTS.
 - Keep system preflight out of all product navigation and expose it only as an operator-entered direct route. Treat this as a discoverability boundary, not authentication: knowing `/preflight` still opens the page, while its billable server checks retain their existing signed-session, origin, cache, and durable quota controls.
 - Give every case-library and seeded-detail display title a full `1` line height and an explicit responsive gap before its summary. Keep a mounted minimum-gap assertion across desktop, the grid breakpoint, and mobile instead of encoding font-dependent title-wrap thresholds.
 - Retire DOCX as an active packet format for the Cloudflare deployment target. Keep PDF/TXT/Markdown/JSON support and preserve the original Milestone 2 history, but ship no Mammoth/ZIP/worker-thread parser. Maintain a separate legacy MIME record schema so old indexed DOCX drafts and storage objects remain readable without allowing any new DOCX registration.
+- **Superseding deployment decision (2026-07-21):** abandon the proposed GCP GPU VM because the user's free credit expires on August 7 while judging continues through August 10. Target Cloudflare Workers/OpenNext and `suits.niksh.in` instead. This changes hosting and speech transport, not the courtroom, grounding, privacy, determinism, or verification outcome.
+- **Superseding speech decision (2026-07-21):** managed OpenAI STT/TTS replaces the local Python/CUDA path as canonical production speech. Earlier local-only decisions and Milestone 5 evidence remain historical; they no longer define completion or privacy claims for the deployed product.
+- Send microphone audio directly from the consenting browser to OpenAI Realtime transcription over WebRTC using a short-lived, transcription-scoped bearer secret issued only after authenticated owner-session and exact-origin checks with the minimum necessary TTL and bounded rate. Never claim the bearer secret itself is origin-bound, expose the reusable API key, or proxy the long-lived Realtime media stream through Cloudflare.
+- Stream TTS through an authenticated same-origin Cloudflare route that applies a server-owned model/voice allowlist and bounded phrase input. Reuse the verified browser audio queue, audio-clock timing, response/job identities, cancellation, and barge-in fences. Specialized documented OpenAI speech models are narrow exceptions to the Luna/Terra courtroom-reasoning policy.
+- Preserve the provider-neutral `HearingSpeechClientPort` and keep deterministic fake adapters for CI. Keep the Python companion only as historical/regression proof until managed-path parity is verified; remove it from canonical startup, preflight, documentation, and deployment rather than deleting evidence prematurely.
+- Deploy progressively: pass local `workerd` and Wrangler dry-run gates, smoke a temporary Workers deployment, then attach `suits.niksh.in` and run production-origin TLS, privacy, owner-isolation, hearing, and Records verification. Do not let a temporary `workers.dev` smoke satisfy the custom-domain gate.
 
 ## 16. Verification Evidence
 
 For every gate, record exact commands, exit status, relevant metrics, artifact paths, screenshots/video paths, and external skips. Do not write “works” without evidence.
+
+All local-speech, CUDA, loopback WebSocket, Node-only build, and fake-media evidence below remains valid for the historical implementation it names. None of it is evidence for managed OpenAI speech, Cloudflare `workerd`, the deployed production origin, real microphone input, or physical speaker audibility. Milestone 10 requires new evidence for those paths.
 
 - 2026-07-18 16:40–17:09 IST — Milestone 0 baseline
   - `git status --short --branch` — exit 0; clean `main...origin/main` at `92c00e3`.
@@ -1622,20 +1687,16 @@ For every gate, record exact commands, exit status, relevant metrics, artifact p
   - `npm run build` - exit 0 in 31.6 seconds; Next.js 16.2.10 compiled/typechecked and generated all 20 routes/pages.
   - `git diff --check` - exit 0. Source/package scans found no active Mammoth, JSZip, DOCX adapter, or `node:worker_threads` dependency; the remaining DOCX strings are bounded legacy compatibility tests/schema and historical/current documentation.
 
+- 2026-07-21 22:05-22:10 IST - Cloudflare/managed-speech contract verification
+  - Official documentation review - OpenNext's Cloudflare guide supports the repository's Next.js 16 line and requires an OpenNext/Workers runtime build; OpenAI's Realtime transcription guide documents short-lived client-secret sessions, WebRTC, transcript delta/completion events, manual audio commit for the selected low-latency transcription path, and item-ID correlation. OpenAI's Speech API guide documents streaming audio output and mandatory AI-voice disclosure.
+  - Installed SDK/source audit - OpenAI SDK 6.46.0 exposes Realtime client-secret creation and streaming speech responses. `HearingSpeechClientPort` already isolates connect, utterance frames, revisioned events, synthesis, and cancellation; the current capture/playback paths can remain behind a new adapter. The 16 kHz capture versus 24 kHz provider PCM difference is explicitly gated for tested resampling.
+  - Cloudflare risk audit - confirmed module-global in-flight preflight I/O, unverified PDF worker behavior, and the bounded 20 MB multipart path as real `workerd`/memory gates rather than declaring the successful Node build portable.
+  - `git diff --check` and active-contract source scans - exit 0; the current DoD is reopened for managed speech, Cloudflare preview, production privacy, documentation, recovery, TLS/domain, and deployed full-flow proof while dated local-speech evidence remains historical.
+
 ## 17. Blocked external prerequisites
 
-Only list genuine external blockers such as absent API credentials, unavailable CUDA hardware, unavailable microphone permission, or missing deployment access. Include the command that will verify the item once unblocked.
+Only list a prerequisite here after implementation work has exhausted every safe path and the remaining gate genuinely requires external credentials, account control, user input, or physical attestation. Include the exact verification step once unblocked.
 
-- **BLOCKED-EXTERNAL — human microphone and physical-speaker acceptance.** The implementation, automated fake-media browser flow, RTX 5070 provider readiness, and synthetic real-model loop have passed, but this agent cannot supply/attest a human utterance or physical audibility. A person must run the following in PowerShell, then use `/preflight` to select **Run server checks**, **Prepare speech runtime**, grant microphone permission, speak a fixed fictional phrase until partial/final revisions appear, select **Test speakers**, and personally confirm audible output before completing one hearing turn:
+There is no confirmed external blocker at the start of Milestone 10. The user has offered Cloudflare account/domain access and the local environment has an OpenAI key, but neither deployment authorization nor speech-model entitlement is presumed until exercised.
 
-  ```powershell
-  .\scripts\setup-local-speech.ps1 -Runtime local-cuda -DownloadModels
-  Push-Location .\services\speech
-  $env:SUITS_SPEECH_MODE = 'cuda'
-  $env:SUITS_SPEECH_CACHE_DIR = Join-Path $env:LOCALAPPDATA 'SUITS\speech'
-  uv run --no-sync --no-python-downloads suits-speech
-  Pop-Location
-  npm run dev
-  ```
-
-  Record the browser/device/provider timing report and an explicit human audibility result in `docs/build-week/VERIFICATION.md`. Do not relabel the existing synthetic or muted automation as this proof.
+The final production gate will require a person to grant microphone permission on `https://suits.niksh.in`, speak a fixed fictional phrase until managed partial/final revisions appear, trigger at least one cancellable AI response, and attest physically audible AI-generated speech. Record browser, device, provider model/version, timing, consent/disclosure state, and explicit audibility in `docs/build-week/VERIFICATION.md`; do not relabel synthetic, muted, historical local-GPU, or local `workerd` evidence as this proof.

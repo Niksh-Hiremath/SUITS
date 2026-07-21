@@ -43,10 +43,10 @@ Do not rewrite git history or delete legacy proof. Never commit secrets, model w
 
 ### 4.1 Ownership boundaries
 
-- **GPT-5.6 proposes intelligent actions and dialogue.** Use the OpenAI Responses API from server-side code only. The default runtime model is configured as `gpt-5.6-luna`.
+- **GPT-5.6 proposes intelligent actions and dialogue.** Use the OpenAI Responses API from server-side code only for reasoning and generation. The default runtime model is configured as `gpt-5.6-luna`; short-lived browser Realtime transcription is the narrowly scoped speech exception defined below.
 - **The deterministic trial engine decides what actually happens.** It validates permissions, phase, speaker, knowledge scope, evidence status, fact status, and action preconditions before committing an event.
 - **Convex is the durable source of truth.** OpenAI conversation state, browser state, and speech-service state are caches or transport state, never the canonical trial record.
-- **The local speech companion owns live audio.** Raw microphone audio must not pass through Convex or the OpenAI API. Local STT emits revisioned partial/final transcripts; local TTS accepts chunked text and returns audio plus timing metadata.
+- **Managed speech transport owns live audio.** The browser sends microphone audio transiently to the configured OpenAI speech endpoint using short-lived, transcription-scoped bearer authorization. Raw audio must never pass through Convex, application persistence, traces, analytics, or logs. Managed STT emits revisioned partial/final transcripts; server-side managed TTS streams audio through an authenticated same-origin boundary and the browser derives honest timing from its audio clock.
 - **The renderer consumes semantic performance commands.** LLM output may request emotion, intent, gesture, and speaking style, but it must never directly control arbitrary Three.js properties or execute code.
 
 ### 4.2 Event sourcing
@@ -90,6 +90,7 @@ Tests must prove these boundaries.
 
 - Use the official OpenAI SDK and Responses API.
 - Keep `OPENAI_API_KEY` exclusively server-side.
+- Use only the documented OpenAI speech models selected by the managed-speech adapters for STT and TTS. These are narrow audio-model exceptions to the Luna/Terra reasoning-model policy; they must not be used for courtroom reasoning, compilation, or coaching.
 - Use strict Structured Outputs/Zod schemas for every action-producing call.
 - Use `gpt-5.6-terra` for case compilation and final coaching. Use `gpt-5.6-luna` for role reasoning, courtroom decisions, strategy, settlement evaluation and all other tasks. Do not retain a hidden deterministic authored answer as the normal user-visible result.
 - Prefer one focused call per material actor decision. Do not use manager/specialist/reviewer chains by default when they triple latency without measurable benefit.
@@ -100,32 +101,32 @@ Tests must prove these boundaries.
 - Record model, request ID when available, token usage, latency, retries, validation failures, accepted citations, and estimated cost.
 - Provide deterministic/mock adapters for tests, but the real GPT-5.6 integration must be exercised and documented before completion.
 
-## 6. Local speech rules
+## 6. Managed speech rules
 
 The production courtroom is voice-first and has no visible text composer. Internal transcript text is mandatory. A developer-only typed control may exist behind an explicit environment flag and must not appear in production builds.
 
-Implement a local Python speech companion, preferably under `services/speech/`, exposed through a versioned WebSocket protocol.
+Implement provider-neutral browser and server adapters for OpenAI-managed streaming speech. Issue only short-lived, transcription-scoped bearer credentials after authenticated owner-session and exact-origin checks; use the minimum necessary TTL and bounded issuance rate, and keep long-lived provider credentials server-side. Do not claim the issued bearer secret itself is cryptographically bound to that owner, session, or origin.
 
 Required behavior:
 
-- GPU-capable streaming STT with revisioned `partial` and `final` events;
-- configurable default STT adapter for NVIDIA Nemotron streaming English;
-- local VAD and end-of-utterance detection;
-- configurable local TTS adapter with Kokoro as the default;
+- low-latency streaming STT with revisioned `partial` and `final` events;
+- an OpenAI Realtime transcription adapter as the canonical production STT path;
+- deterministic utterance boundaries, end-of-utterance handling, and stale-revision rejection;
+- an OpenAI Speech API adapter as the canonical production TTS path;
 - phrase-level TTS queueing, cancellation, barge-in, backpressure, and speaker-specific voices;
-- cached fixed clips for immediate courtroom reactions such as “Objection”, “Sustained”, and “Overruled”;
-- health/capability endpoint reporting CUDA, loaded providers, model readiness, and measured warmup latency;
-- CPU/mock mode for CI without pretending it verifies GPU performance;
-- no cloud speech dependency in the canonical path.
+- immediate preloaded courtroom reactions such as “Objection”, “Sustained”, and “Overruled” without a new provider round trip;
+- health/capability checks reporting provider configuration, authorization readiness, measured warmup latency, and user-safe errors;
+- deterministic mock adapters for CI without pretending they verify provider, network, microphone, or speaker performance;
+- explicit user disclosure that microphone audio is sent transiently to OpenAI and that generated voices are AI-generated.
 
-Partial STT text normally stays local. Send it to GPT-5.6 only for a high-confidence, material interrupt candidate such as a potential objection. Final transcripts create normal courtroom-turn requests.
+Partial STT text normally stays ephemeral in the browser. Send only a high-confidence, material interrupt candidate to the courtroom reasoning path. Final transcripts create normal courtroom-turn requests. Do not persist raw audio or uncommitted partial transcripts.
 
 ## 7. UI and animation rules
 
 - Build a genuine courtroom scene, not only chat cards.
 - Use a semantic animation state machine for each character: idle, listening, thinking, speaking, objecting, standing, sitting, presenting evidence, reacting, and judge ruling/gavel.
 - Support animation blending, camera direction, active-speaker focus, lip/viseme timing, facial/emotional state, and evidence display transitions.
-- Keep the scene performant and usable on the target RTX 5070 machine. Provide reduced-quality settings without removing core behavior.
+- Keep the scene performant in current Chromium-class desktop browsers. Provide reduced-quality settings without removing core behavior, and record the hardware/browser used for performance evidence.
 - Avoid unlicensed assets. Record asset source and license in `docs/ASSETS.md`. Prefer original, CC0, or attribution-compatible assets.
 - Use Playwright screenshots/video and browser-console checks to verify key flows. Visual polish does not override correctness, accessibility, or recoverability.
 
@@ -169,19 +170,21 @@ npm run test:e2e
 npm run verify
 ```
 
-The speech service must also have a reproducible test command, for example:
+The Cloudflare and managed-speech paths must also have reproducible non-secret checks, including:
 
-```bash
-cd services/speech
-uv sync --extra dev
-uv run pytest
+```powershell
+npm run cf:build
+npm run cf:preview
+npm run test:speech
 ```
 
 `npm run verify` should orchestrate all feasible non-secret checks and clearly separate:
 
 - unit/integration/e2e checks that passed;
 - OpenAI live checks skipped because no key was available;
-- GPU speech checks skipped because compatible hardware/models were unavailable;
+- managed-speech live checks skipped because credentials, network access, microphone permission, or physical speaker attestation were unavailable;
+- local Cloudflare `workerd` preview checks, which are mandatory and do not require account access;
+- Cloudflare deployment checks skipped because required account access was unavailable;
 - checks that failed.
 
 Never report skipped live checks as passed.
@@ -190,9 +193,10 @@ Never report skipped live checks as passed.
 
 Before completion, update or create:
 
-- `README.md`: product, architecture, setup, local speech installation, environment variables, use, testing, limitations, and disclaimer;
+- `README.md`: product, architecture, Cloudflare setup, managed speech configuration, environment variables, use, testing, limitations, and disclaimer;
 - `docs/ARCHITECTURE.md`;
-- `docs/LOCAL_SPEECH.md`;
+- `docs/MANAGED_SPEECH.md`;
+- `docs/CLOUDFLARE_DEPLOYMENT.md`;
 - `docs/CASE_FORMAT.md`;
 - `docs/ASSETS.md`;
 - `docs/SECURITY_AND_PRIVACY.md`;
@@ -205,7 +209,7 @@ The final report must be honest about what was executed on real hardware and wit
 
 ## 12. Blocker and completion policy
 
-If a credential, GPU model, microphone permission, external asset, or deployment account is unavailable:
+If a credential, managed-provider entitlement, microphone permission, external asset, domain-control prerequisite, or deployment account is unavailable:
 
 1. continue all work that can be completed without it;
 2. implement provider interfaces, mocks, diagnostics, and setup scripts;
